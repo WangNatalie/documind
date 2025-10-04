@@ -138,7 +138,6 @@ export const Page: React.FC<PageProps> = ({
     if (!page || !canvasRef.current || !shouldRender) {
       // Reset rendered scale when page is not being rendered
       if (!shouldRender) {
-        console.log(`[Page ${pageNum}] Unrendering - outside buffer`);
         // Page moved outside render buffer, reset state
         renderedScaleRef.current = 0;
         targetScaleRef.current = 0;
@@ -162,7 +161,6 @@ export const Page: React.FC<PageProps> = ({
     if (!renderedScaleRef.current || renderedScaleRef.current === 0) {
       const doFullRender = async () => {
         try {
-          console.log(`[Page ${pageNum}] First render at scale ${scale.toFixed(2)}, visible: ${isVisible}`);
           setIsLoading(true);
           setError(null);
 
@@ -201,6 +199,32 @@ export const Page: React.FC<PageProps> = ({
     try {
       // Compute new viewport at the requested scale
       const newViewport = page.getViewport({ scale });
+
+      // Guard: Only CSS-scale if canvas has been rendered (has non-zero dimensions)
+      if (canvas.width === 0 || canvas.height === 0) {
+        console.log(`[Page ${pageNum}] Canvas not yet rendered (0 dimensions), skipping CSS-scale`);
+        // Force a full render instead
+        const doFullRender = async () => {
+          try {
+            setIsLoading(true);
+            setError(null);
+            const priority = isVisible ? 1 : 10;
+            await onRender(pageNum, canvas, textLayerRef.current, priority);
+            renderedScaleRef.current = scale;
+            canvas.style.transform = "";
+            canvas.style.transformOrigin = "top left";
+            setIsLoading(false);
+          } catch (err: any) {
+            if (err?.name !== "RenderingCancelledException") {
+              console.error(`[Page ${pageNum}] Render error:`, err);
+              setError(err.message || "Failed to render page");
+              setIsLoading(false);
+            }
+          }
+        };
+        doFullRender();
+        return;
+      }
 
       // STEP 1: Immediately CSS-scale the existing canvas for instant visual feedback
       // This stretches the existing bitmap, which may look blurry but responds instantly
