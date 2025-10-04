@@ -24,7 +24,7 @@ import { readOPFSFile } from "../db/opfs";
 import ContextMenu from "./ContextMenu";
 import { requestGeminiChunking, requestEmbeddings, requestTOC } from "../utils/chunker-client";
 
-const ZOOM_LEVELS = [25, 50, 75, 90, 100, 125, 150, 175, 200, 250, 300, 350, 400, 500];
+const ZOOM_LEVELS = [50, 75, 90, 100, 125, 150, 175, 200, 250, 300, 350, 400, 500];
 
 export const ViewerApp: React.FC = () => {
   const [pdf, setPdf] = useState<PDFDocumentProxy | null>(null);
@@ -86,6 +86,65 @@ export const ViewerApp: React.FC = () => {
   const uploadId = params.get("uploadId");
   // Keep filename in state so we can update it after reading PDF metadata
   const [fileName, setFileName] = useState<string>(params.get("name") || "document.pdf");
+
+  // Listen for state requests from background
+  useEffect(() => {
+    const handleMessage = (message: any) => {
+      if (message.type === 'REQUEST_VIEWER_STATE') {
+        // Extract text from visible pages
+        let visibleText = '';
+        const visiblePages = Array.from(visiblePagesRef.current).sort((a, b) => a - b);
+        
+        console.log('[VIEWER] Processing state request for visible pages:', visiblePages);
+        
+        for (const pageNum of visiblePages) {
+          const pageEl = document.querySelector(`[data-page-num="${pageNum}"]`);
+          if (pageEl) {
+            // Try both possible class names for text layer
+            const textLayer = pageEl.querySelector('.text-layer') || pageEl.querySelector('.textLayer');
+            if (textLayer) {
+              const pageText = textLayer.textContent || '';
+              if (pageText.trim()) {
+                visibleText += `\n=== Page ${pageNum} ===\n${pageText}\n`;
+              }
+            } else {
+              console.log(`[VIEWER] No text layer found for page ${pageNum}`);
+            }
+          } else {
+            console.log(`[VIEWER] Page element not found for page ${pageNum}`);
+          }
+        }
+
+        console.log('[VIEWER] Sending state to background:', {
+          fileName,
+          currentPage,
+          totalPages: pages.length,
+          visiblePages,
+          textLength: visibleText.length
+        });
+
+        // Send current state to background
+        chrome.runtime.sendMessage({
+          type: 'UPDATE_VIEWER_STATE',
+          payload: {
+            docHash,
+            fileName,
+            currentPage,
+            totalPages: pages.length,
+            zoom,
+            visibleText: visibleText.trim(),
+          }
+        }).catch((error) => {
+          console.error('Failed to send viewer state:', error);
+        });
+      }
+    };
+
+    chrome.runtime.onMessage.addListener(handleMessage);
+    return () => {
+      chrome.runtime.onMessage.removeListener(handleMessage);
+    };
+  }, [docHash, fileName, currentPage, pages.length, zoom]);
 
   // Load PDF on mount
   useEffect(() => {
@@ -204,11 +263,9 @@ export const ViewerApp: React.FC = () => {
         setCurrentPage(restoredPage);
         setZoom(restoredZoom);
 
-        // Initialize visible pages with the restored page (keep refs/state in sync without shared mutation)
-        const initialVisibleSet = new Set([restoredPage]);
-        visiblePagesRef.current = initialVisibleSet;
-        intersectionVisiblePagesRef.current = new Set(initialVisibleSet);
-        setVisiblePages(new Set(initialVisibleSet));
+        // Initialize visible pages with the restored page (both ref and state)
+        visiblePagesRef.current = new Set([restoredPage]);
+        setVisiblePages(new Set([restoredPage]));
 
         // Scroll to restored page after a brief delay to ensure rendering
         if (restoredPage > 1) {
@@ -284,15 +341,21 @@ export const ViewerApp: React.FC = () => {
           }
         }
 
-        // Check if we need to generate TOC (for documents that have chunks but no TOC)
-        // This handles the case where a document was processed before TOC feature was added
-        (async () => {
+        // Helper function to check and generate TOC if needed
+        const checkAndGenerateTOC = async () => {
+          console.log('[App] checkAndGenerateTOC called for document:', hash);
           try {
             const [chunks, toc] = await Promise.all([
               getChunksByDoc(hash),
               getTableOfContents(hash)
             ]);
-
+            
+            console.log('[App] TOC check results:', {
+              chunksCount: chunks.length,
+              hasTOC: !!toc,
+              tocItemsCount: toc?.items?.length || 0
+            });
+            
             if (chunks.length > 0 && !toc) {
               console.log('[App] Document has chunks but no TOC, triggering TOC generation');
               const tocResponse = await requestTOC({
@@ -302,15 +365,23 @@ export const ViewerApp: React.FC = () => {
               });
 
               if (tocResponse.success) {
-                console.log('TOC generation task created:', tocResponse.taskId);
+                console.log('[App] TOC generation task created:', tocResponse.taskId);
               } else {
-                console.warn('Failed to create TOC task:', tocResponse.error);
+                console.warn('[App] Failed to create TOC task:', tocResponse.error);
               }
+            } else if (chunks.length === 0) {
+              console.log('[App] No chunks found, skipping TOC generation');
+            } else if (toc) {
+              console.log('[App] TOC already exists, skipping generation');
             }
           } catch (err) {
-            console.error('Error checking TOC status (non-fatal):', err);
+            console.error('[App] Error checking TOC status (non-fatal):', err);
           }
-        })();
+        };
+
+        // Check immediately for existing chunks (handles documents processed before TOC feature)
+        console.log('[App] Starting initial TOC check...');
+        checkAndGenerateTOC();
 
         // Pass URL directly for url-based PDFs
         if (fileUrl) {
@@ -337,6 +408,10 @@ export const ViewerApp: React.FC = () => {
               } else if (embeddingResponse?.error) {
                 console.warn("Failed to generate embeddings:", embeddingResponse.error);
               }
+              
+              // After embeddings, check again for TOC (in case chunks were just created)
+              console.log('[App] Checking for TOC after embeddings complete...');
+              return checkAndGenerateTOC();
             })
             .catch((err) => {
               console.error("Error in chunking/embedding workflow:", err);
@@ -366,6 +441,10 @@ export const ViewerApp: React.FC = () => {
               } else if (embeddingResponse?.error) {
                 console.warn("Failed to generate embeddings:", embeddingResponse.error);
               }
+              
+              // After embeddings, check again for TOC (in case chunks were just created)
+              console.log('[App] Checking for TOC after embeddings complete...');
+              return checkAndGenerateTOC();
             })
             .catch((err) => {
               console.error("Error in chunking/embedding workflow:", err);
@@ -516,7 +595,6 @@ export const ViewerApp: React.FC = () => {
           let maxRatio = 0;
           const nowVisible: number[] = [];
           const nowHidden: number[] = [];
-          const updatedVisible = new Set(intersectionVisiblePagesRef.current);
 
           entries.forEach((entry) => {
             const pageNum = parseInt(
@@ -525,7 +603,7 @@ export const ViewerApp: React.FC = () => {
             );
 
             if (entry.isIntersecting) {
-              updatedVisible.add(pageNum);
+              visiblePagesRef.current.add(pageNum);
               nowVisible.push(pageNum);
 
               // Track most visible page
@@ -534,15 +612,13 @@ export const ViewerApp: React.FC = () => {
                 mostVisiblePage = pageNum;
               }
             } else {
-              updatedVisible.delete(pageNum);
+              visiblePagesRef.current.delete(pageNum);
               nowHidden.push(pageNum);
             }
           });
 
-          intersectionVisiblePagesRef.current = updatedVisible;
-
           if (nowVisible.length > 0 || nowHidden.length > 0) {
-            console.log(`[IntersectionObserver] Visible:`, nowVisible, `Hidden:`, nowHidden, `All visible:`, Array.from(intersectionVisiblePagesRef.current));
+            console.log(`[IntersectionObserver] Visible:`, nowVisible, `Hidden:`, nowHidden, `All visible:`, Array.from(visiblePagesRef.current));
           }
 
           // Update current page if we found a visible page with decent ratio
@@ -641,26 +717,18 @@ export const ViewerApp: React.FC = () => {
         }
       });
 
-      // Update visible pages ref/state (maintain copies to avoid shared mutation)
+      // Update visible pages ref (for IntersectionObserver compatibility)
       const oldVisibleArray = Array.from(visiblePagesRef.current).sort();
       const newVisibleArray = Array.from(newVisiblePages).sort();
-      const visibleChanged =
-        oldVisibleArray.length !== newVisibleArray.length ||
+      const visibleChanged = oldVisibleArray.length !== newVisibleArray.length ||
         oldVisibleArray.some((p, i) => p !== newVisibleArray[i]);
 
-      const nextVisibleSet = new Set(newVisiblePages);
-      visiblePagesRef.current = nextVisibleSet;
-      intersectionVisiblePagesRef.current = new Set(nextVisibleSet);
+      visiblePagesRef.current = newVisiblePages;
 
       // Update visible pages state (triggers re-render)
       if (visibleChanged) {
-        console.log(
-          `[Scroll] Visible pages changed:`,
-          oldVisibleArray,
-          '->',
-          newVisibleArray
-        );
-        setVisiblePages(nextVisibleSet);
+        console.log(`[Scroll] Visible pages changed:`, oldVisibleArray, '->', newVisibleArray);
+        setVisiblePages(newVisiblePages);
       }
 
       // Update current page if changed
@@ -684,23 +752,14 @@ export const ViewerApp: React.FC = () => {
     container.addEventListener('scroll', throttledScroll, { passive: true });
 
     // Initial call to set up visible pages
-    // If this is the very first mount (restoring scroll), delay so scroll restoration can complete
-    // Otherwise, defer the visibility check until after the next two animation frames so layout
-    // (especially after scale changes like fitPage/fitWidth) has settled and measurements are correct.
+    // Delay if we're on initial load to allow scroll restoration to complete
     if (isInitialLoad) {
-      // Wait briefly for the scroll restoration to complete before checking visible pages
-      // Call multiple times (staggered) to handle timing races in different browsers/devices
-      setTimeout(() => { handleScroll(); }, 150);
-      setTimeout(() => { handleScroll(); }, 350);
-      // immediate attempt as well (non-blocking)
-      setTimeout(() => { handleScroll(); }, 0);
+      // Wait for scroll restoration to complete before checking visible pages
+      setTimeout(() => {
+        handleScroll();
+      }, 150);
     } else {
-      // Use two RAFs to wait for layout & style updates (ensures accurate getBoundingClientRect after scale changes)
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          handleScroll();
-        });
-      });
+      handleScroll();
     }
 
     return () => {
@@ -882,55 +941,55 @@ export const ViewerApp: React.FC = () => {
     };
   }, [handlePrevPage, handleNextPage, handleZoomIn, handleZoomOut]);
 
-  // Note handlers
-  const handleNoteDelete = useCallback(async (id: string) => {
-    try {
-      await deleteNote(id);
-      setNotes((prev) => prev.filter((n) => n.id !== id));
-    } catch (err) {
-      console.error("Failed to delete note", err);
-    }
-  }, []);
-
-  const handleNoteEdit = useCallback(async (id: string, newText: string) => {
-    try {
-      const note = notes.find((n) => n.id === id);
-      if (!note) return;
-
-      const updatedNote = { ...note, text: newText.trim() || undefined };
-      await putNote(updatedNote);
-      setNotes((prev) =>
-        prev.map((n) => (n.id === id ? updatedNote : n))
-      );
-    } catch (err) {
-      console.error("Failed to update note", err);
-    }
-  }, [notes]);
-
-  // Comment handlers
-  const handleCommentDelete = useCallback(async (id: string) => {
-    try {
-      await deleteComment(id);
-      setComments((prev) => prev.filter((c) => c.id !== id));
-    } catch (err) {
-      console.error("Failed to delete comment", err);
-    }
-  }, []);
-
-  const handleCommentEdit = useCallback(async (id: string, newText: string) => {
-    try {
-      const comment = comments.find((c) => c.id === id);
-      if (!comment) return;
-
-      const updatedComment = { ...comment, text: newText };
-      await putComment(updatedComment);
-      setComments((prev) =>
-        prev.map((c) => (c.id === id ? updatedComment : c))
-      );
-    } catch (err) {
-      console.error("Failed to update comment", err);
-    }
-  }, [comments]);
+    // Note handlers
+    const handleNoteDelete = useCallback(async (id: string) => {
+      try {
+        await deleteNote(id);
+        setNotes((prev) => prev.filter((n) => n.id !== id));
+      } catch (err) {
+        console.error("Failed to delete note", err);
+      }
+    }, []);
+  
+    const handleNoteEdit = useCallback(async (id: string, newText: string) => {
+      try {
+        const note = notes.find((n) => n.id === id);
+        if (!note) return;
+  
+        const updatedNote = { ...note, text: newText.trim() || undefined };
+        await putNote(updatedNote);
+        setNotes((prev) =>
+          prev.map((n) => (n.id === id ? updatedNote : n))
+        );
+      } catch (err) {
+        console.error("Failed to update note", err);
+      }
+    }, [notes]);
+  
+    // Comment handlers
+    const handleCommentDelete = useCallback(async (id: string) => {
+      try {
+        await deleteComment(id);
+        setComments((prev) => prev.filter((c) => c.id !== id));
+      } catch (err) {
+        console.error("Failed to delete comment", err);
+      }
+    }, []);
+  
+    const handleCommentEdit = useCallback(async (id: string, newText: string) => {
+      try {
+        const comment = comments.find((c) => c.id === id);
+        if (!comment) return;
+  
+        const updatedComment = { ...comment, text: newText };
+        await putComment(updatedComment);
+        setComments((prev) =>
+          prev.map((c) => (c.id === id ? updatedComment : c))
+        );
+      } catch (err) {
+        console.error("Failed to update comment", err);
+      }
+    }, [comments]);
 
   // Download and print handlers
   const handleDownload = useCallback(async () => {
@@ -1134,10 +1193,12 @@ export const ViewerApp: React.FC = () => {
       if (wheelTimeout) {
         clearTimeout(wheelTimeout);
       }
+      container.removeEventListener("wheel", handleWheel);
+      if (wheelTimeout) {
+        clearTimeout(wheelTimeout);
+      }
     };
-  }, [zoom, changeZoom]);
-
-  const handleRender = useCallback(
+  }, [zoom, changeZoom]);  const handleRender = useCallback(
     async (
       pageNum: number,
       canvas: HTMLCanvasElement,

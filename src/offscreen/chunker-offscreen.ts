@@ -9,7 +9,7 @@ import {
 } from '../db/index';
 import { readOPFSFile } from '../db/opfs';
 
-const CHUNKR_API_KEY = ''; // CHUNKR_API_KEY HERE
+import { CHUNKR_API_KEY } from './api_key';
 const chunkr = new ChunkrAI({ apiKey: CHUNKR_API_KEY });
 
 interface ChunkingTaskData {
