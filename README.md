@@ -1,6 +1,6 @@
 # DocuMind - AI-Powered PDF Viewer
 
-A Chrome MV3 extension that provides a modern, feature-rich PDF viewing experience with virtualized rendering, state persistence, and local file support.
+A Chrome MV3 extension that provides a modern, AI-first, feature-rich PDF viewing experience with virtualized rendering, state persistence, and local file support.
 
 ## Features
 
