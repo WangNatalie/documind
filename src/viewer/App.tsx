@@ -9,18 +9,20 @@ import { generateDocHash } from '../utils/hash';
 import { getDoc, putDoc, updateDocState } from '../db';
 import { readOPFSFile } from '../db/opfs';
 
-const ZOOM_LEVELS = [50, 75, 100, 125, 150, 200, 300];
+const ZOOM_LEVELS = [50, 75, 90, 100, 125, 150, 175, 200, 250, 300];
 
 export const ViewerApp: React.FC = () => {
+  console.log('🚀 ViewerApp component rendering - RELOAD VERIFIED');
+
   const [pdf, setPdf] = useState<PDFDocumentProxy | null>(null);
   const [pages, setPages] = useState<(PDFPageProxy | null)[]>([]);
   const [currentPage, setCurrentPage] = useState(1);
-  const [zoom, setZoom] = useState<string>('fitWidth');
+
+  const [zoom, setZoom] = useState<string>('fitPage');
   const [scale, setScale] = useState(1);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [docHash, setDocHash] = useState<string>('');
-  const [visiblePages, setVisiblePages] = useState<Set<number>>(new Set([1]));
 
   const containerRef = useRef<HTMLDivElement>(null);
   const observerRef = useRef<IntersectionObserver | null>(null);
@@ -83,6 +85,7 @@ export const ViewerApp: React.FC = () => {
 
         setDocHash(hash);
         setPdf(pdfDoc);
+        console.log('📄 PDF loaded successfully, pages:', pdfDoc.numPages);
 
         // Load all pages
         const pageCount = pdfDoc.numPages;
@@ -92,6 +95,7 @@ export const ViewerApp: React.FC = () => {
         }
         const loadedPages = await Promise.all(pagePromises);
         setPages(loadedPages);
+        console.log('📚 All pages loaded into state, count:', loadedPages.length);
 
         // Restore last state or use hash
         const existingDoc = await getDoc(hash);
@@ -162,49 +166,76 @@ export const ViewerApp: React.FC = () => {
   useEffect(() => {
     if (!containerRef.current || pages.length === 0) return;
 
-    observerRef.current = new IntersectionObserver(
-      (entries) => {
-        let mostVisiblePage = 0;
-        let maxRatio = 0;
-        // Use the ref for current state, build new set for update
-        const newVisiblePages = new Set(visiblePagesRef.current);
+    console.log('[IntersectionObserver] Setting up observer, pages:', pages.length);
 
-        entries.forEach((entry) => {
-          const pageNum = parseInt(entry.target.getAttribute('data-page-num') || '0', 10);
-
-          if (entry.isIntersecting) {
-            newVisiblePages.add(pageNum);
-
-            // Track most visible page
-            if (entry.intersectionRatio > maxRatio) {
-              maxRatio = entry.intersectionRatio;
-              mostVisiblePage = pageNum;
-            }
-          } else {
-            newVisiblePages.delete(pageNum);
-          }
-        });
-
-        // Update visible pages state and ref
-        visiblePagesRef.current = newVisiblePages;
-        setVisiblePages(new Set(newVisiblePages));
-
-        // Update current page if we found a visible page with good ratio
-        if (mostVisiblePage > 0 && maxRatio >= 0.5) {
-          setCurrentPage(mostVisiblePage);
-        }
-      },
-      {
-        threshold: [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0],
-        rootMargin: '0px'
+    // Small delay to ensure page elements are in the DOM
+    const timeoutId = setTimeout(() => {
+      const container = containerRef.current;
+      if (!container) {
+        console.log('[IntersectionObserver] Container not available');
+        return;
       }
-    );
 
-    // Observe all pages
-    const pageElements = containerRef.current.querySelectorAll('[data-page-num]');
-    pageElements.forEach((el) => observerRef.current?.observe(el));
+      const updateCurrentPage = (pageNum: number) => {
+        console.log('[IntersectionObserver] Updating current page to:', pageNum);
+        setCurrentPage(pageNum);
+      };
+
+      observerRef.current = new IntersectionObserver(
+        (entries) => {
+          let mostVisiblePage = 0;
+          let maxRatio = 0;
+
+          entries.forEach((entry) => {
+            const pageNum = parseInt(entry.target.getAttribute('data-page-num') || '0', 10);
+
+            if (entry.isIntersecting) {
+              visiblePagesRef.current.add(pageNum);
+
+              // Track most visible page
+              if (entry.intersectionRatio > maxRatio) {
+                maxRatio = entry.intersectionRatio;
+                mostVisiblePage = pageNum;
+              }
+            } else {
+              visiblePagesRef.current.delete(pageNum);
+            }
+          });
+
+          // Update current page if we found a visible page with decent ratio
+          if (mostVisiblePage > 0 && maxRatio >= 0.3) {
+            updateCurrentPage(mostVisiblePage);
+          }
+        },
+        {
+          root: container,
+          threshold: [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0],
+          rootMargin: '0px'
+        }
+      );
+
+      // Observe all pages
+      const pageElements = container.querySelectorAll('[data-page-num]');
+      console.log(`[IntersectionObserver] Found ${pageElements.length} page elements to observe`);
+      pageElements.forEach((el) => observerRef.current?.observe(el));
+
+      // Trigger initial visibility check
+      if (pageElements.length > 0) {
+        console.log('[IntersectionObserver] Triggering initial visibility check');
+        // Small delay to ensure layout is complete
+        setTimeout(() => {
+          // Force re-observation to trigger initial callbacks
+          pageElements.forEach((el) => {
+            observerRef.current?.unobserve(el);
+            observerRef.current?.observe(el);
+          });
+        }, 50);
+      }
+    }, 150);
 
     return () => {
+      console.log('[IntersectionObserver] Cleaning up observer');
+      clearTimeout(timeoutId);
       observerRef.current?.disconnect();
     };
   }, [pages]);
@@ -398,11 +429,11 @@ export const ViewerApp: React.FC = () => {
         <div className="py-4 flex flex-col items-center">
           {pages.map((page, idx) => {
             const pageNum = idx + 1;
-            const isVisible = visiblePages.has(pageNum);
+            const isVisible = visiblePagesRef.current.has(pageNum);
             // Render visible pages + 2 pages buffer above/below
             // Always render first 3 pages initially, then use visibility detection
             const shouldRender = pageNum <= 3 || isVisible ||
-              Array.from(visiblePages).some(vp => Math.abs(vp - pageNum) <= 2);
+              Array.from(visiblePagesRef.current).some(vp => Math.abs(vp - pageNum) <= 2);
 
             return (
               <Page

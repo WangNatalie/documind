@@ -18,10 +18,16 @@ export const Page: React.FC<PageProps> = ({ pageNum, page, scale, isVisible, sho
   const renderedScaleRef = useRef<number>(0);
 
   useEffect(() => {
-    if (!page || !canvasRef.current || !shouldRender) return;
+    if (!page || !canvasRef.current || !shouldRender) {
+      // Reset rendered scale when page is not being rendered
+      if (!shouldRender) {
+        renderedScaleRef.current = 0;
+      }
+      return;
+    }
 
     // Skip re-render if scale hasn't changed significantly (avoid flashing)
-    if (Math.abs(renderedScaleRef.current - scale) < 0.01) {
+    if (renderedScaleRef.current > 0 && Math.abs(renderedScaleRef.current - scale) < 0.01) {
       setIsLoading(false);
       return;
     }
