@@ -434,7 +434,7 @@ export async function generateTableOfContents(
     }
 
     // Try to extract PDF outline first
-    let tocItems = await extractPDFOutline(fileUrl, uploadId);
+    let tocItems = null; // await extractPDFOutline(fileUrl, uploadId);
     let source: 'pdf-outline' | 'ai-generated' = 'pdf-outline';
     let model: string | undefined;
 

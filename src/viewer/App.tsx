@@ -17,8 +17,8 @@ import {
   getCommentsByDoc,
   deleteNote,
   deleteComment,
-  getChunksByDoc,
   getTableOfContents,
+  type TableOfContentsRecord,
 } from "../db";
 import { readOPFSFile } from "../db/opfs";
 import ContextMenu from "./ContextMenu";
@@ -38,6 +38,7 @@ export const ViewerApp: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [docHash, setDocHash] = useState<string>("");
   const [isInitialLoad, setIsInitialLoad] = useState(true);
+  const [tableOfContents, setTableOfContents] = useState<TableOfContentsRecord | null>(null);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const observerRef = useRef<IntersectionObserver | null>(null);
@@ -284,31 +285,51 @@ export const ViewerApp: React.FC = () => {
           }
         }
 
-        // Check if we need to generate TOC (for documents that have chunks but no TOC)
-        // This handles the case where a document was processed before TOC feature was added
+        // Check for existing TOC and, if missing, request generation and poll until it's available.
+        // In all cases we set `tableOfContents` state to the latest fetched/generated TOC.
         (async () => {
           try {
-            const [chunks, toc] = await Promise.all([
-              getChunksByDoc(hash),
-              getTableOfContents(hash)
-            ]);
+            // Try to read current TOC from DB first
+            const existingTOC = await getTableOfContents(hash);
+            if (existingTOC) {
+              setTableOfContents(existingTOC);
+              return;
+            }
 
-            if (chunks.length > 0 && !toc) {
-              console.log('[App] Document has chunks but no TOC, triggering TOC generation');
-              const tocResponse = await requestTOC({
-                docHash: hash,
-                fileUrl: fileUrl || undefined,
-                uploadId: uploadId || undefined,
-              });
+            // No TOC found. Request TOC generation (background task).
+            console.log('[App] No TOC found, requesting TOC generation');
+            const tocResponse = await requestTOC({
+              docHash: hash,
+              fileUrl: fileUrl || undefined,
+              uploadId: uploadId || undefined,
+            });
 
-              if (tocResponse.success) {
-                console.log('TOC generation task created:', tocResponse.taskId);
-              } else {
-                console.warn('Failed to create TOC task:', tocResponse.error);
+            if (!tocResponse.success) {
+              console.warn('Failed to create TOC task:', tocResponse.error);
+              return;
+            }
+
+            console.log('TOC generation task created:', tocResponse.taskId);
+
+            // Poll for the TOC to appear in the DB. Use a bounded retry so we don't poll forever.
+            const maxAttempts = 15;
+            const baseDelayMs = 1000; // 1s
+            for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+              try {
+                // wait before first attempt to give worker a chance to run
+                await new Promise((res) => setTimeout(res, baseDelayMs));
+                const newTOC = await getTableOfContents(hash);
+                if (newTOC) {
+                  console.log(`[App] TOC ready after ${attempt} ${attempt === 1 ? 'attempt' : 'attempts'}`);
+                  setTableOfContents(newTOC);
+                  break;
+                }
+              } catch (pollErr) {
+                console.warn('Error while polling for TOC (non-fatal):', pollErr);
               }
             }
           } catch (err) {
-            console.error('Error checking TOC status (non-fatal):', err);
+            console.error('Error checking/creating TOC (non-fatal):', err);
           }
         })();
 
@@ -382,6 +403,13 @@ export const ViewerApp: React.FC = () => {
 
     loadDocument();
   }, [fileUrl, uploadId]);
+
+  // Keep track of TOC state changes for debugging and to ensure the value is used
+  useEffect(() => {
+    if (tableOfContents) {
+      console.log('[App] Table of Contents updated:', tableOfContents);
+    }
+  }, [tableOfContents]);
 
   // Right-click to open custom context menu
   useEffect(() => {
