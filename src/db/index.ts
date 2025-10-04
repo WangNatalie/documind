@@ -370,51 +370,6 @@ export async function deleteNotesByDoc(docHash: string): Promise<void> {
   await tx.done;
 }
 
-// Chunk Embedding operations
-export async function putChunkEmbedding(embedding: ChunkEmbeddingRecord): Promise<void> {
-  const db = await getDB();
-  await db.put('chunkEmbeddings', embedding);
-}
-
-export async function getChunkEmbedding(chunkId: string): Promise<ChunkEmbeddingRecord | undefined> {
-  const db = await getDB();
-  return db.get('chunkEmbeddings', chunkId);
-}
-
-export async function getChunkEmbeddingsByDoc(docHash: string): Promise<ChunkEmbeddingRecord[]> {
-  const db = await getDB();
-  return db.getAllFromIndex('chunkEmbeddings', 'by-docHash', docHash);
-}
-
-export async function deleteChunkEmbedding(chunkId: string): Promise<void> {
-  const db = await getDB();
-  await db.delete('chunkEmbeddings', chunkId);
-}
-
-export async function deleteChunkEmbeddingsByDoc(docHash: string): Promise<void> {
-  const db = await getDB();
-  const embeddings = await getChunkEmbeddingsByDoc(docHash);
-  const tx = db.transaction('chunkEmbeddings', 'readwrite');
-  await Promise.all(embeddings.map(e => tx.store.delete(e.id)));
-  await tx.done;
-}
-
-/**
- * Check which chunks are missing embeddings
- * Returns array of chunk IDs that need embeddings
- */
-export async function getMissingEmbeddings(docHash: string): Promise<string[]> {
-  const chunks = await getChunksByDoc(docHash);
-  const embeddings = await getChunkEmbeddingsByDoc(docHash);
-  
-  const embeddedChunkIds = new Set(embeddings.map(e => e.chunkId));
-  const missingChunkIds = chunks
-    .filter(chunk => !embeddedChunkIds.has(chunk.id))
-    .map(chunk => chunk.id);
-  
-  return missingChunkIds;
-}
-
 // Comment operations
 export async function putComment(comment: CommentRecord): Promise<void> {
   const db = await getDB();
@@ -457,5 +412,34 @@ export async function getTableOfContents(docHash: string): Promise<TableOfConten
 
 export async function deleteTableOfContents(docHash: string): Promise<void> {
   const db = await getDB();
-  await db.delete('tableOfContents', docHash);
+  return db.getAllFromIndex('chunkEmbeddings', 'by-docHash', docHash);
+}
+
+export async function deleteChunkEmbedding(chunkId: string): Promise<void> {
+  const db = await getDB();
+  await db.delete('chunkEmbeddings', chunkId);
+}
+
+export async function deleteChunkEmbeddingsByDoc(docHash: string): Promise<void> {
+  const db = await getDB();
+  const embeddings = await getChunkEmbeddingsByDoc(docHash);
+  const tx = db.transaction('chunkEmbeddings', 'readwrite');
+  await Promise.all(embeddings.map(e => tx.store.delete(e.id)));
+  await tx.done;
+}
+
+/**
+ * Check which chunks are missing embeddings
+ * Returns array of chunk IDs that need embeddings
+ */
+export async function getMissingEmbeddings(docHash: string): Promise<string[]> {
+  const chunks = await getChunksByDoc(docHash);
+  const embeddings = await getChunkEmbeddingsByDoc(docHash);
+
+  const embeddedChunkIds = new Set(embeddings.map(e => e.chunkId));
+  const missingChunkIds = chunks
+    .filter(chunk => !embeddedChunkIds.has(chunk.id))
+    .map(chunk => chunk.id);
+
+  return missingChunkIds;
 }
