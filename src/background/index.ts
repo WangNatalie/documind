@@ -1,4 +1,6 @@
 // Background service worker for MV3
+import { createChunkingTask, processPendingTasks } from './chunker';
+
 console.log('DocuMind background service worker loaded');
 
 // Intercept PDF navigation and redirect to our viewer
@@ -29,6 +31,13 @@ chrome.webNavigation.onCommitted.addListener(
 chrome.runtime.onInstalled.addListener(async () => {
   console.log('Extension installed');
 
+  // Process any pending chunking tasks from previous session
+  try {
+    await processPendingTasks();
+  } catch (error) {
+    console.error('Failed to process pending chunking tasks:', error);
+  }
+
   // Future: Set up cleanup alarm
   // chrome.alarms.create('cleanup', { periodInMinutes: 60 });
 });
@@ -39,3 +48,22 @@ chrome.runtime.onInstalled.addListener(async () => {
 //     // Cleanup old OPFS files, expired cache, etc.
 //   }
 // });
+
+// Message handler for creating chunking tasks
+chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (message.type === 'CREATE_CHUNKING_TASK') {
+    const { docHash, fileUrl } = message.payload;
+    
+    createChunkingTask({ docHash, fileUrl })
+      .then((taskId) => {
+        sendResponse({ success: true, taskId });
+      })
+      .catch((error) => {
+        console.error('Failed to create chunking task:', error);
+        sendResponse({ success: false, error: error.message });
+      });
+    
+    // Return true to indicate we'll send response asynchronously
+    return true;
+  }
+});

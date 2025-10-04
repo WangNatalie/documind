@@ -8,6 +8,7 @@ import { parseHash, updateHash } from '../utils/hash';
 import { generateDocHash } from '../utils/hash';
 import { getDoc, putDoc, updateDocState } from '../db';
 import { readOPFSFile } from '../db/opfs';
+import { requestChunking } from '../utils/chunker-client';
 
 const ZOOM_LEVELS = [50, 75, 100, 125, 150, 200, 300];
 
@@ -120,6 +121,24 @@ export const ViewerApp: React.FC = () => {
             createdAt: Date.now(),
             updatedAt: Date.now(),
           });
+        }
+        
+        // Pass URL directly for url-based PDFs
+        if (fileUrl) {
+          requestChunking({ 
+            docHash: hash, 
+            fileUrl: fileUrl 
+          })
+            .then(response => {
+              if (response.success) {
+                console.log('Chunking task created:', response.taskId);
+              } else {
+                console.error('Failed to create chunking task:', response.error);
+              }
+            })
+            .catch(err => {
+              console.error('Error starting chunking:', err);
+            });
         }
 
         setLoading(false);

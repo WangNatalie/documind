@@ -19,6 +19,28 @@ export interface PageRecord {
   readyAt?: number;
 }
 
+export interface ChunkRecord {
+  id: string; // Unique chunk ID
+  docHash: string;
+  chunkIndex: number;
+  content: string;
+  description?: string; // Optional AI-generated description (if available)
+  page?: number;
+  bbox?: { x: number; y: number; width: number; height: number };
+  metadata?: Record<string, any>;
+  createdAt: number;
+}
+
+export interface ChunkTaskRecord {
+  taskId: string;
+  docHash: string;
+  status: 'pending' | 'processing' | 'completed' | 'failed';
+  fileUrl?: string;
+  error?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
 interface PDFViewerDB extends DBSchema {
   docs: {
     key: string;
@@ -30,6 +52,16 @@ interface PDFViewerDB extends DBSchema {
     value: PageRecord;
     indexes: { 'by-docHash': string };
   };
+  chunks: {
+    key: string;
+    value: ChunkRecord;
+    indexes: { 'by-docHash': string; 'by-docHash-index': [string, number] };
+  };
+  chunkTasks: {
+    key: string;
+    value: ChunkTaskRecord;
+    indexes: { 'by-docHash': string; 'by-status': string };
+  };
 }
 
 let dbInstance: IDBPDatabase<PDFViewerDB> | null = null;
@@ -37,15 +69,33 @@ let dbInstance: IDBPDatabase<PDFViewerDB> | null = null;
 export async function getDB(): Promise<IDBPDatabase<PDFViewerDB>> {
   if (dbInstance) return dbInstance;
 
-  dbInstance = await openDB<PDFViewerDB>('pdf_viewer_v0', 1, {
-    upgrade(db) {
+  dbInstance = await openDB<PDFViewerDB>('pdf_viewer_v0', 2, {
+    upgrade(db, oldVersion) {
       // docs store
-      const docsStore = db.createObjectStore('docs', { keyPath: 'docHash' });
-      docsStore.createIndex('by-updatedAt', 'updatedAt');
+      if (!db.objectStoreNames.contains('docs')) {
+        const docsStore = db.createObjectStore('docs', { keyPath: 'docHash' });
+        docsStore.createIndex('by-updatedAt', 'updatedAt');
+      }
 
       // pages store
-      const pagesStore = db.createObjectStore('pages', { keyPath: ['docHash', 'page'] });
-      pagesStore.createIndex('by-docHash', 'docHash');
+      if (!db.objectStoreNames.contains('pages')) {
+        const pagesStore = db.createObjectStore('pages', { keyPath: ['docHash', 'page'] });
+        pagesStore.createIndex('by-docHash', 'docHash');
+      }
+
+      // chunks store (version 2)
+      if (oldVersion < 2) {
+        const chunksStore = db.createObjectStore('chunks', { keyPath: 'id' });
+        chunksStore.createIndex('by-docHash', 'docHash');
+        chunksStore.createIndex('by-docHash-index', ['docHash', 'chunkIndex']);
+      }
+
+      // chunk tasks store (version 2)
+      if (oldVersion < 2) {
+        const chunkTasksStore = db.createObjectStore('chunkTasks', { keyPath: 'taskId' });
+        chunkTasksStore.createIndex('by-docHash', 'docHash');
+        chunkTasksStore.createIndex('by-status', 'status');
+      }
     },
   });
 
@@ -90,4 +140,58 @@ export async function putPage(pageData: PageRecord): Promise<void> {
 export async function getPagesByDoc(docHash: string): Promise<PageRecord[]> {
   const db = await getDB();
   return db.getAllFromIndex('pages', 'by-docHash', docHash);
+}
+
+// Chunk operations
+export async function putChunk(chunk: ChunkRecord): Promise<void> {
+  const db = await getDB();
+  await db.put('chunks', chunk);
+}
+
+export async function getChunk(id: string): Promise<ChunkRecord | undefined> {
+  const db = await getDB();
+  return db.get('chunks', id);
+}
+
+export async function getChunksByDoc(docHash: string): Promise<ChunkRecord[]> {
+  const db = await getDB();
+  return db.getAllFromIndex('chunks', 'by-docHash', docHash);
+}
+
+export async function deleteChunksByDoc(docHash: string): Promise<void> {
+  const db = await getDB();
+  const chunks = await getChunksByDoc(docHash);
+  const tx = db.transaction('chunks', 'readwrite');
+  await Promise.all(chunks.map(chunk => tx.store.delete(chunk.id)));
+  await tx.done;
+}
+
+// Chunk task operations
+export async function putChunkTask(task: ChunkTaskRecord): Promise<void> {
+  const db = await getDB();
+  await db.put('chunkTasks', task);
+}
+
+export async function getChunkTask(taskId: string): Promise<ChunkTaskRecord | undefined> {
+  const db = await getDB();
+  return db.get('chunkTasks', taskId);
+}
+
+export async function getChunkTaskByDoc(docHash: string): Promise<ChunkTaskRecord | undefined> {
+  const db = await getDB();
+  const tasks = await db.getAllFromIndex('chunkTasks', 'by-docHash', docHash);
+  return tasks[0];
+}
+
+export async function updateChunkTask(taskId: string, updates: Partial<ChunkTaskRecord>): Promise<void> {
+  const db = await getDB();
+  const task = await db.get('chunkTasks', taskId);
+  if (task) {
+    await db.put('chunkTasks', { ...task, ...updates, updatedAt: Date.now() });
+  }
+}
+
+export async function getPendingChunkTasks(): Promise<ChunkTaskRecord[]> {
+  const db = await getDB();
+  return db.getAllFromIndex('chunkTasks', 'by-status', 'pending');
 }
