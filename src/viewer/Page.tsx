@@ -33,6 +33,8 @@ interface PageProps {
 
 const ZOOM_DEBOUNCE_MS = 75;
 
+const ZOOM_DEBOUNCE_MS = 75;
+
 export const Page: React.FC<PageProps> = ({
   pageNum,
   page,
@@ -52,10 +54,6 @@ export const Page: React.FC<PageProps> = ({
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const renderedScaleRef = useRef<number>(0);
-  const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
-  const [editingNoteText, setEditingNoteText] = useState("");
-  const [editingCommentId, setEditingCommentId] = useState<string | null>(null);
-  const [editingCommentText, setEditingCommentText] = useState("");
   const targetScaleRef = useRef<number>(0);
   const renderTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const lastCSSScaleRef = useRef<number>(0);
@@ -142,6 +140,12 @@ export const Page: React.FC<PageProps> = ({
       if (!shouldRender) {
         // Page moved outside render buffer, reset state
         renderedScaleRef.current = 0;
+        targetScaleRef.current = 0;
+        // Clear any pending render timeouts
+        if (renderTimeoutRef.current) {
+          clearTimeout(renderTimeoutRef.current);
+          renderTimeoutRef.current = null;
+        }
         // also reset any css scaling
         if (canvasRef.current) {
           canvasRef.current.style.transform = "";
@@ -157,9 +161,6 @@ export const Page: React.FC<PageProps> = ({
     if (!renderedScaleRef.current || renderedScaleRef.current === 0) {
       const doFullRender = async () => {
         try {
-          console.log(
-            `[Page ${pageNum}] Full render starting - visible: ${isVisible}, priority: ${isVisible ? 1 : 10}`
-          );
           setIsLoading(true);
           setError(null);
 
@@ -171,14 +172,11 @@ export const Page: React.FC<PageProps> = ({
           canvas.style.transform = "";
           canvas.style.transformOrigin = "top left";
           setIsLoading(false);
-          console.log(`[Page ${pageNum}] Full render complete at scale ${scale}`);
         } catch (err: any) {
           if (err?.name !== "RenderingCancelledException") {
             console.error(`[Page ${pageNum}] Render error:`, err);
             setError(err.message || "Failed to render page");
             setIsLoading(false);
-          } else {
-            console.log(`[Page ${pageNum}] Render cancelled`);
           }
         }
       };
@@ -187,9 +185,10 @@ export const Page: React.FC<PageProps> = ({
       return;
     }
 
-    // If we already have a rendered canvas at a previous scale, prefer CSS-scaling
-    // to avoid a full redraw which causes flashing. Adjust canvas CSS to keep
-    // the drawn bitmap and scale it to the new requested size.
+    // If we already have a rendered canvas at a previous scale, use progressive rendering:
+    // 1. Immediately CSS-scale the existing canvas (instant feedback, may be blurry)
+    // 2. Debounce and trigger a background re-render at the new scale for crisp quality
+    // This matches PDF.js behavior where zoom is instant but quality improves after a moment
     const prevScale = renderedScaleRef.current;
     if (Math.abs(prevScale - scale) < 0.01) {
       // effectively same, no-op
@@ -201,23 +200,56 @@ export const Page: React.FC<PageProps> = ({
       // Compute new viewport at the requested scale
       const newViewport = page.getViewport({ scale });
 
-      // Set the canvas layout size to the new viewport dimensions so the
-      // element's layout footprint matches the new page size. We avoid a
-      // transform because transforms do not affect layout (they can cause
-      // large gaps when the element's intrinsic size remains the previous
-      // value). Setting CSS width/height stretches the existing bitmap to
-      // the new layout size (no flash) and preserves correct spacing between pages.
+      // STEP 1: Immediately CSS-scale the existing canvas for instant visual feedback
+      // This stretches the existing bitmap, which may look blurry but responds instantly
       canvas.style.width = `${newViewport.width}px`;
       canvas.style.height = `${newViewport.height}px`;
       canvas.style.transform = "";
       canvas.style.transformOrigin = "top left";
 
-      // We don't redraw here; keep renderedScaleRef at prevScale (actual bitmap scale).
-      // Update loading state: no loading spinner during CSS resizing
       setIsLoading(false);
-      console.log(`
-        [Page ${pageNum}] CSS-resized canvas layout to ${newViewport.width}x${newViewport.height} (bitmap at scale ${prevScale}, visual scale ${scale})
-      `.trim());
+
+      // Update target scale and track CSS scale
+      targetScaleRef.current = scale;
+      lastCSSScaleRef.current = scale;
+
+      // STEP 2: Debounce the high-quality re-render to avoid multiple renders during rapid zooming
+      // Clear any pending render
+      if (renderTimeoutRef.current) {
+        clearTimeout(renderTimeoutRef.current);
+      }
+
+      // Capture the current scale for the timeout closure
+      const scaleToRender = scale;
+
+      // Queue a high-quality re-render after a short delay (debounced)
+      renderTimeoutRef.current = setTimeout(async () => {
+        // Skip if target scale has changed since this timeout was set
+        if (Math.abs(targetScaleRef.current - scaleToRender) > 0.01) {
+          return;
+        }
+
+        // Skip if we've already rendered at this exact scale
+        if (Math.abs(renderedScaleRef.current - scaleToRender) < 0.01) {
+          return;
+        }
+
+        try {
+          await onRender(pageNum, canvas, textLayerRef.current, isVisible ? 1 : 10);
+
+          // Only update renderedScaleRef if we're still at the same target scale
+          if (Math.abs(targetScaleRef.current - scaleToRender) < 0.01) {
+            renderedScaleRef.current = scaleToRender;
+            canvas.style.transform = "";
+            canvas.style.transformOrigin = "top left";
+          }
+        } catch (err: any) {
+          if (err?.name !== "RenderingCancelledException") {
+            console.error(`[Page ${pageNum}] Render error:`, err);
+            // Don't set error state since we already have a (scaled) version showing
+          }
+        }
+      }, ZOOM_DEBOUNCE_MS); // debounce - wait for rapid zoom gestures to finish
     } catch (err: any) {
       console.error(`[Page ${pageNum}] Failed to CSS-scale canvas, falling back to full render:`, err);
       // Fallback: perform a full render
