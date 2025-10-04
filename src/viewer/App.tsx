@@ -622,14 +622,21 @@ export const ViewerApp: React.FC = () => {
     container.addEventListener('scroll', throttledScroll, { passive: true });
 
     // Initial call to set up visible pages
-    // Delay if we're on initial load to allow scroll restoration to complete
+    // If this is the very first mount (restoring scroll), delay so scroll restoration can complete
+    // Otherwise, defer the visibility check until after the next two animation frames so layout
+    // (especially after scale changes like fitPage/fitWidth) has settled and measurements are correct.
     if (isInitialLoad) {
-      // Wait for scroll restoration to complete before checking visible pages
+      // Wait briefly for the scroll restoration to complete before checking visible pages
       setTimeout(() => {
         handleScroll();
       }, 150);
     } else {
-      handleScroll();
+      // Use two RAFs to wait for layout & style updates (ensures accurate getBoundingClientRect after scale changes)
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          handleScroll();
+        });
+      });
     }
 
     return () => {
