@@ -125,50 +125,101 @@ export const Page: React.FC<PageProps> = ({
       if (!shouldRender) {
         console.log(`[Page ${pageNum}] Unrendering - outside buffer`);
         renderedScaleRef.current = 0;
+        // also reset any css scaling
+        if (canvasRef.current) {
+          canvasRef.current.style.transform = "";
+          canvasRef.current.style.transformOrigin = "";
+        }
       }
       return;
     }
 
-    // Skip re-render if scale hasn't changed significantly (avoid flashing)
-    if (
-      renderedScaleRef.current > 0 &&
-      Math.abs(renderedScaleRef.current - scale) < 0.01
-    ) {
+    const canvas = canvasRef.current!;
+
+    // If we've never rendered this page, do a full render
+    if (!renderedScaleRef.current || renderedScaleRef.current === 0) {
+      const doFullRender = async () => {
+        try {
+          console.log(
+            `[Page ${pageNum}] Full render starting - visible: ${isVisible}, priority: ${isVisible ? 1 : 10}`
+          );
+          setIsLoading(true);
+          setError(null);
+
+          const priority = isVisible ? 1 : 10;
+          await onRender(pageNum, canvas, textLayerRef.current, priority);
+
+          renderedScaleRef.current = scale;
+          // ensure any CSS transform is reset after drawing
+          canvas.style.transform = "";
+          canvas.style.transformOrigin = "top left";
+          setIsLoading(false);
+          console.log(`[Page ${pageNum}] Full render complete at scale ${scale}`);
+        } catch (err: any) {
+          if (err?.name !== "RenderingCancelledException") {
+            console.error(`[Page ${pageNum}] Render error:`, err);
+            setError(err.message || "Failed to render page");
+            setIsLoading(false);
+          } else {
+            console.log(`[Page ${pageNum}] Render cancelled`);
+          }
+        }
+      };
+
+      doFullRender();
+      return;
+    }
+
+    // If we already have a rendered canvas at a previous scale, prefer CSS-scaling
+    // to avoid a full redraw which causes flashing. Adjust canvas CSS to keep
+    // the drawn bitmap and scale it to the new requested size.
+    const prevScale = renderedScaleRef.current;
+    if (Math.abs(prevScale - scale) < 0.01) {
+      // effectively same, no-op
       setIsLoading(false);
       return;
     }
 
-    const render = async () => {
-      try {
-        console.log(
-          `[Page ${pageNum}] Starting render - visible: ${isVisible}, priority: ${isVisible ? 1 : 10}`
-        );
-        setIsLoading(true);
-        setError(null);
+    try {
+      // Compute new viewport at the requested scale
+      const newViewport = page.getViewport({ scale });
 
-        const priority = isVisible ? 1 : 10;
-        await onRender(
-          pageNum,
-          canvasRef.current!,
-          textLayerRef.current,
-          priority
-        );
+      // Set the canvas layout size to the new viewport dimensions so the
+      // element's layout footprint matches the new page size. We avoid a
+      // transform because transforms do not affect layout (they can cause
+      // large gaps when the element's intrinsic size remains the previous
+      // value). Setting CSS width/height stretches the existing bitmap to
+      // the new layout size (no flash) and preserves correct spacing between pages.
+      canvas.style.width = `${newViewport.width}px`;
+      canvas.style.height = `${newViewport.height}px`;
+      canvas.style.transform = "";
+      canvas.style.transformOrigin = "top left";
 
-        renderedScaleRef.current = scale;
-        setIsLoading(false);
-        console.log(`[Page ${pageNum}] Render complete`);
-      } catch (err: any) {
-        if (err?.name !== "RenderingCancelledException") {
-          console.error(`[Page ${pageNum}] Render error:`, err);
-          setError(err.message || "Failed to render page");
+      // We don't redraw here; keep renderedScaleRef at prevScale (actual bitmap scale).
+      // Update loading state: no loading spinner during CSS resizing
+      setIsLoading(false);
+      console.log(`
+        [Page ${pageNum}] CSS-resized canvas layout to ${newViewport.width}x${newViewport.height} (bitmap at scale ${prevScale}, visual scale ${scale})
+      `.trim());
+    } catch (err: any) {
+      console.error(`[Page ${pageNum}] Failed to CSS-scale canvas, falling back to full render:`, err);
+      // Fallback: perform a full render
+      const fallback = async () => {
+        try {
+          setIsLoading(true);
+          await onRender(pageNum, canvas, textLayerRef.current, isVisible ? 1 : 10);
+          renderedScaleRef.current = scale;
+          canvas.style.transform = "";
+          canvas.style.transformOrigin = "top left";
           setIsLoading(false);
-        } else {
-          console.log(`[Page ${pageNum}] Render cancelled`);
+        } catch (e: any) {
+          console.error(`[Page ${pageNum}] Fallback render failed:`, e);
+          setIsLoading(false);
         }
-      }
-    };
+      };
 
-    render();
+      fallback();
+    }
   }, [page, scale, pageNum, onRender, isVisible, shouldRender]);
 
   // Get approximate dimensions for skeleton
