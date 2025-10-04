@@ -52,9 +52,11 @@ chrome.runtime.onInstalled.addListener(async () => {
 // Message handler for creating chunking tasks
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === 'CREATE_CHUNKING_TASK') {
-    const { docHash, fileUrl } = message.payload;
+    console.log('[background/index] Received message:', message);
+    const { docHash, fileUrl, uploadId } = message.payload;
+    console.log('[background/index] Extracted params:', { docHash, fileUrl, uploadId });
     
-    createChunkingTask({ docHash, fileUrl })
+    createChunkingTask({ docHash, fileUrl, uploadId })
       .then((taskId) => {
         sendResponse({ success: true, taskId });
       })

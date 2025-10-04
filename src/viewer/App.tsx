@@ -238,6 +238,25 @@ export const ViewerApp: React.FC = () => {
             .catch((err) => {
               console.error("Error starting chunking:", err);
             });
+        } else if (uploadId) {
+          console.log("[App.tsx] Requesting chunking with uploadId:", uploadId);
+          requestChunking({
+            docHash: hash,
+            uploadId: uploadId,
+          })
+            .then((response) => {
+              if (response.success) {
+                console.log("Chunking task created:", response.taskId);
+              } else {
+                console.error(
+                  "Failed to create chunking task:",
+                  response.error
+                );
+              }
+            })
+            .catch((err) => {
+              console.error("Error starting chunking:", err);
+            });
         }
 
         setLoading(false);

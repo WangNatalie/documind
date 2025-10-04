@@ -4,7 +4,8 @@
 
 export interface CreateChunkingTaskParams {
   docHash: string;
-  fileUrl: string;
+  fileUrl?: string;
+  uploadId?: string;
 }
 
 export interface CreateChunkingTaskResponse {
@@ -36,6 +37,7 @@ export interface CreateChunkingTaskResponse {
 export async function requestChunking(
   params: CreateChunkingTaskParams
 ): Promise<CreateChunkingTaskResponse> {
+  console.log('[chunker-client] Sending message with params:', params);
   return new Promise((resolve) => {
     chrome.runtime.sendMessage(
       {

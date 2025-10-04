@@ -26,13 +26,13 @@ function stopKeepalive() {
 // Handle messages from the service worker
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === 'PROCESS_CHUNKING_TASK') {
-    const { taskId, docHash, fileUrl } = message.payload;
+    const { taskId, docHash, fileUrl, uploadId } = message.payload;
     console.log(`Received PROCESS_CHUNKING_TASK message for task ${taskId}`);
     
     // Start keepalive during processing
     startKeepalive();
     
-    processChunkingTaskInOffscreen({ taskId, docHash, fileUrl })
+    processChunkingTaskInOffscreen({ taskId, docHash, fileUrl, uploadId })
       .then(() => {
         console.log(`Task ${taskId} completed successfully`);
         stopKeepalive();
