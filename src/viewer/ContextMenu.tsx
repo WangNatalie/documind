@@ -9,8 +9,8 @@ interface ContextMenuProps {
   onClose?: () => void;
 }
 
-// Gentle, unoffensive highlight colors: soft yellow, pale green, sky blue
-const HIGHLIGHTS = [
+// Gentle, unoffensive note colors: soft yellow, pale green, sky blue
+const NOTES = [
   { id: 'yellow', label: 'Yellow', className: 'bg-yellow-300 ring-yellow-400' },
   { id: 'green', label: 'Green', className: 'bg-emerald-200 ring-emerald-300' },
   { id: 'blue', label: 'Blue', className: 'bg-sky-200 ring-sky-300' },
@@ -30,15 +30,15 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({ visible = false, x = 0
       role="menu"
       aria-hidden={!visible}
     >
-      <div className="px-3 text-sm text-neutral-600 dark:text-neutral-300 font-medium">Highlight</div>
+      <div className="px-3 text-sm text-neutral-600 dark:text-neutral-300 font-medium">Note</div>
       <div className="px-2 py-2 grid grid-cols-3 gap-2">
-        {HIGHLIGHTS.map(h => (
+        {NOTES.map(n => (
           <button
-            key={h.id}
-            className={`h-8 w-8 rounded-md ${h.className} ring-1 ring-inset ring-neutral-200 dark:ring-neutral-700`}
-            title={`Highlight ${h.label}`}
-            onClick={() => handleSelect(`highlight:${h.id}`)}
-            aria-label={`Highlight ${h.label}`}
+            key={n.id}
+            className={`h-8 w-8 rounded-md ${n.className} ring-1 ring-inset ring-neutral-200 dark:ring-neutral-700`}
+            title={`Note ${n.label}`}
+            onClick={() => handleSelect(`note:${n.id}`)}
+            aria-label={`Note ${n.label}`}
           />
         ))}
       </div>
@@ -46,9 +46,9 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({ visible = false, x = 0
       <div className="border-t border-neutral-100 dark:border-neutral-700 mt-2 pt-2 px-3">
         <button
           className="w-full text-sm text-neutral-700 dark:text-neutral-200 text-left px-2 py-1 rounded hover:bg-neutral-100 dark:hover:bg-neutral-700"
-          onClick={() => handleSelect('note')}
+          onClick={() => handleSelect('comment')}
         >
-          Note
+          Comment
         </button>
       </div>
     </div>
