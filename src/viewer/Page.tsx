@@ -350,8 +350,17 @@ export const Page: React.FC<PageProps> = ({
               {mergedLines.map((line, i) => (
                 <div
                   key={`${n.id}-${i}`}
+<<<<<<< HEAD
                   className={`absolute rounded-md pointer-events-none z-20 ${
                     n.color === 'yellow' ? 'bg-yellow-300/20' : n.color === 'green' ? 'bg-emerald-200/20' : 'bg-sky-200/20'
+=======
+                  className={`absolute rounded-md z-20 ${
+                    n.color === "yellow"
+                      ? "bg-yellow-300/30"
+                      : n.color === "green"
+                        ? "bg-emerald-200/30"
+                        : "bg-sky-200/30"
+>>>>>>> 2063b45 (notes & comments)
                   }`}
                   style={{
                     top: line.top,
@@ -389,16 +398,44 @@ export const Page: React.FC<PageProps> = ({
           const mergedLines = mergeRectsIntoLines(c.rects, width, height);
 
           return (
+<<<<<<< HEAD
             <div key={c.id} className="group">
               {mergedLines.map((line, i) => (
                 <div key={`${c.id}-${i}`} className="absolute z-30" style={{ top: line.top + 3, left: line.left, width: line.width, height: line.height, pointerEvents: 'auto' }}>
+=======
+            <div key={c.id}>
+              {/* Overline on text with edge brackets */}
+              {mergedLines.map((line, i) => (
+                <React.Fragment key={`${c.id}-overline-${i}`}>
+>>>>>>> 2063b45 (notes & comments)
                   {/* Horizontal overline bar */}
-                  <div className="h-0.5 bg-yellow-500 w-full"></div>
+                  <div
+                    className="absolute h-0.5 bg-yellow-500 z-30"
+                    style={{
+                      top: line.top + 3,
+                      left: line.left,
+                      width: line.width,
+                    }}
+                  />
                   {/* Left edge border - extends down halfway */}
-                  <div className="absolute top-0 left-0 w-0.5 bg-yellow-500" style={{ height: `${line.height / 2}px` }}></div>
+                  <div
+                    className="absolute w-0.5 bg-yellow-500 z-30"
+                    style={{
+                      top: line.top + 3,
+                      left: line.left,
+                      height: `${line.height / 2}px`,
+                    }}
+                  />
                   {/* Right edge border - extends down halfway */}
-                  <div className="absolute top-0 right-0 w-0.5 bg-yellow-500" style={{ height: `${line.height / 2}px` }}></div>
-                </div>
+                  <div
+                    className="absolute w-0.5 bg-yellow-500 z-30"
+                    style={{
+                      top: line.top + 3,
+                      left: line.left + line.width,
+                      height: `${line.height / 2}px`,
+                    }}
+                  />
+                </React.Fragment>
               ))}
               {/* Permanently visible side comment (Google Docs style) */}
               <div
