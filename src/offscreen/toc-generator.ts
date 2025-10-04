@@ -12,7 +12,7 @@ import { pdfjsLib } from '../viewer/pdf';
 import { GoogleGenAI } from '@google/genai';
 
 // Configuration
-const GEMINI_API_KEY = 'AIzaSyDd9WPZmJauIBAvqxiYTe3DhoAMhWtH2LY'; // GEMINI_API_KEY HERE
+import { GEMINI_API_KEY } from './api_key';
 const GEMINI_MODEL = 'gemini-2.5-flash'; // Fast model for TOC generation
 const MAX_FIRST_CHUNKS = 5; // Number of first chunks to include in AI prompt
 

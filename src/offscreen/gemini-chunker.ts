@@ -6,7 +6,7 @@ import { nanoid } from 'nanoid';
 import { GoogleGenAI, createPartFromUri } from '@google/genai';
 
 // Gemini configuration for chunking
-const GEMINI_API_KEY = ''; // GEMINI_API_KEY HERE
+import { GEMINI_API_KEY } from './api_key';
 const GEMINI_CHUNKING_MODEL = 'gemini-2.5-pro'; // Multimodal model that can parse PDFs directly
 const USE_MULTIMODAL_PDF_PARSING = true; // Set to true to parse PDFs directly (includes images/tables)
 

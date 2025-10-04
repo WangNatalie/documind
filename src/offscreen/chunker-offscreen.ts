@@ -9,7 +9,8 @@ import {
 } from '../db/index';
 import { readOPFSFile } from '../db/opfs';
 
-const CHUNKR_API_KEY = ''; // CHUNKR_API_KEY HERE
+import { CHUNKR_API_KEY } from './api_key';
+import { GEMINI_API_KEY } from './api_key';
 const chunkr = new ChunkrAI({ apiKey: CHUNKR_API_KEY });
 
 interface ChunkingTaskData {
@@ -325,8 +326,6 @@ export async function processChunkingTaskInOffscreenWithGemini(taskData: Chunkin
   console.log('[Gemini Chunking] Task data:', taskData);
 
   try {
-    // Fail fast if API key is not configured
-    const GEMINI_API_KEY = 'AIzaSyDd9WPZmJauIBAvqxiYTe3DhoAMhWtH2LY';
     if (!GEMINI_API_KEY) {
       const msg = 'Gemini API key not configured.';
       console.error(msg);

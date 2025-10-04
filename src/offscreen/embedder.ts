@@ -7,8 +7,8 @@ import {
   putChunkEmbedding,
 } from '../db/index';
 
-// Configuration
-const GEMINI_API_KEY = ''; // GEMINI_API_KEY HERE
+  // Configuration
+import { GEMINI_API_KEY } from './api_key';
 const EMBEDDING_MODEL = 'text-embedding-004'; // Gemini's latest embedding model
 const EMBEDDING_DIMENSIONS = 768; // text-embedding-004 produces 768-dimensional vectors
 const BATCH_SIZE = 100; // Process in batches for efficiency
