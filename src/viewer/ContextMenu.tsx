@@ -16,7 +16,7 @@ const HIGHLIGHTS = [
   { id: 'blue', label: 'Blue', className: 'bg-sky-200 ring-sky-300' },
 ];
 
-export const ContextMenu: React.FC<ContextMenuProps> = ({ visible = false, x = 0, y = 0, onSelect, onClose }) => {
+export const ContextMenu: React.FC<ContextMenuProps> = ({ visible = false, x = 0, y = 0, onSelect }) => {
   if (!visible) return null;
 
   const handleSelect = (action: string) => {

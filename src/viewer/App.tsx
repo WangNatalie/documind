@@ -10,6 +10,7 @@ import {
   getDoc,
   putDoc,
   updateDocState,
+  resetDB,
   putHighlight,
   getHighlightsByDoc,
   putNote,
@@ -161,37 +162,61 @@ export const ViewerApp: React.FC = () => {
           setIsInitialLoad(false);
         }, 200);
 
-        // Load highlights for this document
+        // Load highlights for this document (non-fatal)
         (async () => {
           try {
             const hs = await getHighlightsByDoc(hash);
             setHighlights(hs || []);
           } catch (err) {
-            console.error("Failed to load highlights", err);
+            console.error("Failed to load highlights (non-fatal)", err);
+            try {
+              // reset DB connection in case it is stale or deleted
+              resetDB();
+            } catch (resetErr) {
+              console.warn('resetDB failed while loading highlights:', resetErr);
+            }
+            setHighlights([]);
           }
         })();
-        // Load notes for this document
+        // Load notes for this document (non-fatal)
         (async () => {
           try {
             const ns = await getNotesByDoc(hash);
             setNotes(ns || []);
           } catch (err) {
-            console.error("Failed to load notes", err);
+            console.error("Failed to load notes (non-fatal)", err);
+            try {
+              resetDB();
+            } catch (resetErr) {
+              console.warn('resetDB failed while loading notes:', resetErr);
+            }
+            setNotes([]);
           }
         })();
 
-        // Create or update doc record
-        if (!existingDoc) {
-          await putDoc({
-            docHash: hash,
-            source,
-            name: fileName,
-            pageCount,
-            lastPage: restoredPage,
-            lastZoom: restoredZoom,
-            createdAt: Date.now(),
-            updatedAt: Date.now(),
-          });
+        // Create or update doc record — make DB errors non-fatal so viewer still loads
+        try {
+          if (!existingDoc) {
+            await putDoc({
+              docHash: hash,
+              source,
+              name: fileName,
+              pageCount,
+              lastPage: restoredPage,
+              lastZoom: restoredZoom,
+              createdAt: Date.now(),
+              updatedAt: Date.now(),
+            });
+          }
+        } catch (err) {
+          console.error('Failed to create/update doc record (non-fatal):', err);
+          // If the DB is in a bad state, reset the connection so subsequent operations can retry
+          try {
+            resetDB();
+            // a future operation (highlights/notes) will attempt to open the DB again
+          } catch (resetErr) {
+            console.warn('resetDB failed:', resetErr);
+          }
         }
 
         // Pass URL directly for url-based PDFs
