@@ -42,8 +42,11 @@ export const Page: React.FC<PageProps> = ({
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const renderedScaleRef = useRef<number>(0);
+  const targetScaleRef = useRef<number>(0);
+  const renderTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const lastCSSScaleRef = useRef<number>(0);
 
-  console.log("rendering page", pageNum);
+  // Rendering page component
 
   // Helper function to merge rects into contiguous lines
   const mergeRectsIntoLines = useCallback(
@@ -123,8 +126,14 @@ export const Page: React.FC<PageProps> = ({
     if (!page || !canvasRef.current || !shouldRender) {
       // Reset rendered scale when page is not being rendered
       if (!shouldRender) {
-        console.log(`[Page ${pageNum}] Unrendering - outside buffer`);
+        // Page moved outside render buffer, reset state
         renderedScaleRef.current = 0;
+        targetScaleRef.current = 0;
+        // Clear any pending render timeouts
+        if (renderTimeoutRef.current) {
+          clearTimeout(renderTimeoutRef.current);
+          renderTimeoutRef.current = null;
+        }
         // also reset any css scaling
         if (canvasRef.current) {
           canvasRef.current.style.transform = "";
@@ -140,9 +149,6 @@ export const Page: React.FC<PageProps> = ({
     if (!renderedScaleRef.current || renderedScaleRef.current === 0) {
       const doFullRender = async () => {
         try {
-          console.log(
-            `[Page ${pageNum}] Full render starting - visible: ${isVisible}, priority: ${isVisible ? 1 : 10}`
-          );
           setIsLoading(true);
           setError(null);
 
@@ -154,14 +160,11 @@ export const Page: React.FC<PageProps> = ({
           canvas.style.transform = "";
           canvas.style.transformOrigin = "top left";
           setIsLoading(false);
-          console.log(`[Page ${pageNum}] Full render complete at scale ${scale}`);
         } catch (err: any) {
           if (err?.name !== "RenderingCancelledException") {
             console.error(`[Page ${pageNum}] Render error:`, err);
             setError(err.message || "Failed to render page");
             setIsLoading(false);
-          } else {
-            console.log(`[Page ${pageNum}] Render cancelled`);
           }
         }
       };
@@ -172,7 +175,7 @@ export const Page: React.FC<PageProps> = ({
 
     // If we already have a rendered canvas at a previous scale, use progressive rendering:
     // 1. Immediately CSS-scale the existing canvas (instant feedback, may be blurry)
-    // 2. Trigger a background re-render at the new scale for crisp quality
+    // 2. Debounce and trigger a background re-render at the new scale for crisp quality
     // This matches PDF.js behavior where zoom is instant but quality improves after a moment
     const prevScale = renderedScaleRef.current;
     if (Math.abs(prevScale - scale) < 0.01) {
@@ -193,28 +196,47 @@ export const Page: React.FC<PageProps> = ({
       canvas.style.transformOrigin = "top left";
 
       setIsLoading(false);
-      console.log(`[Page ${pageNum}] CSS-scaled instantly (${prevScale} -> ${scale}), queuing high-quality re-render`);
 
-      // STEP 2: Queue a high-quality re-render in the background
-      // Use setTimeout to ensure the CSS scaling happens first (immediate visual feedback)
-      // and the re-render happens asynchronously without blocking
-      setTimeout(async () => {
+      // Update target scale and track CSS scale
+      targetScaleRef.current = scale;
+      lastCSSScaleRef.current = scale;
+
+      // STEP 2: Debounce the high-quality re-render to avoid multiple renders during rapid zooming
+      // Clear any pending render
+      if (renderTimeoutRef.current) {
+        clearTimeout(renderTimeoutRef.current);
+      }
+
+      // Queue a high-quality re-render after a short delay (debounced)
+      renderTimeoutRef.current = setTimeout(async () => {
+        const targetScale = targetScaleRef.current;
+
+        // Skip if scale has changed again since this timeout was set
+        if (Math.abs(targetScale - scale) > 0.01) {
+          return;
+        }
+
+        // Skip if we've already rendered at this exact scale
+        if (Math.abs(renderedScaleRef.current - targetScale) < 0.01) {
+          return;
+        }
+
         try {
-          console.log(`[Page ${pageNum}] Starting background re-render at scale ${scale}`);
           await onRender(pageNum, canvas, textLayerRef.current, isVisible ? 1 : 10);
-          renderedScaleRef.current = scale;
-          canvas.style.transform = "";
-          canvas.style.transformOrigin = "top left";
-          console.log(`[Page ${pageNum}] Background re-render complete at scale ${scale}`);
+
+          // Only update renderedScaleRef if we're still at the target scale
+          if (Math.abs(targetScaleRef.current - targetScale) < 0.01) {
+            renderedScaleRef.current = targetScale;
+            canvas.style.transform = "";
+            canvas.style.transformOrigin = "top left";
+          }
         } catch (err: any) {
           if (err?.name !== "RenderingCancelledException") {
-            console.error(`[Page ${pageNum}] Background re-render error:`, err);
+            console.error(`[Page ${pageNum}] Render error:`, err);
             // Don't set error state since we already have a (scaled) version showing
-          } else {
-            console.log(`[Page ${pageNum}] Background re-render cancelled (likely due to another zoom)`);
           }
         }
-      }, 0);
+      }, 150); // 150ms debounce - wait for rapid zoom gestures to finish
     } catch (err: any) {
       console.error(`[Page ${pageNum}] Failed to CSS-scale canvas, falling back to full render:`, err);
       // Fallback: perform a full render
@@ -236,6 +258,15 @@ export const Page: React.FC<PageProps> = ({
     }
   }, [page, scale, pageNum, onRender, isVisible, shouldRender]);
 
+  // Cleanup timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (renderTimeoutRef.current) {
+        clearTimeout(renderTimeoutRef.current);
+      }
+    };
+  }, []);
+
   // Get approximate dimensions for skeleton
   const viewport = page?.getViewport({ scale: scale || 1 });
   const width = viewport?.width || 800;
@@ -243,9 +274,6 @@ export const Page: React.FC<PageProps> = ({
 
   if (!shouldRender) {
     // Render placeholder for pages outside buffer
-    console.log(
-      `[Page ${pageNum}] Rendering placeholder - outside buffer zone`
-    );
     return (
       <div
         data-page-num={pageNum}

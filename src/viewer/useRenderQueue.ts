@@ -157,8 +157,22 @@ export function useRenderQueue(): RenderQueue {
       priority: number
     ): Promise<void> => {
       return new Promise((resolve, reject) => {
-        // Remove existing task for same page
+        // Cancel current task if it's for the same page
+        if (currentTaskRef.current && queueRef.current.length === 0) {
+          // If we're currently rendering and no queue, the current task is being processed
+          // We'll let it finish naturally and the queue will handle the new one
+        }
+
+        // Remove existing queued tasks for same page
+        const removedTasks = queueRef.current.filter(t => t.pageNum === pageNum);
         queueRef.current = queueRef.current.filter(t => t.pageNum !== pageNum);
+
+        // Silently reject removed tasks (this is expected during rapid zoom)
+        removedTasks.forEach(t => {
+          const cancelError = new Error('RenderingCancelledException');
+          cancelError.name = 'RenderingCancelledException';
+          t.reject(cancelError);
+        });
 
         queueRef.current.push({
           pageNum,

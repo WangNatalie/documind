@@ -39,6 +39,7 @@ export const ViewerApp: React.FC = () => {
   const renderQueue = useRenderQueue();
   const canvasCacheRef = useRef(new CanvasCache());
   const visiblePagesRef = useRef<Set<number>>(new Set([1]));
+  const pendingZoomRef = useRef<number | null>(null);
   // Context menu state
   const [contextVisible, setContextVisible] = useState(false);
   const [contextPos, setContextPos] = useState<{ x: number; y: number }>({
@@ -526,12 +527,19 @@ export const ViewerApp: React.FC = () => {
   // changeZoom: adjusts zoom while preserving scroll position appropriately
   // options.cursorPoint -> preserve the document point under cursor
   // options.snapToTop -> keep the current top-most page top aligned after zoom
+  // Uses RAF throttling to prevent excessive updates during rapid zoom
   const changeZoom = useCallback(
     (newZoom: string, options?: { cursorPoint?: { x: number; y: number }; snapToTop?: boolean }) => {
       const container = containerRef.current;
       if (!container || pages.length === 0) {
         setZoom(newZoom);
         return;
+      }
+
+      // Cancel any pending zoom animation
+      if (pendingZoomRef.current !== null) {
+        cancelAnimationFrame(pendingZoomRef.current);
+        pendingZoomRef.current = null;
       }
 
       const oldScale = scale;
@@ -586,9 +594,9 @@ export const ViewerApp: React.FC = () => {
         }
       }
 
-      // Apply zoom and scale on the next animation frame so the browser can
-      // process the scroll change first and avoid showing the top-of-page.
-      requestAnimationFrame(() => {
+      // Apply zoom and scale using RAF to throttle rapid updates
+      pendingZoomRef.current = requestAnimationFrame(() => {
+        pendingZoomRef.current = null;
         setZoom(newZoom);
         setScale(calcScale);
       });
@@ -639,9 +647,27 @@ export const ViewerApp: React.FC = () => {
       }
     };
 
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      // Cancel any pending zoom animation
+      if (pendingZoomRef.current !== null) {
+        cancelAnimationFrame(pendingZoomRef.current);
+      }
+    };
+  }, [handlePrevPage, handleNextPage, handleZoomIn, handleZoomOut]);
+
+  // Ctrl+scroll zoom handler - attached to container only
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
     const handleWheel = (e: WheelEvent) => {
+      // Only handle ctrl/cmd + wheel for zooming
       if (e.ctrlKey || e.metaKey) {
         e.preventDefault();
+        e.stopPropagation();
+
         const cursor = { x: e.clientX, y: e.clientY };
         if (e.deltaY < 0) {
           // zoom in around cursor
@@ -649,10 +675,10 @@ export const ViewerApp: React.FC = () => {
             changeZoom("100", { cursorPoint: cursor });
           } else {
             const currentZoom = parseInt(zoom, 10);
-            const nextZoom = ZOOM_LEVELS.find((z) => z > currentZoom) || 300;
+            const nextZoom = ZOOM_LEVELS.find((z) => z > currentZoom) || ZOOM_LEVELS[ZOOM_LEVELS.length - 1];
             changeZoom(nextZoom.toString(), { cursorPoint: cursor });
           }
-        } else {
+        } else if (e.deltaY > 0) {
           // zoom out around cursor
           if (zoom === "fitWidth" || zoom === "fitPage") {
             changeZoom("100", { cursorPoint: cursor });
@@ -663,15 +689,14 @@ export const ViewerApp: React.FC = () => {
           }
         }
       }
+      // If no ctrl/cmd, let the event propagate normally for regular scrolling
     };
 
-    window.addEventListener("keydown", handleKeyDown);
-    window.addEventListener("wheel", handleWheel, { passive: false });
+    container.addEventListener("wheel", handleWheel, { passive: false });
     return () => {
-      window.removeEventListener("keydown", handleKeyDown);
-      window.removeEventListener("wheel", handleWheel);
+      container.removeEventListener("wheel", handleWheel);
     };
-  }, [handlePrevPage, handleNextPage, handleZoomIn, handleZoomOut]);
+  }, [zoom, changeZoom]);
 
   const handleRender = useCallback(
     async (
