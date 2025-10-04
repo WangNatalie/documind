@@ -90,7 +90,14 @@ export const ViewerApp: React.FC = () => {
     tocItem: { title: string; page: number; chunkId?: string } | null;
     matchedChunkId?: string;
   }
-  const [termSummaries, setTermSummaries] = useState<TermSummary[]>([]);
+  
+  // Cache term summaries for current ±1 pages with timestamps
+  interface PageTermCache {
+    page: number;
+    summaries: TermSummary[];
+    lastVisibleTime: number;
+  }
+  const [termCache, setTermCache] = useState<Map<number, PageTermCache>>(new Map());
   const [selectedTerm, setSelectedTerm] = useState<TermSummary | null>(null);
   const [termPopupPosition, setTermPopupPosition] = useState<{ x: number; y: number } | null>(null);
 
@@ -106,10 +113,20 @@ export const ViewerApp: React.FC = () => {
     const handleMessage = (message: any) => {
       if (message.type === 'TERM_SUMMARIES_READY') {
         // Received term summaries from background script
-        const { summaries } = message.payload;
+        const { summaries, currentPage: summariesPage } = message.payload;
         console.log('[VIEWER] Received term summaries:', summaries);
-        console.log('[VIEWER] Setting term summaries, count:', summaries?.length || 0);
-        setTermSummaries(summaries || []);
+        console.log('[VIEWER] Caching term summaries, count:', summaries?.length || 0, 'for page:', summariesPage);
+        
+        // Add to cache with current timestamp
+        setTermCache(prev => {
+          const newCache = new Map(prev);
+          newCache.set(summariesPage, {
+            page: summariesPage,
+            summaries: summaries || [],
+            lastVisibleTime: Date.now(),
+          });
+          return newCache;
+        });
         return;
       }
 
@@ -169,16 +186,70 @@ export const ViewerApp: React.FC = () => {
     };
   }, [docHash, fileName, currentPage, pages.length, zoom]);
 
-  // Reset term summaries when visible pages change
-  useEffect(() => {
-    // Clear term summaries to remove highlights when view changes
-    if (termSummaries.length > 0) {
-      console.log('[VIEWER] Visible pages changed, clearing term highlights');
-      setTermSummaries([]);
-      setSelectedTerm(null);
-      setTermPopupPosition(null);
+  // Get active term summaries from cache for currently visible pages
+  const activeTermSummaries = React.useMemo(() => {
+    const allSummaries: TermSummary[] = [];
+    for (const pageNum of visiblePages) {
+      const cached = termCache.get(pageNum);
+      if (cached) {
+        allSummaries.push(...cached.summaries);
+      }
     }
+    return allSummaries;
+  }, [termCache, visiblePages]);
+
+  // Clean up cache: remove entries for pages that haven't been visible for 10 seconds
+  useEffect(() => {
+    const cleanupInterval = setInterval(() => {
+      const now = Date.now();
+      const TEN_SECONDS = 10000;
+      
+      setTermCache(prev => {
+        const newCache = new Map(prev);
+        let cleaned = false;
+        
+        for (const [pageNum, cache] of newCache.entries()) {
+          // If page is not currently visible and hasn't been for 10 seconds, remove it
+          if (!visiblePages.has(pageNum) && (now - cache.lastVisibleTime) > TEN_SECONDS) {
+            console.log(`[VIEWER] Cleaning up cache for page ${pageNum} (not visible for >10s)`);
+            newCache.delete(pageNum);
+            cleaned = true;
+          }
+        }
+        
+        return cleaned ? newCache : prev;
+      });
+    }, 2000); // Check every 2 seconds
+    
+    return () => clearInterval(cleanupInterval);
   }, [visiblePages]);
+
+  // Update lastVisibleTime for pages that are currently visible
+  // Also request terms for visible pages that don't have cache entries
+  useEffect(() => {
+    const now = Date.now();
+    setTermCache(prev => {
+      const newCache = new Map(prev);
+      let updated = false;
+      
+      for (const pageNum of visiblePages) {
+        const cached = newCache.get(pageNum);
+        if (cached) {
+          cached.lastVisibleTime = now;
+          updated = true;
+        } else {
+          // Cache miss - request terms for this page
+          console.log(`[VIEWER] Cache miss for page ${pageNum}, requesting terms from background`);
+          chrome.runtime.sendMessage({
+            type: 'REQUEST_PAGE_TERMS',
+            payload: { page: pageNum, docHash }
+          }).catch(err => console.error('Failed to request page terms:', err));
+        }
+      }
+      
+      return updated ? new Map(newCache) : prev;
+    });
+  }, [visiblePages, docHash]);
 
   // Close popup when clicking outside
   useEffect(() => {
@@ -1399,7 +1470,7 @@ export const ViewerApp: React.FC = () => {
                 onNoteEdit={handleNoteEdit}
                 onCommentDelete={handleCommentDelete}
                 onCommentEdit={handleCommentEdit}
-                termSummaries={termSummaries}
+                termSummaries={activeTermSummaries}
                 onTermClick={(term, x, y) => {
                   console.log('[App] onTermClick called:', term.term, { x, y });
                   setSelectedTerm(term);
@@ -1597,9 +1668,6 @@ export const ViewerApp: React.FC = () => {
               >
                 Go to Context
               </button>
-              <span className="ml-2 text-xs text-neutral-500 dark:text-neutral-400">
-                Chunk: {selectedTerm.matchedChunkId.substring(0, 8)}...
-              </span>
             </div>
           )}
         </div>

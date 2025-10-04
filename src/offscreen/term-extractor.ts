@@ -131,7 +131,7 @@ export async function extractTerms(passage: string): Promise<TermExtractionResul
   }
 
   try {
-    const prompt = `Extract 5-10 important technical terms, keywords, or phrases from this passage.
+    const prompt = `Extract 1-5 important technical terms, keywords, or phrases from this passage.
 ${passage}
 Prioritize terms that may need clarification as someone reads through this passage for understanding. Return only the list of terms separated by commas.`;
 
