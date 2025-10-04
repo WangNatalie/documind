@@ -42,20 +42,14 @@ export const Page: React.FC<PageProps> = ({
   onRender,
   notes = [],
   comments = [],
-  onNoteDelete,
-  onNoteEdit,
-  onCommentDelete,
-  onCommentEdit,
+
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const textLayerRef = useRef<HTMLDivElement>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const renderedScaleRef = useRef<number>(0);
-  const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
-  const [editingNoteText, setEditingNoteText] = useState("");
-  const [editingCommentId, setEditingCommentId] = useState<string | null>(null);
-  const [editingCommentText, setEditingCommentText] = useState("");
+
   const targetScaleRef = useRef<number>(0);
   const renderTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const lastCSSScaleRef = useRef<number>(0);
