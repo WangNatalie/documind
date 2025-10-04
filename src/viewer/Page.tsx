@@ -1,5 +1,5 @@
-import React, { useEffect, useRef, useState } from 'react';
-import type { PDFPageProxy } from 'pdfjs-dist';
+import React, { useEffect, useRef, useState } from "react";
+import type { PDFPageProxy } from "pdfjs-dist";
 
 interface PageProps {
   pageNum: number;
@@ -7,10 +7,22 @@ interface PageProps {
   scale: number;
   isVisible: boolean;
   shouldRender: boolean;
-  onRender: (pageNum: number, canvas: HTMLCanvasElement, textLayerDiv: HTMLDivElement | null, priority: number) => Promise<void>;
+  onRender: (
+    pageNum: number,
+    canvas: HTMLCanvasElement,
+    textLayerDiv: HTMLDivElement | null,
+    priority: number
+  ) => Promise<void>;
 }
 
-export const Page: React.FC<PageProps> = ({ pageNum, page, scale, isVisible, shouldRender, onRender }) => {
+export const Page: React.FC<PageProps> = ({
+  pageNum,
+  page,
+  scale,
+  isVisible,
+  shouldRender,
+  onRender,
+}) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const textLayerRef = useRef<HTMLDivElement>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -27,7 +39,10 @@ export const Page: React.FC<PageProps> = ({ pageNum, page, scale, isVisible, sho
     }
 
     // Skip re-render if scale hasn't changed significantly (avoid flashing)
-    if (renderedScaleRef.current > 0 && Math.abs(renderedScaleRef.current - scale) < 0.01) {
+    if (
+      renderedScaleRef.current > 0 &&
+      Math.abs(renderedScaleRef.current - scale) < 0.01
+    ) {
       setIsLoading(false);
       return;
     }
@@ -38,14 +53,19 @@ export const Page: React.FC<PageProps> = ({ pageNum, page, scale, isVisible, sho
         setError(null);
 
         const priority = isVisible ? 1 : 10;
-        await onRender(pageNum, canvasRef.current!, textLayerRef.current, priority);
+        await onRender(
+          pageNum,
+          canvasRef.current!,
+          textLayerRef.current,
+          priority
+        );
 
         renderedScaleRef.current = scale;
         setIsLoading(false);
       } catch (err: any) {
-        if (err?.name !== 'RenderingCancelledException') {
+        if (err?.name !== "RenderingCancelledException") {
           console.error(`Error rendering page ${pageNum}:`, err);
-          setError(err.message || 'Failed to render page');
+          setError(err.message || "Failed to render page");
           setIsLoading(false);
         }
       }
@@ -64,7 +84,7 @@ export const Page: React.FC<PageProps> = ({ pageNum, page, scale, isVisible, sho
     return (
       <div
         data-page-num={pageNum}
-        className="relative my-4 shadow-lg bg-neutral-100 dark:bg-neutral-800"
+        className="relative mb-1 shadow-lg bg-neutral-100 dark:bg-neutral-800"
         style={{ width: `${width}px`, height: `${height}px` }}
       />
     );
@@ -73,7 +93,7 @@ export const Page: React.FC<PageProps> = ({ pageNum, page, scale, isVisible, sho
   return (
     <div
       data-page-num={pageNum}
-      className="relative my-4 shadow-lg transition-opacity duration-200"
+      className="relative mb-1 shadow-lg transition-opacity duration-200"
       style={{ width: `${width}px`, minHeight: `${height}px` }}
     >
       {isLoading && (
@@ -81,7 +101,9 @@ export const Page: React.FC<PageProps> = ({ pageNum, page, scale, isVisible, sho
           className="absolute inset-0 bg-neutral-100 dark:bg-neutral-800 animate-pulse flex items-center justify-center"
           style={{ width: `${width}px`, height: `${height}px` }}
         >
-          <span className="text-neutral-400 dark:text-neutral-600 text-sm">Loading page {pageNum}...</span>
+          <span className="text-neutral-400 dark:text-neutral-600 text-sm">
+            Loading page {pageNum}...
+          </span>
         </div>
       )}
 
@@ -91,7 +113,9 @@ export const Page: React.FC<PageProps> = ({ pageNum, page, scale, isVisible, sho
           style={{ width: `${width}px`, height: `${height}px` }}
         >
           <div className="text-center p-4">
-            <p className="text-red-700 dark:text-red-400 font-semibold mb-2">Error loading page {pageNum}</p>
+            <p className="text-red-700 dark:text-red-400 font-semibold mb-2">
+              Error loading page {pageNum}
+            </p>
             <p className="text-red-600 dark:text-red-500 text-sm">{error}</p>
           </div>
         </div>
@@ -100,7 +124,7 @@ export const Page: React.FC<PageProps> = ({ pageNum, page, scale, isVisible, sho
       <div className="relative">
         <canvas
           ref={canvasRef}
-          className={`block ${isLoading || error ? 'invisible' : 'visible'}`}
+          className={`block ${isLoading || error ? "invisible" : "visible"}`}
         />
         {/* Text layer for text selection */}
         <div

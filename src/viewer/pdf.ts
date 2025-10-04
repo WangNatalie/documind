@@ -47,10 +47,12 @@ export function calculateScale(
   } else if (mode === 'fitPage') {
     const widthScale = containerWidth / viewport.width;
     const heightScale = containerHeight / viewport.height;
-    return Math.min(widthScale, heightScale);
+    return Math.min(widthScale, heightScale) * 1.03;
   } else {
-    // Fixed percentage
-    return mode / 100;
+    // Fixed percentage - adjust for typical screen DPI (96 DPI vs PDF's 72 DPI)
+    // This makes 100% zoom match what users expect in typical PDF viewers
+    const dpiAdjustment = 2.1;
+    return (mode / 100) * dpiAdjustment;
   }
 }
 
