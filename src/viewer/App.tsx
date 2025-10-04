@@ -20,6 +20,7 @@ export const ViewerApp: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [docHash, setDocHash] = useState<string>('');
+  const [visiblePages, setVisiblePages] = useState<Set<number>>(new Set([1]));
 
   const containerRef = useRef<HTMLDivElement>(null);
   const observerRef = useRef<IntersectionObserver | null>(null);
@@ -163,41 +164,40 @@ export const ViewerApp: React.FC = () => {
 
     observerRef.current = new IntersectionObserver(
       (entries) => {
-        let mostVisiblePage = currentPage;
+        let mostVisiblePage = 0;
         let maxRatio = 0;
-        let visibilityChanged = false;
+        // Use the ref for current state, build new set for update
+        const newVisiblePages = new Set(visiblePagesRef.current);
 
         entries.forEach((entry) => {
           const pageNum = parseInt(entry.target.getAttribute('data-page-num') || '0', 10);
 
           if (entry.isIntersecting) {
-            const wasVisible = visiblePagesRef.current.has(pageNum);
-            visiblePagesRef.current.add(pageNum);
-            if (!wasVisible) visibilityChanged = true;
+            newVisiblePages.add(pageNum);
 
-            // Track most visible page (>= 60%)
+            // Track most visible page
             if (entry.intersectionRatio > maxRatio) {
               maxRatio = entry.intersectionRatio;
-              if (entry.intersectionRatio >= 0.6) {
-                mostVisiblePage = pageNum;
-              }
+              mostVisiblePage = pageNum;
             }
           } else {
-            const wasVisible = visiblePagesRef.current.has(pageNum);
-            visiblePagesRef.current.delete(pageNum);
-            if (wasVisible) visibilityChanged = true;
+            newVisiblePages.delete(pageNum);
           }
         });
 
-        // Update current page if changed
-        if (mostVisiblePage !== currentPage && maxRatio >= 0.6) {
+        // Update visible pages state and ref
+        visiblePagesRef.current = newVisiblePages;
+        setVisiblePages(new Set(newVisiblePages));
+
+        // Update current page if we found a visible page with good ratio
+        if (mostVisiblePage > 0 && maxRatio >= 0.5) {
           setCurrentPage(mostVisiblePage);
-        } else if (visibilityChanged && mostVisiblePage === currentPage) {
-          // Only force re-render if page didn't change (to update shouldRender for other pages)
-          setCurrentPage(p => p);
         }
       },
-      { threshold: [0, 0.25, 0.5, 0.6, 0.75, 1.0] }
+      {
+        threshold: [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0],
+        rootMargin: '0px'
+      }
     );
 
     // Observe all pages
@@ -207,7 +207,7 @@ export const ViewerApp: React.FC = () => {
     return () => {
       observerRef.current?.disconnect();
     };
-  }, [pages, currentPage]);
+  }, [pages]);
 
   // Update hash when page/zoom changes
   useEffect(() => {
@@ -398,11 +398,11 @@ export const ViewerApp: React.FC = () => {
         <div className="py-4 flex flex-col items-center">
           {pages.map((page, idx) => {
             const pageNum = idx + 1;
-            const isVisible = visiblePagesRef.current.has(pageNum);
+            const isVisible = visiblePages.has(pageNum);
             // Render visible pages + 2 pages buffer above/below
             // Always render first 3 pages initially, then use visibility detection
             const shouldRender = pageNum <= 3 || isVisible ||
-              Array.from(visiblePagesRef.current).some(vp => Math.abs(vp - pageNum) <= 2);
+              Array.from(visiblePages).some(vp => Math.abs(vp - pageNum) <= 2);
 
             return (
               <Page
