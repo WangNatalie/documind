@@ -52,7 +52,10 @@ export const Page: React.FC<PageProps> = ({
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const renderedScaleRef = useRef<number>(0);
-
+  const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
+  const [editingNoteText, setEditingNoteText] = useState("");
+  const [editingCommentId, setEditingCommentId] = useState<string | null>(null);
+  const [editingCommentText, setEditingCommentText] = useState("");
   const targetScaleRef = useRef<number>(0);
   const renderTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const lastCSSScaleRef = useRef<number>(0);
@@ -156,15 +159,6 @@ export const Page: React.FC<PageProps> = ({
 
     const canvas = canvasRef.current!;
 
-    // Skip re-render if scale hasn't changed significantly (avoid flashing)
-    if (
-      renderedScaleRef.current > 0 &&
-      Math.abs(renderedScaleRef.current - scale) < 0.01
-    ) {
-      setIsLoading(false);
-      return;
-    }
-
     // If we've never rendered this page, do a full render
     if (!renderedScaleRef.current || renderedScaleRef.current === 0) {
       const doFullRender = async () => {
@@ -207,6 +201,32 @@ export const Page: React.FC<PageProps> = ({
     try {
       // Compute new viewport at the requested scale
       const newViewport = page.getViewport({ scale });
+
+      // Guard: Only CSS-scale if canvas has been rendered (has non-zero dimensions)
+      if (canvas.width === 0 || canvas.height === 0) {
+        console.log(`[Page ${pageNum}] Canvas not yet rendered (0 dimensions), skipping CSS-scale`);
+        // Force a full render instead
+        const doFullRender = async () => {
+          try {
+            setIsLoading(true);
+            setError(null);
+            const priority = isVisible ? 1 : 10;
+            await onRender(pageNum, canvas, textLayerRef.current, priority);
+            renderedScaleRef.current = scale;
+            canvas.style.transform = "";
+            canvas.style.transformOrigin = "top left";
+            setIsLoading(false);
+          } catch (err: any) {
+            if (err?.name !== "RenderingCancelledException") {
+              console.error(`[Page ${pageNum}] Render error:`, err);
+              setError(err.message || "Failed to render page");
+              setIsLoading(false);
+            }
+          }
+        };
+        doFullRender();
+        return;
+      }
 
       // STEP 1: Immediately CSS-scale the existing canvas for instant visual feedback
       // This stretches the existing bitmap, which may look blurry but responds instantly
@@ -357,7 +377,6 @@ export const Page: React.FC<PageProps> = ({
               {mergedLines.map((line, i) => (
                 <div
                   key={`${n.id}-${i}`}
-
                   className={`absolute rounded-md z-20 ${
                     n.color === "yellow"
                       ? "bg-yellow-300/30"
