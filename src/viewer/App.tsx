@@ -42,8 +42,19 @@ export const ViewerApp: React.FC = () => {
   const containerRef = useRef<HTMLDivElement>(null);
   const observerRef = useRef<IntersectionObserver | null>(null);
   const renderQueue = useRenderQueue();
-  const canvasCacheRef = useRef(new CanvasCache());
+  // Protect pages currently in or near viewport from cache eviction
+  const canvasCacheRef = useRef(new CanvasCache((pageNum: number) => {
+    // visiblePages state may lag slightly; combine both refs for safety
+    if (visiblePagesRef.current.has(pageNum)) return true;
+    if ((intersectionVisiblePagesRef.current || new Set()).has(pageNum)) return true;
+    // Also protect small buffer (+/-2) around any currently visible page to reduce thrash
+    for (const vp of visiblePagesRef.current) {
+      if (Math.abs(vp - pageNum) <= 2) return true;
+    }
+    return false;
+  }));
   const visiblePagesRef = useRef<Set<number>>(new Set([1]));
+  const intersectionVisiblePagesRef = useRef<Set<number>>(new Set([1]));
   const pendingZoomRef = useRef<number | null>(null);
   // Context menu state
   const [contextVisible, setContextVisible] = useState(false);
@@ -73,7 +84,8 @@ export const ViewerApp: React.FC = () => {
   const params = new URLSearchParams(window.location.search);
   const fileUrl = params.get("file");
   const uploadId = params.get("uploadId");
-  const fileName = params.get("name") || "document.pdf";
+  // Keep filename in state so we can update it after reading PDF metadata
+  const [fileName, setFileName] = useState<string>(params.get("name") || "document.pdf");
 
   // Listen for state requests from background
   useEffect(() => {
@@ -182,6 +194,43 @@ export const ViewerApp: React.FC = () => {
 
         setDocHash(hash);
         setPdf(pdfDoc);
+        // Update the browser tab title to the document name
+        try {
+            document.title = fileName || 'document.pdf';
+        } catch (e) {
+          // ignore in non-browser environments
+        }
+
+          // Derive a better filename synchronously (await metadata) so we can use it when persisting
+          let derivedName: string | undefined = params.get("name") || undefined;
+          if (!derivedName) {
+            try {
+              const meta = await (pdfDoc as any).getMetadata?.();
+              const title = meta?.info?.Title || meta?.info?.title || (meta?.metadata && typeof meta.metadata.get === 'function' ? meta.metadata.get('dc:title') : undefined);
+              if (title && typeof title === 'string' && title.trim().length > 0) {
+                derivedName = title.trim();
+              }
+            } catch (e) {
+              // ignore metadata errors
+            }
+          }
+
+          if (!derivedName && fileUrl) {
+            try {
+              const u = new URL(fileUrl);
+              const parts = u.pathname.split('/').filter(Boolean);
+              const last = parts[parts.length - 1] || '';
+              if (last) {
+                derivedName = decodeURIComponent(last.split('?')[0]) || undefined;
+              }
+            } catch (e) {
+              // ignore
+            }
+          }
+
+          if (!derivedName) derivedName = 'document.pdf';
+          setFileName(derivedName);
+          try { document.title = derivedName; } catch (e) {}
 
         // Load all pages
         const pageCount = pdfDoc.numPages;
@@ -314,7 +363,7 @@ export const ViewerApp: React.FC = () => {
                 fileUrl: fileUrl || undefined,
                 uploadId: uploadId || undefined,
               });
-              
+
               if (tocResponse.success) {
                 console.log('[App] TOC generation task created:', tocResponse.taskId);
               } else {
@@ -411,7 +460,7 @@ export const ViewerApp: React.FC = () => {
     };
 
     loadDocument();
-  }, [fileUrl, uploadId, fileName]);
+  }, [fileUrl, uploadId]);
 
   // Right-click to open custom context menu
   useEffect(() => {
@@ -840,10 +889,29 @@ export const ViewerApp: React.FC = () => {
     }
   }, [zoom, changeZoom]);
 
+  // Ref for print handler so keyboard effect can call it without ordering issues
+  const handlePrintRef = useRef<(() => Promise<void>) | null>(null);
+
   // Keyboard navigation and ctrl+scroll zoom
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const isMod = e.ctrlKey || e.metaKey;
+
+      // Intercept Ctrl/Cmd+P to use in-app printing flow
+      if (isMod && (e.key === 'p' || e.key === 'P')) {
+        e.preventDefault();
+        // call print handler via ref (may be set after effect declared)
+        (async () => {
+          try {
+            const fn = handlePrintRef.current;
+            if (fn) await fn();
+            else console.warn('Print handler not ready');
+          } catch (err) {
+            console.error('Error running in-app print', err);
+          }
+        })();
+        return;
+      }
 
       if (e.key === "ArrowLeft" || e.key === "PageUp") {
         e.preventDefault();
@@ -922,6 +990,148 @@ export const ViewerApp: React.FC = () => {
         console.error("Failed to update comment", err);
       }
     }, [comments]);
+
+  // Download and print handlers
+  const handleDownload = useCallback(async () => {
+    try {
+      // Prefer original URL or OPFS uploadId
+      if (fileUrl) {
+        // Trigger download by navigating to the URL (preserve CORS behavior)
+        const a = document.createElement('a');
+        a.href = fileUrl;
+        a.download = fileName || 'document.pdf';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        return;
+      }
+
+      if (uploadId) {
+        const arrayBuffer = await readOPFSFile(uploadId);
+        const blob = new Blob([arrayBuffer], { type: 'application/pdf' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = fileName || 'document.pdf';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+        return;
+      }
+
+      // Fallback: try to get raw data from pdfjs (if supported)
+      if (pdf && typeof (pdf as any).getData === 'function') {
+        const data = await (pdf as any).getData();
+        const blob = new Blob([data], { type: 'application/pdf' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = fileName || 'document.pdf';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+        return;
+      }
+
+      console.warn('No source available for download');
+    } catch (err) {
+      console.error('Download failed', err);
+    }
+  }, [fileUrl, uploadId, pdf, fileName]);
+
+  const handlePrint = useCallback(async () => {
+    try {
+      let blob: Blob | null = null;
+
+      if (uploadId) {
+        const arrayBuffer = await readOPFSFile(uploadId);
+        blob = new Blob([arrayBuffer], { type: 'application/pdf' });
+      } else if (fileUrl) {
+        // Try to fetch the file bytes (may fail due to CORS)
+        try {
+          const resp = await fetch(fileUrl, { mode: 'cors' });
+          if (resp.ok) {
+            const ab = await resp.arrayBuffer();
+            blob = new Blob([ab], { type: 'application/pdf' });
+          } else {
+            // Can't fetch; fall back to opening URL
+            const w = window.open(fileUrl, '_blank');
+            if (w) w.focus();
+            return;
+          }
+        } catch (e) {
+          // CORS or network error - fall back to opening URL
+          const w = window.open(fileUrl, '_blank');
+          if (w) w.focus();
+          return;
+        }
+      } else if (pdf && typeof (pdf as any).getData === 'function') {
+        const data = await (pdf as any).getData();
+        blob = new Blob([data], { type: 'application/pdf' });
+      }
+
+      if (!blob) {
+        console.warn('No source available for print');
+        return;
+      }
+
+      const url = URL.createObjectURL(blob);
+
+      // Create an invisible iframe in the current document (same-origin blob URL)
+      const iframe = document.createElement('iframe');
+      iframe.style.position = 'fixed';
+      iframe.style.right = '0';
+      iframe.style.bottom = '0';
+      iframe.style.width = '0px';
+      iframe.style.height = '0px';
+      iframe.style.border = '0';
+      iframe.src = url;
+      document.body.appendChild(iframe);
+
+      const cleanup = () => {
+        try {
+          if (iframe.parentNode) iframe.parentNode.removeChild(iframe);
+        } catch (e) {}
+        try { URL.revokeObjectURL(url); } catch (e) {}
+      };
+
+      const onLoad = () => {
+        try {
+          iframe.contentWindow?.focus();
+          // Trigger print in the iframe (should open print dialog)
+          iframe.contentWindow?.print();
+        } catch (e) {
+          console.warn('Iframe print failed', e);
+          // Fallback: open blob URL in new tab
+          try { window.open(url, '_blank')?.focus(); } catch (err) {}
+        } finally {
+          // cleanup after short delay to allow print dialog to start
+          setTimeout(cleanup, 2000);
+        }
+      };
+
+      // Attach load handler
+      iframe.addEventListener('load', onLoad, { once: true });
+
+      // Safety: if load never fires, attempt print after 1s and cleanup after 5s
+      setTimeout(() => {
+        try {
+          if (iframe.contentWindow) iframe.contentWindow.print();
+        } catch (e) {}
+      }, 1000);
+      setTimeout(cleanup, 5000);
+    } catch (err) {
+      console.error('Print failed', err);
+    }
+  }, [fileUrl, uploadId, pdf]);
+
+  // Keep ref updated so keyboard handler can call print without ordering issues
+  useEffect(() => {
+    handlePrintRef.current = handlePrint;
+    return () => { handlePrintRef.current = null; };
+  }, [handlePrint]);
 
   // Ctrl+scroll zoom handler - attached to container only
   useEffect(() => {
@@ -1086,6 +1296,8 @@ export const ViewerApp: React.FC = () => {
         onFitWidth={() => changeZoom("fitWidth", { snapToTop: true })}
         onFitPage={() => changeZoom("fitPage", { snapToTop: true })}
         onPageChange={(page) => scrollToPage(page)}
+        onDownload={handleDownload}
+        onPrint={handlePrint}
       />
 
       <div ref={containerRef} className="flex-1 overflow-auto">
