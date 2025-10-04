@@ -4,14 +4,20 @@ import { readOPFSFile } from '../db/opfs';
 import { pdfjsLib } from '../viewer/pdf';
 import { nanoid } from 'nanoid';
 import { GoogleGenAI, createPartFromUri } from '@google/genai';
+import { getGeminiApiKey } from './gemini-config';
 
 // Gemini configuration for chunking
-const GEMINI_API_KEY = ''; // GEMINI_API_KEY HERE
 const GEMINI_CHUNKING_MODEL = 'gemini-2.5-pro'; // Multimodal model that can parse PDFs directly
 const USE_MULTIMODAL_PDF_PARSING = true; // Set to true to parse PDFs directly (includes images/tables)
 
-// Initialize Google GenAI
-const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
+// Initialize Google GenAI lazily when key exists
+const geminiKey = getGeminiApiKey();
+let ai: any = null;
+if (geminiKey) {
+  ai = new GoogleGenAI({ apiKey: geminiKey });
+} else {
+  console.warn('[Gemini Chunker] No Gemini API key configured; Gemini chunking will be disabled');
+}
 
 // Cache for uploaded files (in-memory, keyed by docHash)
 // Format: { docHash: { uri: string, mimeType: string, uploadedAt: number, fileName: string } }
@@ -39,7 +45,7 @@ async function extractPDFText(
   uploadId?: string
 ): Promise<PageTextData[]> {
   console.log('[Gemini Chunker] Extracting PDF text...');
-  
+
   try {
     // Load PDF document
     let pdfDoc: any;
@@ -64,7 +70,7 @@ async function extractPDFText(
       const page = await pdfDoc.getPage(pageNum);
       const textContent = await page.getTextContent();
       const viewport = page.getViewport({ scale: 1.0 });
-      
+
       // Combine text items into page text
       const pageText = textContent.items
         .map((item: any) => item.str)
@@ -100,17 +106,17 @@ async function uploadPDFToGemini(
   uploadId?: string
 ): Promise<{ uri: string; mimeType: string }> {
   console.log('[Gemini Chunker] Checking if PDF needs to be uploaded...');
-  
+
   try {
     // Check cache first
     const cached = uploadedFilesCache.get(docHash);
     if (cached) {
       const age = Date.now() - cached.uploadedAt;
-      
+
       if (age < FILE_CACHE_EXPIRY) {
         console.log(`[Gemini Chunker] Using cached file (age: ${Math.round(age / 1000 / 60)} minutes)`);
         console.log(`[Gemini Chunker] Cached URI: ${cached.uri}`);
-        
+
         // Optionally verify file still exists in Gemini (comment out if too slow)
         try {
           const fileName = cached.uri.split('/').pop();
@@ -133,14 +139,14 @@ async function uploadPDFToGemini(
         uploadedFilesCache.delete(docHash);
       }
     }
-    
+
     // Need to upload
     console.log('[Gemini Chunker] Uploading PDF to Gemini File API...');
-    
+
     // Get PDF as blob/arraybuffer
     let pdfBlob: Blob;
     let displayName: string;
-    
+
     if (uploadId) {
       const arrayBuffer = await readOPFSFile(uploadId);
       pdfBlob = new Blob([arrayBuffer], { type: 'application/pdf' });
@@ -175,28 +181,28 @@ async function uploadPDFToGemini(
     let getFile = await ai.files.get({ name: file.name });
     let retries = 0;
     const maxRetries = 60; // 5 minutes maximum wait time
-    
+
     while (getFile.state === 'PROCESSING') {
       if (retries >= maxRetries) {
         throw new Error('File processing timeout after 5 minutes');
       }
-      
+
       console.log(`[Gemini Chunker] File status: ${getFile.state}, waiting...`);
       await new Promise((resolve) => setTimeout(resolve, 5000)); // Wait 5 seconds
-      
+
       getFile = await ai.files.get({ name: file.name });
       retries++;
     }
-    
+
     if (getFile.state === 'FAILED') {
       throw new Error('File processing failed');
     }
 
-    const result = { 
-      uri: file.uri || '', 
-      mimeType: file.mimeType || 'application/pdf' 
+    const result = {
+      uri: file.uri || '',
+      mimeType: file.mimeType || 'application/pdf'
     };
-    
+
     // Cache the result
     uploadedFilesCache.set(docHash, {
       uri: result.uri,
@@ -204,10 +210,10 @@ async function uploadPDFToGemini(
       uploadedAt: Date.now(),
       fileName: file.name,
     });
-    
+
     console.log('[Gemini Chunker] PDF uploaded and processed successfully:', file.uri);
     console.log('[Gemini Chunker] File cached for future use');
-    
+
     return result;
   } catch (error) {
     console.error('[Gemini Chunker] Error uploading PDF to Gemini:', error);
@@ -224,7 +230,7 @@ async function parseMultimodalPDF(
   docHash: string
 ): Promise<ChunkRecord[]> {
   console.log('[Gemini Chunker] Parsing PDF with Gemini multimodal model...');
-  
+
   const prompt = `You are an AI assistant helping to chunk a PDF document into meaningful semantic chunks for better search and retrieval.
 
 Analyze this PDF document and split it into meaningful semantic chunks. Each chunk should:
@@ -243,7 +249,7 @@ For each chunk, identify any headers/titles it contains:
 For each chunk, provide:
 - The chunk content (text, table data, or image description)
 - A brief description summarizing what the chunk is about
-- The approximate page number where the section starts 
+- The approximate page number where the section starts
 - The type of content: "text", "table", "image", "chart", or "mixed"
 - Any headers/titles found in the chunk (as an array of objects with "text" and "type")
 
@@ -269,7 +275,7 @@ Return ONLY the JSON array, nothing else.`;
   try {
     // Create file part using official SDK helper
     const fileContent = createPartFromUri(fileUri, mimeType);
-    
+
     // Generate content using official SDK
     const response = await ai.models.generateContent({
       model: GEMINI_CHUNKING_MODEL,
@@ -334,7 +340,7 @@ async function buildSemanticChunks(
   docHash: string
 ): Promise<ChunkRecord[]> {
   console.log('[Gemini Chunker] Building semantic chunks with Gemini...');
-  
+
   // Combine all pages into document text with page markers
   const documentText = pages
     .map(p => `[PAGE ${p.pageNumber}]\n${p.text}`)
@@ -412,7 +418,7 @@ Return ONLY the JSON array, nothing else.`;
     // Convert to ChunkRecord format
     const chunkRecords: ChunkRecord[] = geminiChunks.map((chunk: any, index: number) => {
       const pageData = pages.find(p => p.pageNumber === chunk.page) || pages[0];
-      
+
       return {
         id: nanoid(),
         docHash,
@@ -455,24 +461,24 @@ function createSimpleChunks(
   overlap: number = 200
 ): ChunkRecord[] {
   console.log('[Gemini Chunker] Creating simple chunks as fallback...');
-  
+
   const chunks: ChunkRecord[] = [];
   let chunkIndex = 0;
-  
+
   for (const page of pages) {
     const text = page.text;
     let startIdx = 0;
-    
+
     while (startIdx < text.length) {
       // Calculate chunk end with target size
       let endIdx = Math.min(startIdx + targetSize, text.length);
-      
+
       // Try to find a natural break (period, newline) near the target size
       if (endIdx < text.length) {
         const searchText = text.substring(endIdx - 100, endIdx + 100);
         const breakChars = ['. ', '.\n', '\n\n', '! ', '? '];
         let bestBreak = -1;
-        
+
         for (const breakChar of breakChars) {
           const breakIdx = searchText.lastIndexOf(breakChar);
           if (breakIdx > 50) { // Make sure we're not too far back
@@ -480,14 +486,14 @@ function createSimpleChunks(
             break;
           }
         }
-        
+
         if (bestBreak > startIdx) {
           endIdx = bestBreak;
         }
       }
-      
+
       const chunkText = text.substring(startIdx, endIdx).trim();
-      
+
       if (chunkText.length > 50) { // Only create chunk if it has meaningful content
         chunks.push({
           id: nanoid(),
@@ -507,13 +513,13 @@ function createSimpleChunks(
           createdAt: Date.now(),
         });
       }
-      
+
       // Move to next chunk with overlap
       startIdx = endIdx - overlap;
       if (startIdx >= text.length) break;
     }
   }
-  
+
   console.log(`[Gemini Chunker] Created ${chunks.length} simple chunks`);
   return chunks;
 }
@@ -527,7 +533,7 @@ async function storeGeminiChunks(chunks: ChunkRecord[]): Promise<void> {
   for (let i = 0; i < chunks.length; i++) {
     try {
       await putChunk(chunks[i]);
-      
+
       if (i % 10 === 0) {
         console.log(`[Gemini Chunker] Stored chunk ${i + 1}/${chunks.length}`);
       }
@@ -562,7 +568,7 @@ export function getCacheStats(): { size: number; entries: Array<{ docHash: strin
     age: Date.now() - data.uploadedAt,
     fileName: data.fileName,
   }));
-  
+
   return {
     size: uploadedFilesCache.size,
     entries,
@@ -580,26 +586,31 @@ export async function processWithGeminiChunking(
 ): Promise<ChunkRecord[]> {
   console.log('[Gemini Chunker] Starting Gemini-based chunking...');
   console.log('[Gemini Chunker] Multimodal parsing enabled:', USE_MULTIMODAL_PDF_PARSING);
-  
+
   try {
+    if (!ai) {
+      const msg = 'Gemini API key not configured; cannot run Gemini chunking.';
+      console.error('[Gemini Chunker] ' + msg);
+      throw new Error(msg);
+    }
     let chunks: ChunkRecord[];
 
     if (USE_MULTIMODAL_PDF_PARSING) {
       // NEW APPROACH: Use Gemini multimodal to parse PDF directly (includes images/tables)
       console.log('[Gemini Chunker] Using multimodal PDF parsing (includes images/tables)...');
-      
+
       try {
         // Step 1: Upload PDF to Gemini File API (with caching)
         const { uri, mimeType } = await uploadPDFToGemini(docHash, fileUrl, uploadId);
-        
+
         // Step 2: Parse with Gemini multimodal model
         chunks = await parseMultimodalPDF(uri, mimeType, docHash);
       } catch (multimodalError) {
         console.warn('[Gemini Chunker] Multimodal parsing failed, falling back to text-based approach:', multimodalError);
-        
+
         // Fallback to text-based chunking
         const pages = await extractPDFText(fileUrl, uploadId);
-        
+
         try {
           chunks = await buildSemanticChunks(pages, docHash);
         } catch (semanticError) {
@@ -610,10 +621,10 @@ export async function processWithGeminiChunking(
     } else {
       // OLD APPROACH: Extract text first, then chunk (text only)
       console.log('[Gemini Chunker] Using text-based parsing (text only)...');
-      
+
       // Step 1: Extract text from PDF
       const pages = await extractPDFText(fileUrl, uploadId);
-      
+
       if (pages.length === 0) {
         throw new Error('No pages extracted from PDF');
       }

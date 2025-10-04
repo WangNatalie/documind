@@ -30,6 +30,7 @@ export const ViewerApp: React.FC = () => {
   const [pdf, setPdf] = useState<PDFDocumentProxy | null>(null);
   const [pages, setPages] = useState<(PDFPageProxy | null)[]>([]);
   const [currentPage, setCurrentPage] = useState(1);
+  const [visiblePages, setVisiblePages] = useState<Set<number>>(new Set([1]));
 
   const [zoom, setZoom] = useState<string>("fitPage");
   const [scale, setScale] = useState(1);
@@ -154,8 +155,9 @@ export const ViewerApp: React.FC = () => {
         setCurrentPage(restoredPage);
         setZoom(restoredZoom);
 
-        // Initialize visible pages with the restored page
+        // Initialize visible pages with the restored page (both ref and state)
         visiblePagesRef.current = new Set([restoredPage]);
+        setVisiblePages(new Set([restoredPage]));
 
         // Scroll to restored page after a brief delay to ensure rendering
         if (restoredPage > 1) {
@@ -461,6 +463,8 @@ export const ViewerApp: React.FC = () => {
         (entries) => {
           let mostVisiblePage = 0;
           let maxRatio = 0;
+          const nowVisible: number[] = [];
+          const nowHidden: number[] = [];
 
           entries.forEach((entry) => {
             const pageNum = parseInt(
@@ -470,6 +474,7 @@ export const ViewerApp: React.FC = () => {
 
             if (entry.isIntersecting) {
               visiblePagesRef.current.add(pageNum);
+              nowVisible.push(pageNum);
 
               // Track most visible page
               if (entry.intersectionRatio > maxRatio) {
@@ -478,11 +483,17 @@ export const ViewerApp: React.FC = () => {
               }
             } else {
               visiblePagesRef.current.delete(pageNum);
+              nowHidden.push(pageNum);
             }
           });
 
+          if (nowVisible.length > 0 || nowHidden.length > 0) {
+            console.log(`[IntersectionObserver] Visible:`, nowVisible, `Hidden:`, nowHidden, `All visible:`, Array.from(visiblePagesRef.current));
+          }
+
           // Update current page if we found a visible page with decent ratio
           if (mostVisiblePage > 0 && maxRatio >= 0.3) {
+            console.log(`[IntersectionObserver] Updating current page to ${mostVisiblePage} (ratio: ${maxRatio.toFixed(2)})`);
             updateCurrentPage(mostVisiblePage);
           }
         },
@@ -534,6 +545,98 @@ export const ViewerApp: React.FC = () => {
     const timeoutId = setTimeout(persistState, 500);
     return () => clearTimeout(timeoutId);
   }, [currentPage, zoom, docHash]);
+
+  // Backup scroll-based page tracking (in case IntersectionObserver doesn't fire)
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container || pages.length === 0) return;
+
+    const handleScroll = () => {
+      const containerRect = container.getBoundingClientRect();
+      const containerTop = containerRect.top;
+      const containerBottom = containerRect.bottom;
+      const containerMidY = containerRect.top + containerRect.height / 2;
+
+      // Find the page closest to the middle of the viewport
+      let closestPage = 1;
+      let minDistance = Infinity;
+
+      // Update visible pages set
+      const newVisiblePages = new Set<number>();
+
+      const pageElements = container.querySelectorAll('[data-page-num]');
+      pageElements.forEach((el) => {
+        const pageNum = parseInt(el.getAttribute('data-page-num') || '0', 10);
+        if (pageNum === 0) return;
+
+        const rect = el.getBoundingClientRect();
+
+        // Check if page is visible in viewport
+        const isVisible = rect.bottom > containerTop && rect.top < containerBottom;
+        if (isVisible) {
+          newVisiblePages.add(pageNum);
+        }
+
+        // Find closest page to center
+        const pageMidY = rect.top + rect.height / 2;
+        const distance = Math.abs(pageMidY - containerMidY);
+
+        if (distance < minDistance) {
+          minDistance = distance;
+          closestPage = pageNum;
+        }
+      });
+
+      // Update visible pages ref (for IntersectionObserver compatibility)
+      const oldVisibleArray = Array.from(visiblePagesRef.current).sort();
+      const newVisibleArray = Array.from(newVisiblePages).sort();
+      const visibleChanged = oldVisibleArray.length !== newVisibleArray.length ||
+        oldVisibleArray.some((p, i) => p !== newVisibleArray[i]);
+
+      visiblePagesRef.current = newVisiblePages;
+
+      // Update visible pages state (triggers re-render)
+      if (visibleChanged) {
+        console.log(`[Scroll] Visible pages changed:`, oldVisibleArray, '->', newVisibleArray);
+        setVisiblePages(newVisiblePages);
+      }
+
+      // Update current page if changed
+      if (closestPage !== currentPage) {
+        console.log(`[Scroll] Updating current page from ${currentPage} to ${closestPage}`);
+        setCurrentPage(closestPage);
+      }
+    };
+
+    // Use requestAnimationFrame to throttle scroll events efficiently
+    let rafId: number | null = null;
+    const throttledScroll = () => {
+      if (rafId) return; // Already scheduled
+
+      rafId = requestAnimationFrame(() => {
+        handleScroll();
+        rafId = null;
+      });
+    };
+
+    container.addEventListener('scroll', throttledScroll, { passive: true });
+
+    // Initial call to set up visible pages
+    // Delay if we're on initial load to allow scroll restoration to complete
+    if (isInitialLoad) {
+      // Wait for scroll restoration to complete before checking visible pages
+      setTimeout(() => {
+        handleScroll();
+      }, 150);
+    } else {
+      handleScroll();
+    }
+
+    return () => {
+      container.removeEventListener('scroll', throttledScroll);
+      if (rafId) cancelAnimationFrame(rafId);
+    };
+  }, [currentPage, pages.length, scale, isInitialLoad]); // Added scale dependency so visibility rechecks on zoom
 
   // Handler functions
   const handlePrevPage = useCallback(() => {
@@ -904,18 +1007,31 @@ export const ViewerApp: React.FC = () => {
 
       <div ref={containerRef} className="flex-1 overflow-auto">
         <div className="py-4 flex flex-col items-center">
-          {pages.map((page, idx) => {
-            const pageNum = idx + 1;
-            const isVisible = visiblePagesRef.current.has(pageNum);
-            // Render visible pages + 2 pages buffer above/below
-            const shouldRender =
-              isVisible ||
-              Array.from(visiblePagesRef.current).some(
-                (vp) => Math.abs(vp - pageNum) <= 4
-              );
+          {(() => {
+            const renderingPages: number[] = [];
+            const visiblePagesArray = Array.from(visiblePages);
 
-            return (
-              <Page
+            return pages.map((page, idx) => {
+              const pageNum = idx + 1;
+              const isVisible = visiblePages.has(pageNum);
+              // Render visible pages + 4 pages buffer above/below
+              const shouldRender =
+                isVisible ||
+                visiblePagesArray.some(
+                  (vp) => Math.abs(vp - pageNum) <= 4
+                );
+
+              if (shouldRender) {
+                renderingPages.push(pageNum);
+              }
+
+              // Log after first iteration
+              if (idx === pages.length - 1 && renderingPages.length > 0) {
+                console.log(`[Render] Rendering pages:`, renderingPages, `(visible: [${visiblePagesArray}])`);
+              }
+
+              return (
+                <Page
                 key={pageNum}
                 pageNum={pageNum}
                 page={page}
@@ -930,8 +1046,9 @@ export const ViewerApp: React.FC = () => {
                 onCommentDelete={handleCommentDelete}
                 onCommentEdit={handleCommentEdit}
               />
-            );
-          })}
+              );
+            });
+          })()}
         </div>
       </div>
       {/* Note input floating box */}

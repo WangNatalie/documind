@@ -70,8 +70,9 @@ export function useRenderQueue(): RenderQueue {
         // Create temporary canvas to preserve old content
         const tempCanvas = document.createElement('canvas');
         const tempContext = tempCanvas.getContext('2d');
-        
-        if (tempContext) {
+
+        // Guard: Only copy old content if canvas has non-zero dimensions
+        if (tempContext && task.canvas.width > 0 && task.canvas.height > 0) {
           // Copy old content
           tempCanvas.width = task.canvas.width;
           tempCanvas.height = task.canvas.height;
@@ -85,10 +86,10 @@ export function useRenderQueue(): RenderQueue {
 
           // Draw old content back (scaled to fill) as placeholder
           // This prevents the flash by keeping something visible
-          context.drawImage(tempCanvas, 0, 0, tempCanvas.width, tempCanvas.height, 
+          context.drawImage(tempCanvas, 0, 0, tempCanvas.width, tempCanvas.height,
                            0, 0, newWidth, newHeight);
         } else {
-          // Fallback if we can't create temp canvas
+          // Fallback if we can't create temp canvas or canvas has zero dimensions
           task.canvas.width = newWidth;
           task.canvas.height = newHeight;
           task.canvas.style.width = `${viewport.width}px`;
