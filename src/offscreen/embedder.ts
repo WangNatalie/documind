@@ -8,7 +8,8 @@ import {
 } from '../db/index';
 
 // Configuration
-const GEMINI_API_KEY = ''; // GEMINI_API_KEY HERE
+import { getGeminiApiKey } from './gemini-config';
+const GEMINI_API_KEY = getGeminiApiKey() || '';
 const EMBEDDING_MODEL = 'text-embedding-004'; // Gemini's latest embedding model
 const EMBEDDING_DIMENSIONS = 768; // text-embedding-004 produces 768-dimensional vectors
 const BATCH_SIZE = 100; // Process in batches for efficiency
@@ -28,31 +29,36 @@ interface GeminiEmbeddingResponse {
  */
 export async function generateMissingEmbeddings(docHash: string): Promise<number> {
   console.log(`[Embedder] Checking for missing embeddings for document ${docHash}`);
-  
+
   // Get chunks that need embeddings
   const missingChunkIds = await getMissingEmbeddings(docHash);
-  
+
   if (missingChunkIds.length === 0) {
     console.log(`[Embedder] All chunks already have embeddings for document ${docHash}`);
     return 0;
   }
-  
+
   console.log(`[Embedder] Need to generate embeddings for ${missingChunkIds.length} chunks`);
-  
+
   // Get full chunk data
   const allChunks = await getChunksByDoc(docHash);
   const chunksToEmbed = allChunks.filter(chunk => missingChunkIds.includes(chunk.id));
-  
+
   // Process in batches
   let embeddedCount = 0;
   for (let i = 0; i < chunksToEmbed.length; i += BATCH_SIZE) {
+    // Fail fast if key missing
+    if (!GEMINI_API_KEY) {
+      console.warn('[Embedder] Gemini API key not configured; skipping embedding generation');
+      return 0;
+    }
     const batch = chunksToEmbed.slice(i, i + BATCH_SIZE);
     console.log(`[Embedder] Processing batch ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(chunksToEmbed.length / BATCH_SIZE)}`);
-    
+
     const count = await embedBatch(batch, docHash);
     embeddedCount += count;
   }
-  
+
   console.log(`[Embedder] Successfully generated ${embeddedCount} embeddings for document ${docHash}`);
   return embeddedCount;
 }
@@ -68,13 +74,13 @@ async function embedBatch(chunks: ChunkRecord[], docHash: string): Promise<numbe
       // Truncate if too long
       return text.length > MAX_CHARS_PER_INPUT ? text.substring(0, MAX_CHARS_PER_INPUT) : text;
     });
-    
+
     // Call Gemini API - batch embedding
     const requests = inputs.map(text => ({
       model: `models/${EMBEDDING_MODEL}`,
       content: { parts: [{ text }] }
     }));
-    
+
     const response = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/${EMBEDDING_MODEL}:batchEmbedContents?key=${GEMINI_API_KEY}`,
       {
@@ -87,25 +93,25 @@ async function embedBatch(chunks: ChunkRecord[], docHash: string): Promise<numbe
         }),
       }
     );
-    
+
     if (!response.ok) {
       const error = await response.text();
       throw new Error(`Gemini API error: ${response.status} - ${error}`);
     }
-    
+
     const data: GeminiEmbeddingResponse = await response.json();
-    
+
     if (!data.embeddings || data.embeddings.length !== chunks.length) {
       throw new Error(`Expected ${chunks.length} embeddings, got ${data.embeddings?.length || 0}`);
     }
-    
+
     console.log(`[Embedder] Generated ${data.embeddings.length} embeddings using Gemini ${EMBEDDING_MODEL}`);
-    
+
     // Store embeddings in IndexedDB
     for (let i = 0; i < chunks.length; i++) {
       const chunk = chunks[i];
       const embedding = data.embeddings[i].values;
-      
+
       const embeddingRecord: ChunkEmbeddingRecord = {
         id: chunk.id,
         chunkId: chunk.id,
@@ -116,10 +122,10 @@ async function embedBatch(chunks: ChunkRecord[], docHash: string): Promise<numbe
         source: chunk.content ? 'content' : 'description',
         createdAt: Date.now(),
       };
-      
+
       await putChunkEmbedding(embeddingRecord);
     }
-    
+
     return chunks.length;
   } catch (error) {
     console.error('[Embedder] Error generating embeddings:', error);
@@ -144,17 +150,17 @@ export async function generateEmbedding(text: string): Promise<number[]> {
       }),
     }
   );
-  
+
   if (!response.ok) {
     const error = await response.text();
     throw new Error(`Gemini API error: ${response.status} - ${error}`);
   }
-  
+
   const data: GeminiEmbeddingResponse = await response.json();
   if (!data.embedding?.values) {
     throw new Error('No embedding returned from Gemini API');
   }
-  
+
   return data.embedding.values;
 }
 
