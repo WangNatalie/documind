@@ -6,8 +6,18 @@ import { Toolbar } from "./Toolbar";
 import { useRenderQueue, CanvasCache } from "./useRenderQueue";
 import { parseHash, updateHash } from "../utils/hash";
 import { generateDocHash } from "../utils/hash";
-import { getDoc, putDoc, updateDocState } from "../db";
+import {
+  getDoc,
+  putDoc,
+  updateDocState,
+  resetDB,
+  putHighlight,
+  getHighlightsByDoc,
+  putNote,
+  getNotesByDoc,
+} from "../db";
 import { readOPFSFile } from "../db/opfs";
+import ContextMenu from "./ContextMenu";
 import { requestChunking } from "../utils/chunker-client";
 
 const ZOOM_LEVELS = [50, 75, 90, 100, 125, 150, 175, 200, 250, 300];
@@ -29,6 +39,21 @@ export const ViewerApp: React.FC = () => {
   const renderQueue = useRenderQueue();
   const canvasCacheRef = useRef(new CanvasCache());
   const visiblePagesRef = useRef<Set<number>>(new Set([1]));
+  // Context menu state
+  const [contextVisible, setContextVisible] = useState(false);
+  const [contextPos, setContextPos] = useState<{ x: number; y: number }>({
+    x: 0,
+    y: 0,
+  });
+  const [highlights, setHighlights] = useState<Array<any>>([]);
+  const [notes, setNotes] = useState<Array<any>>([]);
+  const [noteInput, setNoteInput] = useState<string>("");
+  const [noteAnchor, setNoteAnchor] = useState<{
+    x: number;
+    y: number;
+    page: number;
+    range: Range;
+  } | null>(null);
 
   // Parse URL params
   const params = new URLSearchParams(window.location.search);
@@ -137,18 +162,61 @@ export const ViewerApp: React.FC = () => {
           setIsInitialLoad(false);
         }, 200);
 
-        // Create or update doc record
-        if (!existingDoc) {
-          await putDoc({
-            docHash: hash,
-            source,
-            name: fileName,
-            pageCount,
-            lastPage: restoredPage,
-            lastZoom: restoredZoom,
-            createdAt: Date.now(),
-            updatedAt: Date.now(),
-          });
+        // Load highlights for this document (non-fatal)
+        (async () => {
+          try {
+            const hs = await getHighlightsByDoc(hash);
+            setHighlights(hs || []);
+          } catch (err) {
+            console.error("Failed to load highlights (non-fatal)", err);
+            try {
+              // reset DB connection in case it is stale or deleted
+              resetDB();
+            } catch (resetErr) {
+              console.warn('resetDB failed while loading highlights:', resetErr);
+            }
+            setHighlights([]);
+          }
+        })();
+        // Load notes for this document (non-fatal)
+        (async () => {
+          try {
+            const ns = await getNotesByDoc(hash);
+            setNotes(ns || []);
+          } catch (err) {
+            console.error("Failed to load notes (non-fatal)", err);
+            try {
+              resetDB();
+            } catch (resetErr) {
+              console.warn('resetDB failed while loading notes:', resetErr);
+            }
+            setNotes([]);
+          }
+        })();
+
+        // Create or update doc record — make DB errors non-fatal so viewer still loads
+        try {
+          if (!existingDoc) {
+            await putDoc({
+              docHash: hash,
+              source,
+              name: fileName,
+              pageCount,
+              lastPage: restoredPage,
+              lastZoom: restoredZoom,
+              createdAt: Date.now(),
+              updatedAt: Date.now(),
+            });
+          }
+        } catch (err) {
+          console.error('Failed to create/update doc record (non-fatal):', err);
+          // If the DB is in a bad state, reset the connection so subsequent operations can retry
+          try {
+            resetDB();
+            // a future operation (highlights/notes) will attempt to open the DB again
+          } catch (resetErr) {
+            console.warn('resetDB failed:', resetErr);
+          }
         }
 
         // Pass URL directly for url-based PDFs
@@ -182,6 +250,106 @@ export const ViewerApp: React.FC = () => {
 
     loadDocument();
   }, [fileUrl, uploadId, fileName]);
+
+  // Right-click to open custom context menu
+  useEffect(() => {
+    const onContext = (e: MouseEvent) => {
+      // Only show when right-clicking inside viewer container
+      const container = containerRef.current;
+      if (!container) return;
+      if (!container.contains(e.target as Node)) return;
+
+      e.preventDefault();
+      setContextPos({ x: e.clientX, y: e.clientY });
+      setContextVisible(true);
+    };
+
+    const onClick = () => setContextVisible(false);
+
+    window.addEventListener("contextmenu", onContext);
+    window.addEventListener("click", onClick);
+    return () => {
+      window.removeEventListener("contextmenu", onContext);
+      window.removeEventListener("click", onClick);
+    };
+  }, []);
+
+  // Handle context menu actions (highlight creation, note, etc.)
+  const handleContextAction = async (action: string) => {
+    if (action === "note") {
+      // Open a small input anchored to the selection
+      const sel = window.getSelection();
+      if (!sel || sel.rangeCount === 0) return;
+      const range = sel.getRangeAt(0);
+      const rects = Array.from(range.getClientRects());
+      const first = rects[0];
+      if (!first) return;
+      const pageEl = document
+        .elementFromPoint(first.left + 1, first.top + 1)
+        ?.closest("[data-page-num]") as HTMLElement | null;
+      if (!pageEl) return;
+      const pageNum = parseInt(pageEl.getAttribute("data-page-num") || "0", 10);
+      setNoteAnchor({ x: first.left, y: first.top - 24, page: pageNum, range });
+      setNoteInput("");
+      setContextVisible(false);
+      return;
+    }
+
+    if (!action.startsWith("highlight:")) return;
+    const color = action.split(":")[1];
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return;
+
+    const range = sel.getRangeAt(0);
+    const rects = Array.from(range.getClientRects()).map((r) => ({
+      top: r.top,
+      left: r.left,
+      width: r.width,
+      height: r.height,
+    }));
+
+    // Find which page these rects belong to (use first rect)
+    const first = rects[0];
+    if (!first) return;
+
+    // Determine page element and compute rects relative to page box
+    const pageEl = document
+      .elementFromPoint(first.left + 1, first.top + 1)
+      ?.closest("[data-page-num]") as HTMLElement | null;
+    if (!pageEl) return;
+    const pageNum = parseInt(pageEl.getAttribute("data-page-num") || "0", 10);
+    const pageBox = pageEl.getBoundingClientRect();
+
+    // Normalize rects to fractions of page width/height so highlights scale with zoom
+    const relRects = rects.map((r) => ({
+      top: (r.top - pageBox.top) / pageBox.height,
+      left: (r.left - pageBox.left) / pageBox.width,
+      width: r.width / pageBox.width,
+      height: r.height / pageBox.height,
+    }));
+
+    // Persist highlight
+    const id = `${docHash}:${pageNum}:${Date.now()}`;
+    const h = {
+      id,
+      docHash,
+      page: pageNum,
+      rects: relRects,
+      color,
+      createdAt: Date.now(),
+    };
+
+    try {
+      await putHighlight(h);
+      setHighlights((prev) => [...prev, h]);
+    } catch (err) {
+      console.error("Failed to save highlight", err);
+    }
+
+    // Clear selection and close menu
+    window.getSelection()?.removeAllRanges();
+    setContextVisible(false);
+  };
 
   // Calculate scale when zoom changes or container resizes
   useEffect(() => {
@@ -508,11 +676,79 @@ export const ViewerApp: React.FC = () => {
                 isVisible={isVisible}
                 shouldRender={shouldRender}
                 onRender={handleRender}
+                highlights={highlights.filter((h) => h.page === pageNum)}
+                notes={notes.filter((n) => n.page === pageNum)}
               />
             );
           })}
         </div>
       </div>
+      {/* Note input floating box */}
+      {noteAnchor && (
+        <div
+          style={{
+            position: "fixed",
+            left: noteAnchor.x,
+            top: noteAnchor.y,
+            zIndex: 60,
+          }}
+        >
+          <input
+            autoFocus
+            value={noteInput}
+            onChange={(e) => setNoteInput(e.target.value)}
+            onKeyDown={async (e) => {
+              if (e.key === "Enter") {
+                // persist note with normalized rects from selection
+                const range = noteAnchor.range;
+                const rects = Array.from(range.getClientRects());
+                if (rects.length === 0) return;
+
+                const pageEl = document.querySelector(
+                  `[data-page-num="${noteAnchor.page}"]`
+                ) as HTMLElement;
+                if (!pageEl) return;
+                const pageBox = pageEl.getBoundingClientRect();
+
+                // Normalize all rects to page dimensions
+                const normalizedRects = rects.map((r) => ({
+                  top: (r.top - pageBox.top) / pageBox.height,
+                  left: (r.left - pageBox.left) / pageBox.width,
+                  width: r.width / pageBox.width,
+                  height: r.height / pageBox.height,
+                }));
+
+                const id = `${docHash}:${noteAnchor.page}:${Date.now()}`;
+                const note = {
+                  id,
+                  docHash,
+                  page: noteAnchor.page,
+                  rects: normalizedRects,
+                  text: noteInput,
+                  createdAt: Date.now(),
+                };
+                try {
+                  await putNote(note);
+                  setNotes((prev) => [...prev, note]);
+                } catch (err) {
+                  console.error("Failed to save note", err);
+                }
+                setNoteAnchor(null);
+              } else if (e.key === "Escape") {
+                setNoteAnchor(null);
+              }
+            }}
+            placeholder="Type note and press Enter"
+            className="px-2 py-1 rounded border"
+          />
+        </div>
+      )}
+      <ContextMenu
+        visible={contextVisible}
+        x={contextPos.x}
+        y={contextPos.y}
+        onSelect={(a) => handleContextAction(a)}
+      />
     </div>
   );
 };

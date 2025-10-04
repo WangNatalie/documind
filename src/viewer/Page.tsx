@@ -13,6 +13,17 @@ interface PageProps {
     textLayerDiv: HTMLDivElement | null,
     priority: number
   ) => Promise<void>;
+  highlights?: Array<{
+    id: string;
+    rects: { top: number; left: number; width: number; height: number }[];
+    color: string;
+  }>;
+  notes?: Array<{
+    id: string;
+    rects: { top: number; left: number; width: number; height: number }[];
+    text: string;
+    page: number;
+  }>;
 }
 
 export const Page: React.FC<PageProps> = ({
@@ -22,6 +33,8 @@ export const Page: React.FC<PageProps> = ({
   isVisible,
   shouldRender,
   onRender,
+  highlights = [],
+  notes = [],
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const textLayerRef = useRef<HTMLDivElement>(null);
@@ -126,12 +139,69 @@ export const Page: React.FC<PageProps> = ({
           ref={canvasRef}
           className={`block ${isLoading || error ? "invisible" : "visible"}`}
         />
-        {/* Text layer for text selection */}
+        {/* Text layer for text selection (hidden visually but present for selection) */}
         <div
           ref={textLayerRef}
-          className="absolute top-0 left-0 text-layer"
+          className="absolute top-0 left-0 text-layer z-10 text-transparent"
           style={{ width: `${width}px`, height: `${height}px` }}
         />
+        {/* Highlights overlays */}
+        {highlights.map(h => (
+          <React.Fragment key={h.id}>
+            {h.rects.map((r, i) => {
+              // If rects are normalized (0..1), convert to pixels
+              const isNormalized = Math.abs(r.top) <= 1 && Math.abs(r.left) <= 1 && Math.abs(r.width) <= 1 && Math.abs(r.height) <= 1;
+              const top = isNormalized ? r.top * height : r.top;
+              const left = isNormalized ? r.left * width : r.left;
+              const w = isNormalized ? r.width * width : r.width;
+              const hgt = isNormalized ? r.height * height : r.height;
+
+              return (
+                <div
+                  key={`${h.id}-${i}`}
+                  className={`absolute rounded-md pointer-events-none z-20 ${
+                    h.color === 'yellow' ? 'bg-yellow-300/30' : h.color === 'green' ? 'bg-emerald-200/30' : 'bg-sky-200/30'
+                  }`}
+                  style={{ top, left, width: w, height: hgt }}
+                />
+              );
+            })}
+          </React.Fragment>
+        ))}
+
+        {/* Notes: render overline and tooltip */}
+        {notes.map(n => {
+          // Skip notes without rects array (data migration issue)
+          if (!n.rects || !Array.isArray(n.rects) || n.rects.length === 0) {
+            console.warn('Note missing rects array:', n.id);
+            return null;
+          }
+
+          return (
+            <div key={n.id} className="group">
+              {n.rects.map((r, i) => {
+                const isNormalized = Math.abs(r.top) <= 1 && Math.abs(r.left) <= 1 && Math.abs(r.width) <= 1 && Math.abs(r.height) <= 1;
+                const top = isNormalized ? r.top * height : r.top;
+                const left = isNormalized ? r.left * width : r.left;
+                const w = isNormalized ? r.width * width : r.width;
+
+                return (
+                  <div key={`${n.id}-${i}`} className="absolute z-30" style={{ top: top - 2, left, width: w, pointerEvents: 'auto' }}>
+                    <div className="h-1 bg-yellow-500 w-full rounded-full"></div>
+                  </div>
+                );
+              })}
+              {/* Tooltip - show on hover over any rect in the group */}
+              <div className="hidden group-hover:block absolute bg-white dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-600 rounded-md p-2 text-sm shadow-lg whitespace-nowrap z-40"
+                   style={{
+                     top: (Math.abs(n.rects[0].top) <= 1 ? n.rects[0].top * height : n.rects[0].top) - 32,
+                     left: Math.abs(n.rects[0].left) <= 1 ? n.rects[0].left * width : n.rects[0].left
+                   }}>
+                {n.text}
+              </div>
+            </div>
+          );
+        })}
       </div>
     </div>
   );

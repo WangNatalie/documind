@@ -190,6 +190,15 @@ export async function getDB(): Promise<IDBPDatabase<PDFViewerDB>> {
   return dbInstance;
 }
 
+// Reset DB connection (useful after migrations or errors)
+export function resetDB(): void {
+  if (dbInstance) {
+    dbInstance.close();
+    dbInstance = null;
+    console.log('[DB] Database connection reset');
+  }
+}
+
 // Doc operations
 export async function getDoc(docHash: string): Promise<DocRecord | undefined> {
   const db = await getDB();
