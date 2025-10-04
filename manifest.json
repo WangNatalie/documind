@@ -1,0 +1,27 @@
+{
+    "name": "documind",
+    "description": "AI-powered pdf viewer for efficient learning + studying",
+    "version": "1.0",
+    "manifest_version": 3,
+    "permissions": [
+      "tabs",
+      "activeTab",
+      "webNavigation"
+    ],
+    "host_permissions": [
+      "<all_urls>"
+    ],
+    "background": {
+      "service_worker": "background.js"
+    },
+    "action": {
+        "default_title": "Open PDF Viewer"
+    },
+    "web_accessible_resources": [
+      {
+        "resources": ["viewer.html"],
+        "matches": ["<all_urls>"]
+      }
+    ]
+  }
+  
