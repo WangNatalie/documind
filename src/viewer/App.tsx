@@ -146,8 +146,8 @@ export const ViewerApp: React.FC = () => {
       const container = containerRef.current;
       if (!container) return;
 
-      const containerWidth = container.clientWidth - 32; // padding
-      const containerHeight = window.innerHeight - 100;
+      const containerWidth = container.clientWidth;
+      const containerHeight = container.clientHeight - 40; // py-4 padding + small buffer to prevent next page peeking
 
       const newScale = calculateScale(pages[0]!, containerWidth, containerHeight,
         zoom === 'fitWidth' || zoom === 'fitPage' ? zoom : parseInt(zoom, 10));
