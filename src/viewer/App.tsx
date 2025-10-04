@@ -42,8 +42,19 @@ export const ViewerApp: React.FC = () => {
   const containerRef = useRef<HTMLDivElement>(null);
   const observerRef = useRef<IntersectionObserver | null>(null);
   const renderQueue = useRenderQueue();
-  const canvasCacheRef = useRef(new CanvasCache());
+  // Protect pages currently in or near viewport from cache eviction
+  const canvasCacheRef = useRef(new CanvasCache((pageNum: number) => {
+    // visiblePages state may lag slightly; combine both refs for safety
+    if (visiblePagesRef.current.has(pageNum)) return true;
+    if ((intersectionVisiblePagesRef.current || new Set()).has(pageNum)) return true;
+    // Also protect small buffer (+/-2) around any currently visible page to reduce thrash
+    for (const vp of visiblePagesRef.current) {
+      if (Math.abs(vp - pageNum) <= 2) return true;
+    }
+    return false;
+  }));
   const visiblePagesRef = useRef<Set<number>>(new Set([1]));
+  const intersectionVisiblePagesRef = useRef<Set<number>>(new Set([1]));
   const pendingZoomRef = useRef<number | null>(null);
   // Context menu state
   const [contextVisible, setContextVisible] = useState(false);
@@ -73,8 +84,8 @@ export const ViewerApp: React.FC = () => {
   const params = new URLSearchParams(window.location.search);
   const fileUrl = params.get("file");
   const uploadId = params.get("uploadId");
-    // Keep filename in state so we can update it after reading PDF metadata
-    const [fileName, setFileName] = useState<string>(params.get("name") || "document.pdf");
+  // Keep filename in state so we can update it after reading PDF metadata
+  const [fileName, setFileName] = useState<string>(params.get("name") || "document.pdf");
 
   // Load PDF on mount
   useEffect(() => {
@@ -193,9 +204,11 @@ export const ViewerApp: React.FC = () => {
         setCurrentPage(restoredPage);
         setZoom(restoredZoom);
 
-        // Initialize visible pages with the restored page (both ref and state)
-        visiblePagesRef.current = new Set([restoredPage]);
-        setVisiblePages(new Set([restoredPage]));
+        // Initialize visible pages with the restored page (keep refs/state in sync without shared mutation)
+        const initialVisibleSet = new Set([restoredPage]);
+        visiblePagesRef.current = initialVisibleSet;
+        intersectionVisiblePagesRef.current = new Set(initialVisibleSet);
+        setVisiblePages(new Set(initialVisibleSet));
 
         // Scroll to restored page after a brief delay to ensure rendering
         if (restoredPage > 1) {
@@ -503,6 +516,7 @@ export const ViewerApp: React.FC = () => {
           let maxRatio = 0;
           const nowVisible: number[] = [];
           const nowHidden: number[] = [];
+          const updatedVisible = new Set(intersectionVisiblePagesRef.current);
 
           entries.forEach((entry) => {
             const pageNum = parseInt(
@@ -511,7 +525,7 @@ export const ViewerApp: React.FC = () => {
             );
 
             if (entry.isIntersecting) {
-              visiblePagesRef.current.add(pageNum);
+              updatedVisible.add(pageNum);
               nowVisible.push(pageNum);
 
               // Track most visible page
@@ -520,13 +534,15 @@ export const ViewerApp: React.FC = () => {
                 mostVisiblePage = pageNum;
               }
             } else {
-              visiblePagesRef.current.delete(pageNum);
+              updatedVisible.delete(pageNum);
               nowHidden.push(pageNum);
             }
           });
 
+          intersectionVisiblePagesRef.current = updatedVisible;
+
           if (nowVisible.length > 0 || nowHidden.length > 0) {
-            console.log(`[IntersectionObserver] Visible:`, nowVisible, `Hidden:`, nowHidden, `All visible:`, Array.from(visiblePagesRef.current));
+            console.log(`[IntersectionObserver] Visible:`, nowVisible, `Hidden:`, nowHidden, `All visible:`, Array.from(intersectionVisiblePagesRef.current));
           }
 
           // Update current page if we found a visible page with decent ratio
@@ -625,18 +641,26 @@ export const ViewerApp: React.FC = () => {
         }
       });
 
-      // Update visible pages ref (for IntersectionObserver compatibility)
+      // Update visible pages ref/state (maintain copies to avoid shared mutation)
       const oldVisibleArray = Array.from(visiblePagesRef.current).sort();
       const newVisibleArray = Array.from(newVisiblePages).sort();
-      const visibleChanged = oldVisibleArray.length !== newVisibleArray.length ||
+      const visibleChanged =
+        oldVisibleArray.length !== newVisibleArray.length ||
         oldVisibleArray.some((p, i) => p !== newVisibleArray[i]);
 
-      visiblePagesRef.current = newVisiblePages;
+      const nextVisibleSet = new Set(newVisiblePages);
+      visiblePagesRef.current = nextVisibleSet;
+      intersectionVisiblePagesRef.current = new Set(nextVisibleSet);
 
       // Update visible pages state (triggers re-render)
       if (visibleChanged) {
-        console.log(`[Scroll] Visible pages changed:`, oldVisibleArray, '->', newVisibleArray);
-        setVisiblePages(newVisiblePages);
+        console.log(
+          `[Scroll] Visible pages changed:`,
+          oldVisibleArray,
+          '->',
+          newVisibleArray
+        );
+        setVisiblePages(nextVisibleSet);
       }
 
       // Update current page if changed
