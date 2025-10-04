@@ -12,6 +12,7 @@
     "prepare-icons": "node scripts/prepare-icons.js"
   },
   "dependencies": {
+    "@google/genai": "^1.22.0",
     "chunkr-ai": "^0.1.0-alpha.11",
     "dotenv": "^17.2.3",
     "idb": "^8.0.0",

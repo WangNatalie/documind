@@ -7,7 +7,8 @@ import { openDB, DBSchema, IDBPDatabase } from 'idb';
 // v4: Added notes (with rects array)
 // v5: Added comments object store
 // v6: Added chunkEmbeddings
-const DB_VERSION = 6;
+// v7: Added tableOfContents
+const DB_VERSION = 7;
 
 export interface DocRecord {
   docHash: string;
@@ -87,6 +88,22 @@ export interface ChunkEmbeddingRecord {
   createdAt: number;
 }
 
+export interface TOCItem {
+  title: string;
+  page: number;
+  chunkId?: string; // Optional link to chunk
+  bbox?: { x: number; y: number; width: number; height: number }; // Optional bounding box
+  level?: number; // Hierarchy level (0 = top level)
+}
+
+export interface TableOfContentsRecord {
+  docHash: string;
+  items: TOCItem[];
+  source: 'pdf-outline' | 'ai-generated'; // How it was created
+  model?: string; // If AI-generated, which model
+  createdAt: number;
+}
+
 interface PDFViewerDB extends DBSchema {
   docs: {
     key: string;
@@ -122,6 +139,11 @@ interface PDFViewerDB extends DBSchema {
     key: string;
     value: ChunkEmbeddingRecord;
     indexes: { 'by-docHash': string; 'by-chunkId': string };
+  };
+  tableOfContents: {
+    key: string;
+    value: TableOfContentsRecord;
+    indexes: { 'by-docHash': string };
   };
 }
 
@@ -199,6 +221,15 @@ export async function getDB(): Promise<IDBPDatabase<PDFViewerDB>> {
           embeddingsStore.createIndex('by-docHash', 'docHash');
           embeddingsStore.createIndex('by-chunkId', 'chunkId');
           console.log('[DB] Created chunkEmbeddings store');
+        }
+      }
+
+      // Version 7: Add table of contents
+      if (oldVersion < 7) {
+        if (!db.objectStoreNames.contains('tableOfContents')) {
+          const tocStore = db.createObjectStore('tableOfContents', { keyPath: 'docHash' });
+          tocStore.createIndex('by-docHash', 'docHash');
+          console.log('[DB] Created tableOfContents store');
         }
       }
     },
@@ -368,7 +399,23 @@ export async function deleteCommentsByDoc(docHash: string): Promise<void> {
   await tx.done;
 }
 
-// Chunk Embedding operations
+// Table of Contents operations
+export async function putTableOfContents(toc: TableOfContentsRecord): Promise<void> {
+  const db = await getDB();
+  await db.put('tableOfContents', toc);
+}
+
+export async function getTableOfContents(docHash: string): Promise<TableOfContentsRecord | undefined> {
+  const db = await getDB();
+  return db.get('tableOfContents', docHash);
+}
+
+export async function deleteTableOfContents(docHash: string): Promise<void> {
+  const db = await getDB();
+  await db.delete('tableOfContents', docHash);
+}
+
+// Chunk Embeddings operations
 export async function putChunkEmbedding(embedding: ChunkEmbeddingRecord): Promise<void> {
   const db = await getDB();
   await db.put('chunkEmbeddings', embedding);
