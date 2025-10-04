@@ -11,6 +11,8 @@ interface ToolbarProps {
   onFitWidth: () => void;
   onFitPage: () => void;
   onPageChange: (page: number) => void;
+  onDownload?: () => void;
+  onPrint?: () => void;
 }
 
 export const Toolbar: React.FC<ToolbarProps> = ({
@@ -24,6 +26,8 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   onFitWidth,
   onFitPage,
   onPageChange,
+  onDownload,
+  onPrint,
 }) => {
   const handlePageInput = (e: React.FormEvent<HTMLInputElement>) => {
     const value = parseInt(e.currentTarget.value, 10);
@@ -123,6 +127,27 @@ export const Toolbar: React.FC<ToolbarProps> = ({
           >
             Fit Page
           </button>
+
+          {/* Download & Print */}
+          <div className="border-l border-neutral-300 dark:border-neutral-600 h-6 mx-1" />
+          <button
+            onClick={onDownload}
+            className="px-3 py-1.5 bg-neutral-100 text-neutral-800 dark:bg-neutral-800 dark:text-neutral-100 hover:bg-neutral-200 dark:hover:bg-neutral-700 rounded transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400"
+            title="Download PDF"
+          >
+            ⬇
+          </button>
+
+          {/* Print button intentionally commented out — printing is handled via Ctrl/Cmd+P shortcut in-app */}
+          {false && (
+            <button
+              onClick={onPrint}
+              className="px-3 py-1.5 bg-neutral-100 text-neutral-800 dark:bg-neutral-800 dark:text-neutral-100 hover:bg-neutral-200 dark:hover:bg-neutral-700 rounded transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400"
+              title="Print"
+            >
+              🖨
+            </button>
+          )}
         </div>
       </div>
     </div>
