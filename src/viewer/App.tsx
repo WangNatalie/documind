@@ -627,19 +627,12 @@ export const ViewerApp: React.FC = () => {
   // changeZoom: adjusts zoom while preserving scroll position appropriately
   // options.cursorPoint -> preserve the document point under cursor
   // options.snapToTop -> keep the current top-most page top aligned after zoom
-  // Uses RAF throttling to prevent excessive updates during rapid zoom
   const changeZoom = useCallback(
     (newZoom: string, options?: { cursorPoint?: { x: number; y: number }; snapToTop?: boolean }) => {
       const container = containerRef.current;
       if (!container || pages.length === 0) {
         setZoom(newZoom);
         return;
-      }
-
-      // Cancel any pending zoom animation
-      if (pendingZoomRef.current !== null) {
-        cancelAnimationFrame(pendingZoomRef.current);
-        pendingZoomRef.current = null;
       }
 
       const oldScale = scale;
@@ -694,9 +687,9 @@ export const ViewerApp: React.FC = () => {
         }
       }
 
-      // Apply zoom and scale using RAF to throttle rapid updates
-      pendingZoomRef.current = requestAnimationFrame(() => {
-        pendingZoomRef.current = null;
+      // Apply zoom and scale on the next animation frame so the browser can
+      // process the scroll change first and avoid showing the top-of-page.
+      requestAnimationFrame(() => {
         setZoom(newZoom);
         setScale(calcScale);
       });
@@ -709,7 +702,7 @@ export const ViewerApp: React.FC = () => {
       changeZoom("100", { snapToTop: true });
     } else {
       const currentZoom = parseInt(zoom, 10);
-      const nextZoom = ZOOM_LEVELS.find((z) => z > currentZoom) || ZOOM_LEVELS[ZOOM_LEVELS.length - 1];
+      const nextZoom = ZOOM_LEVELS.find((z) => z > currentZoom) || 300;
       changeZoom(nextZoom.toString(), { snapToTop: true });
     }
   }, [zoom, changeZoom]);
@@ -747,7 +740,19 @@ export const ViewerApp: React.FC = () => {
       }
     };
 
+    const handleWheel = (e: WheelEvent) => {
+      if (e.ctrlKey || e.metaKey) {
+        e.preventDefault();
+        if (e.deltaY < 0) {
+          handleZoomIn();
+        } else {
+          handleZoomOut();
+        }
+      }
+    };
+
     window.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("wheel", handleWheel, { passive: false });
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
       // Cancel any pending zoom animation
