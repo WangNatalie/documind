@@ -19,6 +19,7 @@ import {
 import { readOPFSFile } from "../db/opfs";
 import ContextMenu from "./ContextMenu";
 import { requestChunking, requestEmbeddings } from "../utils/chunker-client";
+import { Chatbot } from './chatbot/Chatbot';
 
 const ZOOM_LEVELS = [50, 75, 90, 100, 125, 150, 175, 200, 250, 300];
 
@@ -831,6 +832,9 @@ export const ViewerApp: React.FC = () => {
         y={contextPos.y}
         onSelect={(a) => handleContextAction(a)}
       />
+
+      <Chatbot /> 
+      
     </div>
   );
 };
