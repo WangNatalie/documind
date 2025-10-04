@@ -296,7 +296,7 @@ Only return the JSON array, nothing else.`;
       contents: prompt,
       config: {
         temperature: 0.2,
-        maxOutputTokens: 2048,
+        maxOutputTokens: 10000,
       }
     });
     
