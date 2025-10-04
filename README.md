@@ -1,6 +1,6 @@
 # DocuMind - AI-Powered PDF Viewer
 
-A Chrome MV3 extension that provides a modern, feature-rich PDF viewing experience with virtualized rendering, state persistence, and local file support.
+A Chrome MV3 extension that provides a modern, AI-first, feature-rich PDF viewing experience with virtualized rendering, state persistence, and local file support.
 
 ## Features
 
@@ -22,140 +22,213 @@ A Chrome MV3 extension that provides a modern, feature-rich PDF viewing experien
 
 ## Installation
 
-### For Development
+Follow these steps to install and run DocuMind.
 
-1. **Install dependencies**:
-   ```bash
-   npm install
-   ```
+### Step 1: Install dependencies
 
-2. **Add icon files** (or use placeholders):
-   - Place `icon16.png`, `icon48.png`, `icon128.png` in `public/icons/`
-   - Or run: `node scripts/prepare-icons.js`
+Open a terminal in the project directory and run:
 
-3. **Start development server**:
-   ```bash
-   npm run dev
-   ```
-
-4. **Load extension in Chrome**:
-   - Navigate to `chrome://extensions/`
-   - Enable "Developer mode"
-   - Click "Load unpacked"
-   - Select the `dist` folder
-
-### For Production
-
-1. **Build the extension**:
-   ```bash
-   npm run build
-   ```
-
-2. **Package as ZIP** (optional):
-   ```bash
-   npm run pack
-   ```
-
-3. **Load the built extension**:
-   - Navigate to `chrome://extensions/`
-   - Load the `dist` folder
-
-## Usage
-
-### Web PDFs
-- Navigate to any PDF URL (e.g., `https://example.com/document.pdf`)
-- The extension automatically redirects to the built-in viewer
-- Your last page and zoom level are saved
-
-### Local PDFs
-1. Click the extension icon to open the popup
-2. Drag and drop a PDF file onto the drop zone (or click to browse)
-3. The PDF opens in a new tab with the viewer
-4. Files are stored in OPFS (Origin Private File System)
-
-### Keyboard Shortcuts
-- `←` / `→` or `PgUp` / `PgDn`: Navigate pages
-- `Ctrl/Cmd` + `+`: Zoom in
-- `Ctrl/Cmd` + `-`: Zoom out
-- `Ctrl/Cmd` + `0`: Fit width
-
-### URL Deep Linking
-Share specific pages with hash parameters:
-```
-viewer.html?file=<url>#page=47&zoom=150
-viewer.html?uploadId=<id>&name=<filename>#page=10&zoom=fitWidth
+```bash
+npm install
 ```
 
-## Architecture
+This will install all required packages:
 
-### Extension Surfaces
+- React & React DOM
+- Vite & CRXJS
+- TypeScript
+- Tailwind CSS
+- PDF.js
+- idb (IndexedDB helper)
+- nanoid (ID generation)
 
-1. **Background Service Worker** (`src/background/index.ts`)
-   - Registers Declarative Net Request rules for PDF interception
-   - Minimal logic (MV3 compliant)
+### Step 2: Build the Extension
 
-2. **Viewer** (`src/viewer/`)
-   - Main PDF viewing application
-   - Virtualized page rendering with IntersectionObserver
-   - State persistence and restoration
-   - Hash-based deep linking
+For development (with hot reload):
 
-3. **Popup** (`src/popup/`)
-   - Drag & drop interface for local PDFs
-   - OPFS file management
-   - Opens viewer in new tab
+```bash
+npm run dev
+```
 
-### Data Storage
+For production (optimized build):
 
-- **IndexedDB** (`pdf_viewer_v0`):
-  - `docs`: Document metadata (hash, source, last page/zoom, etc.)
-  - `pages`: Page-level data (text, headings - reserved for future)
+```bash
+npm run build
+```
 
-- **OPFS**: Raw PDF bytes for local files (`/pdf/<uploadId>.pdf`)
+This creates a `dist/` folder with the compiled extension.
 
-- **chrome.storage.local**: Preferences and recent docs (future)
+### Step 3: Load Extension in Chrome
 
-### Rendering Pipeline
+Method 1: Chrome Extensions Page
 
-- **Render Queue**: Single-threaded rendering with priority queue
-- **Canvas Cache**: LRU cache keeps max 10 rendered pages in memory
-- **Virtualization**: Only visible ±2 pages are enqueued for rendering
-- **DPI Aware**: Canvas bitmap size accounts for `devicePixelRatio`
+1. Open Google Chrome
+2. Navigate to: `chrome://extensions/`
+3. Enable **Developer mode** (toggle switch in top right)
+4. Click **Load unpacked** button
+5. Browse to the `dist/` folder inside your project
+6. Click **Select Folder**
 
-## Troubleshooting
+Method 2: Direct URL
 
-### CORS Errors
-If a web PDF fails to load due to CORS:
-- The viewer shows an error card with options:
-  - "Open in Native Viewer" → Opens original URL in Chrome's PDF viewer
-  - Future: "Download & open locally" option
+1. Type `chrome://extensions/` in address bar
+2. Follow steps 3-6 above
 
-### Encrypted PDFs
-Encrypted/password-protected PDFs are not supported in v0. The viewer will show an unsupported message.
+Verification you did it right:
 
-### Storage Quota
-- Extension requests persistent storage on first local file upload
-- Check quota at: `chrome://settings/content/all` → find extension origin
-- Future: Implement cleanup for old files
+- You should see a **DocuMind** card in the extensions list
+- Extension icon should appear in the Chrome toolbar (if icons are present)
+- Status: "Enabled"
 
-### Icons Missing
-If icons don't appear:
-- Ensure PNG files exist in `public/icons/`
-- Rebuild: `npm run build`
-- Reload extension in `chrome://extensions/`
+### Step 4: Test the Extension
 
-## Testing Checklist
+Test 1: Web PDF
 
-- [ ] Web PDF redirect works (< 500ms to first page)
-- [ ] Smooth scrolling with no jank
-- [ ] Zoom in/out re-renders only visible pages
-- [ ] Last page/zoom restored on reopen
-- [ ] Hash deep-link works (`#page=X&zoom=Y`)
-- [ ] Popup drag & drop opens local PDF
-- [ ] Max 10 canvas cache eviction works (check console logs)
-- [ ] CORS error shows fallback card
-- [ ] Keyboard shortcuts work
-- [ ] Dark mode respects system preference
+1. Navigate to a PDF URL, for example:
+
+```text
+https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf
+```
+
+Expected results:
+
+- URL redirects to `chrome-extension://.../viewer.html?file=...`
+- PDF renders in the custom viewer
+- Toolbar shows navigation controls
+
+Test 2: Local PDF
+
+1. Click the DocuMind extension icon in the toolbar
+2. Popup opens with a drop zone
+3. Drag any PDF file onto the zone (or click to browse)
+
+Expected results:
+
+- A new tab opens
+- Your PDF is displayed
+- File is saved locally (OPFS)
+
+## Common Setup Issues & Fixes
+
+### Issue 1: `npm install` fails
+
+Symptom: Errors during package installation
+
+Solution:
+
+```bash
+# Clear npm cache
+npm cache clean --force
+
+# Delete node_modules and package-lock.json
+
+rmdir /s node_modules & del package-lock.json
+
+# Reinstall
+npm install
+```
+
+### Issue 2: Build errors (TypeScript)
+
+Symptom: TypeScript compilation errors
+
+Solution:
+
+- These are often type-checking warnings, not critical errors
+- Run `npm run build` - extension will often still work
+- Install missing types if needed:
+
+```bash
+npm install -D @types/react @types/react-dom
+```
+
+### Issue 3: Extension doesn't load in Chrome
+
+Symptom: "Invalid manifest" or load failure
+
+Solution:
+
+1. Ensure `dist/` folder exists (run `npm run build`)
+2. Check `dist/manifest.json` is present
+3. Reload extension: Click "Reload" button in `chrome://extensions/`
+4. Check extension details and console for errors
+
+### Issue 4: PDFs don't redirect
+
+Symptom: PDFs open in Chrome's native viewer instead of DocuMind
+
+Solution:
+
+1. Check extension is **enabled** in `chrome://extensions/`
+2. Verify **DNR rules** are active:
+   - Click "Details" on extension card
+   - Look for "Declarative Net Request" section
+3. Try a different PDF URL
+4. Hard refresh the page (Ctrl+Shift+R)
+
+### Issue 5: Icons missing
+
+Symptom: Default Chrome icon shown instead of custom icons
+
+Solution:
+
+- This is expected in development if placeholder files are present
+- Icons in this repo are placeholders (.txt files) in `public/icons/`
+- To add real icons:
+  1. Create or download PNG icons: `icon16.png`, `icon48.png`, `icon128.png`
+  2. Place them in `public/icons/`
+  3. Rebuild: `npm run build`
+  4. Reload extension
+
+## Development Workflow
+
+### Making Changes
+
+1. Edit files in `src/`
+2. Save changes
+3. Extension auto-reloads (if using `npm run dev`)
+4. Refresh any open viewer tabs
+
+### Debugging
+
+1. Open DevTools in viewer tab (F12)
+2. Check Console for errors
+3. Inspect Network tab for PDF loading issues
+4. View IndexedDB: Application → IndexedDB → `pdf_viewer_v0`
+5. View OPFS: Application → Storage → Origin Private File System
+
+## Production Build & Packaging
+
+When ready to package for distribution:
+
+```bash
+# Build optimized version
+npm run build
+
+# Create ZIP file
+npm run pack
+```
+
+This creates `documind.zip` ready for Chrome Web Store submission or manual distribution.
+
+## Next Steps & References
+
+- Read docs: `README.md` (this file)
+- Learn architecture: see `ARCHITECTURE.md` (if present)
+- Quick start: see `QUICKSTART.md` (if present)
+
+## Verification Checklist
+
+After installation, verify:
+
+- [ ] Extension appears in `chrome://extensions/`
+- [ ] Extension is enabled
+- [ ] Web PDF redirect works
+- [ ] Popup opens when clicking icon
+- [ ] Local PDF upload works
+- [ ] Zoom controls functional
+- [ ] Page navigation works
+- [ ] No console errors
 
 ## Roadmap (Future)
 
@@ -173,3 +246,6 @@ MIT
 ---
 
 Built with ❤️ using Vite + React + Tailwind + PDF.js
+
+**Last Updated**: 2025-10-03
+**Version**: 1.0.0

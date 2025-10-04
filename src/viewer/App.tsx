@@ -243,7 +243,7 @@ export const ViewerApp: React.FC = () => {
                   response.error
                 );
               }
-              
+
               // Always request embeddings after chunking (will only generate missing ones)
               return requestEmbeddings(hash);
             })
@@ -272,7 +272,7 @@ export const ViewerApp: React.FC = () => {
                   response.error
                 );
               }
-              
+
               // Always request embeddings after chunking (will only generate missing ones)
               return requestEmbeddings(hash);
             })
@@ -525,27 +525,98 @@ export const ViewerApp: React.FC = () => {
       pageEl.scrollIntoView({ behavior: "smooth", block: "start" });
     }
   };
+  // changeZoom: adjusts zoom while preserving scroll position appropriately
+  // options.cursorPoint -> preserve the document point under cursor
+  // options.snapToTop -> keep the current top-most page top aligned after zoom
+  const changeZoom = useCallback(
+    (newZoom: string, options?: { cursorPoint?: { x: number; y: number }; snapToTop?: boolean }) => {
+      const container = containerRef.current;
+      if (!container || pages.length === 0) {
+        setZoom(newZoom);
+        return;
+      }
+
+      const oldScale = scale;
+
+      // compute new scale synchronously using calculateScale
+      const containerWidth = container.clientWidth;
+      const containerHeight = container.clientHeight - 40;
+      const calcScale = calculateScale(
+        pages[0]!,
+        containerWidth,
+        containerHeight,
+        newZoom === "fitWidth" || newZoom === "fitPage" ? newZoom : parseInt(newZoom, 10)
+      );
+
+      // Decide new scrollTop based on options
+      let newScrollTop: number | null = null;
+
+      if (options?.cursorPoint) {
+        const containerRect = container.getBoundingClientRect();
+        const cursorOffset = options.cursorPoint.y - containerRect.top;
+        const absoluteOffsetBefore = container.scrollTop + cursorOffset;
+        // Scale the absolute offset
+        newScrollTop = absoluteOffsetBefore * (calcScale / Math.max(oldScale, 0.0001)) - cursorOffset;
+      } else if (options?.snapToTop) {
+        // Find the current top-most visible page (use currentPage)
+        const pageEl = container.querySelector(`[data-page-num="${currentPage}"]`) as HTMLElement | null;
+        if (pageEl) {
+          const pageOffset = pageEl.offsetTop; // offset within container
+          newScrollTop = pageOffset * (calcScale / Math.max(oldScale, 0.0001));
+        }
+      } else {
+        // default: keep center stable
+        const centerOffset = container.scrollTop + container.clientHeight / 2;
+        newScrollTop = centerOffset * (calcScale / Math.max(oldScale, 0.0001)) - container.clientHeight / 2;
+      }
+
+      // Apply new scrollTop (clamped) synchronously before changing zoom
+      if (newScrollTop != null) {
+        // clamp
+        const maxScroll = container.scrollHeight - container.clientHeight;
+        const clamped = Math.max(0, Math.min(maxScroll, newScrollTop));
+
+        // Force instant jump to the computed scroll position to avoid transient
+        // smooth scrolls that reveal the top of the page. Temporarily set
+        // scrollBehavior to 'auto'.
+        const prevBehavior = (container.style as any).scrollBehavior;
+        try {
+          (container.style as any).scrollBehavior = 'auto';
+          container.scrollTo({ top: clamped });
+        } finally {
+          (container.style as any).scrollBehavior = prevBehavior || '';
+        }
+      }
+
+      // Apply zoom and scale on the next animation frame so the browser can
+      // process the scroll change first and avoid showing the top-of-page.
+      requestAnimationFrame(() => {
+        setZoom(newZoom);
+        setScale(calcScale);
+      });
+    },
+    [pages, containerRef, scale, currentPage]
+  );
 
   const handleZoomIn = useCallback(() => {
     if (zoom === "fitWidth" || zoom === "fitPage") {
-      setZoom("100");
+      changeZoom("100", { snapToTop: true });
     } else {
       const currentZoom = parseInt(zoom, 10);
       const nextZoom = ZOOM_LEVELS.find((z) => z > currentZoom) || 300;
-      setZoom(nextZoom.toString());
+      changeZoom(nextZoom.toString(), { snapToTop: true });
     }
-  }, [zoom]);
+  }, [zoom, changeZoom]);
 
   const handleZoomOut = useCallback(() => {
     if (zoom === "fitWidth" || zoom === "fitPage") {
-      setZoom("100");
+      changeZoom("100", { snapToTop: true });
     } else {
       const currentZoom = parseInt(zoom, 10);
-      const prevZoom =
-        [...ZOOM_LEVELS].reverse().find((z) => z < currentZoom) || 50;
-      setZoom(prevZoom.toString());
+      const prevZoom = [...ZOOM_LEVELS].reverse().find((z) => z < currentZoom) || 50;
+      changeZoom(prevZoom.toString(), { snapToTop: true });
     }
-  }, [zoom]);
+  }, [zoom, changeZoom]);
 
   // Keyboard navigation and ctrl+scroll zoom
   useEffect(() => {
@@ -573,10 +644,25 @@ export const ViewerApp: React.FC = () => {
     const handleWheel = (e: WheelEvent) => {
       if (e.ctrlKey || e.metaKey) {
         e.preventDefault();
+        const cursor = { x: e.clientX, y: e.clientY };
         if (e.deltaY < 0) {
-          handleZoomIn();
+          // zoom in around cursor
+          if (zoom === "fitWidth" || zoom === "fitPage") {
+            changeZoom("100", { cursorPoint: cursor });
+          } else {
+            const currentZoom = parseInt(zoom, 10);
+            const nextZoom = ZOOM_LEVELS.find((z) => z > currentZoom) || 300;
+            changeZoom(nextZoom.toString(), { cursorPoint: cursor });
+          }
         } else {
-          handleZoomOut();
+          // zoom out around cursor
+          if (zoom === "fitWidth" || zoom === "fitPage") {
+            changeZoom("100", { cursorPoint: cursor });
+          } else {
+            const currentZoom = parseInt(zoom, 10);
+            const prevZoom = [...ZOOM_LEVELS].reverse().find((z) => z < currentZoom) || 50;
+            changeZoom(prevZoom.toString(), { cursorPoint: cursor });
+          }
         }
       }
     };
@@ -684,8 +770,8 @@ export const ViewerApp: React.FC = () => {
         onNextPage={handleNextPage}
         onZoomIn={handleZoomIn}
         onZoomOut={handleZoomOut}
-        onFitWidth={() => setZoom("fitWidth")}
-        onFitPage={() => setZoom("fitPage")}
+        onFitWidth={() => changeZoom("fitWidth", { snapToTop: true })}
+        onFitPage={() => changeZoom("fitPage", { snapToTop: true })}
         onPageChange={(page) => scrollToPage(page)}
       />
 
@@ -698,7 +784,7 @@ export const ViewerApp: React.FC = () => {
             const shouldRender =
               isVisible ||
               Array.from(visiblePagesRef.current).some(
-                (vp) => Math.abs(vp - pageNum) <= 2
+                (vp) => Math.abs(vp - pageNum) <= 4
               );
 
             return (
