@@ -1,3 +1,5 @@
+import { GEMINI_API_KEY } from "./api_key";
+
 // Helper to centrally locate the Gemini API key and provide utilities
 export function getGeminiApiKey(): string | undefined {
   // Prefer common runtime locations for the key. Avoid using `import.meta` to keep this file simple.
@@ -5,6 +7,10 @@ export function getGeminiApiKey(): string | undefined {
   // 2. globalThis.VITE_GEMINI_API_KEY or globalThis.GEMINI_API_KEY (runtime override)
   if (typeof process !== 'undefined' && process.env && process.env.VITE_GEMINI_API_KEY) {
     return String(process.env.VITE_GEMINI_API_KEY);
+  }
+
+  if (GEMINI_API_KEY) {
+    return GEMINI_API_KEY;
   }
 
   try {
