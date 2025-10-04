@@ -10,13 +10,16 @@ import { getDoc, putDoc, updateDocState } from '../db';
 import { readOPFSFile } from '../db/opfs';
 import { requestChunking } from '../utils/chunker-client';
 
-const ZOOM_LEVELS = [50, 75, 100, 125, 150, 200, 300];
+const ZOOM_LEVELS = [50, 75, 90, 100, 125, 150, 175, 200, 250, 300];
 
 export const ViewerApp: React.FC = () => {
+  console.log('🚀 ViewerApp component rendering - RELOAD VERIFIED');
+
   const [pdf, setPdf] = useState<PDFDocumentProxy | null>(null);
   const [pages, setPages] = useState<(PDFPageProxy | null)[]>([]);
   const [currentPage, setCurrentPage] = useState(1);
-  const [zoom, setZoom] = useState<string>('fitWidth');
+
+  const [zoom, setZoom] = useState<string>('fitPage');
   const [scale, setScale] = useState(1);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -83,6 +86,7 @@ export const ViewerApp: React.FC = () => {
 
         setDocHash(hash);
         setPdf(pdfDoc);
+        console.log('📄 PDF loaded successfully, pages:', pdfDoc.numPages);
 
         // Load all pages
         const pageCount = pdfDoc.numPages;
@@ -92,6 +96,7 @@ export const ViewerApp: React.FC = () => {
         }
         const loadedPages = await Promise.all(pagePromises);
         setPages(loadedPages);
+        console.log('📚 All pages loaded into state, count:', loadedPages.length);
 
         // Restore last state or use hash
         const existingDoc = await getDoc(hash);
@@ -180,50 +185,78 @@ export const ViewerApp: React.FC = () => {
   useEffect(() => {
     if (!containerRef.current || pages.length === 0) return;
 
+    console.log('[IntersectionObserver] Setting up observer, pages:', pages.length);
+
+    // Small delay to ensure page elements are in the DOM
+    const timeoutId = setTimeout(() => {
+      const container = containerRef.current;
+      if (!container) {
+        console.log('[IntersectionObserver] Container not available');
+        return;
+      }
+
+      const updateCurrentPage = (pageNum: number) => {
+        console.log('[IntersectionObserver] Updating current page to:', pageNum);
+        setCurrentPage(pageNum);
+      };
+
     observerRef.current = new IntersectionObserver(
       (entries) => {
-        let mostVisiblePage = currentPage;
+        let mostVisiblePage = 0;
         let maxRatio = 0;
-        let visibilityChanged = false;
+        // Use the ref for current state, build new set for update
+        const newVisiblePages = new Set(visiblePagesRef.current);
 
-        entries.forEach((entry) => {
-          const pageNum = parseInt(entry.target.getAttribute('data-page-num') || '0', 10);
+          entries.forEach((entry) => {
+            const pageNum = parseInt(entry.target.getAttribute('data-page-num') || '0', 10);
 
-          if (entry.isIntersecting) {
-            const wasVisible = visiblePagesRef.current.has(pageNum);
-            visiblePagesRef.current.add(pageNum);
-            if (!wasVisible) visibilityChanged = true;
+            if (entry.isIntersecting) {
+              visiblePagesRef.current.add(pageNum);
 
-            // Track most visible page (>= 60%)
-            if (entry.intersectionRatio > maxRatio) {
-              maxRatio = entry.intersectionRatio;
-              if (entry.intersectionRatio >= 0.6) {
+              // Track most visible page
+              if (entry.intersectionRatio > maxRatio) {
+                maxRatio = entry.intersectionRatio;
                 mostVisiblePage = pageNum;
               }
+            } else {
+              visiblePagesRef.current.delete(pageNum);
             }
-          } else {
-            const wasVisible = visiblePagesRef.current.has(pageNum);
-            visiblePagesRef.current.delete(pageNum);
-            if (wasVisible) visibilityChanged = true;
+          });
+
+          // Update current page if we found a visible page with decent ratio
+          if (mostVisiblePage > 0 && maxRatio >= 0.3) {
+            updateCurrentPage(mostVisiblePage);
           }
-        });
-
-        // Update current page if changed
-        if (mostVisiblePage !== currentPage && maxRatio >= 0.6) {
-          setCurrentPage(mostVisiblePage);
-        } else if (visibilityChanged && mostVisiblePage === currentPage) {
-          // Only force re-render if page didn't change (to update shouldRender for other pages)
-          setCurrentPage(p => p);
+        },
+        {
+          root: container,
+          threshold: [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0],
+          rootMargin: '0px'
         }
-      },
-      { threshold: [0, 0.25, 0.5, 0.6, 0.75, 1.0] }
-    );
+      );
 
-    // Observe all pages
-    const pageElements = containerRef.current.querySelectorAll('[data-page-num]');
-    pageElements.forEach((el) => observerRef.current?.observe(el));
+      // Observe all pages
+      const pageElements = container.querySelectorAll('[data-page-num]');
+      console.log(`[IntersectionObserver] Found ${pageElements.length} page elements to observe`);
+      pageElements.forEach((el) => observerRef.current?.observe(el));
+
+      // Trigger initial visibility check
+      if (pageElements.length > 0) {
+        console.log('[IntersectionObserver] Triggering initial visibility check');
+        // Small delay to ensure layout is complete
+        setTimeout(() => {
+          // Force re-observation to trigger initial callbacks
+          pageElements.forEach((el) => {
+            observerRef.current?.unobserve(el);
+            observerRef.current?.observe(el);
+          });
+        }, 50);
+      }
+    }, 150);
 
     return () => {
+      console.log('[IntersectionObserver] Cleaning up observer');
+      clearTimeout(timeoutId);
       observerRef.current?.disconnect();
     };
   }, [pages, currentPage]);
