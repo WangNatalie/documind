@@ -7,16 +7,16 @@ chrome.webNavigation.onCommitted.addListener(
   (details) => {
     // Only handle main frame navigation
     if (details.frameId !== 0) return;
-    
+
     const url = details.url;
-    
+
     // Check if it's a PDF URL (case insensitive)
     if (url.match(/^https?:\/\/.+\.pdf(\?.*)?$/i)) {
       console.log('PDF detected, redirecting to viewer:', url);
-      
+
       // Redirect to our viewer
       const viewerUrl = chrome.runtime.getURL(`viewer.html?file=${encodeURIComponent(url)}`);
-      
+
       // Use chrome.tabs.update to navigate to our viewer
       chrome.tabs.update(details.tabId, { url: viewerUrl }).catch((error) => {
         console.error('Failed to redirect:', error);
@@ -28,7 +28,7 @@ chrome.webNavigation.onCommitted.addListener(
 // Request storage persistence on install
 chrome.runtime.onInstalled.addListener(async () => {
   console.log('Extension installed');
-  
+
   // Future: Set up cleanup alarm
   // chrome.alarms.create('cleanup', { periodInMinutes: 60 });
 });
