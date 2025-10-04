@@ -451,6 +451,22 @@ export async function deleteChunkEmbeddingsByDoc(docHash: string): Promise<void>
 
 export async function deleteTableOfContents(docHash: string): Promise<void> {
   const db = await getDB();
+  await db.delete('tableOfContents', docHash);
+}
+
+// Chunk Embeddings operations
+export async function putChunkEmbedding(embedding: ChunkEmbeddingRecord): Promise<void> {
+  const db = await getDB();
+  await db.put('chunkEmbeddings', embedding);
+}
+
+export async function getChunkEmbedding(chunkId: string): Promise<ChunkEmbeddingRecord | undefined> {
+  const db = await getDB();
+  return db.get('chunkEmbeddings', chunkId);
+}
+
+export async function getChunkEmbeddingsByDoc(docHash: string): Promise<ChunkEmbeddingRecord[]> {
+  const db = await getDB();
   return db.getAllFromIndex('chunkEmbeddings', 'by-docHash', docHash);
 }
 
