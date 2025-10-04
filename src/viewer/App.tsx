@@ -15,12 +15,14 @@ import {
   getNotesByDoc,
   putComment,
   getCommentsByDoc,
+  deleteNote,
+  deleteComment,
 } from "../db";
 import { readOPFSFile } from "../db/opfs";
 import ContextMenu from "./ContextMenu";
 import { requestChunking, requestEmbeddings } from "../utils/chunker-client";
 
-const ZOOM_LEVELS = [50, 75, 90, 100, 125, 150, 175, 200, 250, 300];
+const ZOOM_LEVELS = [25, 50, 75, 90, 100, 125, 150, 175, 200, 250, 300, 350, 400, 500];
 
 export const ViewerApp: React.FC = () => {
   const [pdf, setPdf] = useState<PDFDocumentProxy | null>(null);
@@ -601,7 +603,7 @@ export const ViewerApp: React.FC = () => {
       changeZoom("100", { snapToTop: true });
     } else {
       const currentZoom = parseInt(zoom, 10);
-      const nextZoom = ZOOM_LEVELS.find((z) => z > currentZoom) || 300;
+      const nextZoom = ZOOM_LEVELS.find((z) => z > currentZoom) || ZOOM_LEVELS[ZOOM_LEVELS.length - 1];
       changeZoom(nextZoom.toString(), { snapToTop: true });
     }
   }, [zoom, changeZoom]);
@@ -672,6 +674,56 @@ export const ViewerApp: React.FC = () => {
       window.removeEventListener("wheel", handleWheel);
     };
   }, [handlePrevPage, handleNextPage, handleZoomIn, handleZoomOut]);
+
+  // Note handlers
+  const handleNoteDelete = useCallback(async (id: string) => {
+    try {
+      await deleteNote(id);
+      setNotes((prev) => prev.filter((n) => n.id !== id));
+    } catch (err) {
+      console.error("Failed to delete note", err);
+    }
+  }, []);
+
+  const handleNoteEdit = useCallback(async (id: string, newText: string) => {
+    try {
+      const note = notes.find((n) => n.id === id);
+      if (!note) return;
+
+      const updatedNote = { ...note, text: newText.trim() || undefined };
+      await putNote(updatedNote);
+      setNotes((prev) =>
+        prev.map((n) => (n.id === id ? updatedNote : n))
+      );
+    } catch (err) {
+      console.error("Failed to update note", err);
+    }
+  }, [notes]);
+
+  // Comment handlers
+  const handleCommentDelete = useCallback(async (id: string) => {
+    try {
+      await deleteComment(id);
+      setComments((prev) => prev.filter((c) => c.id !== id));
+    } catch (err) {
+      console.error("Failed to delete comment", err);
+    }
+  }, []);
+
+  const handleCommentEdit = useCallback(async (id: string, newText: string) => {
+    try {
+      const comment = comments.find((c) => c.id === id);
+      if (!comment) return;
+
+      const updatedComment = { ...comment, text: newText };
+      await putComment(updatedComment);
+      setComments((prev) =>
+        prev.map((c) => (c.id === id ? updatedComment : c))
+      );
+    } catch (err) {
+      console.error("Failed to update comment", err);
+    }
+  }, [comments]);
 
   const handleRender = useCallback(
     async (
@@ -796,6 +848,10 @@ export const ViewerApp: React.FC = () => {
                 onRender={handleRender}
                 notes={notes.filter((n) => n.page === pageNum)}
                 comments={comments.filter((c) => c.page === pageNum)}
+                onNoteDelete={handleNoteDelete}
+                onNoteEdit={handleNoteEdit}
+                onCommentDelete={handleCommentDelete}
+                onCommentEdit={handleCommentEdit}
               />
             );
           })}
@@ -858,12 +914,12 @@ export const ViewerApp: React.FC = () => {
             zIndex: 60,
           }}
         >
-          <input
+          <textarea
             autoFocus
             value={commentInput}
             onChange={(e) => setCommentInput(e.target.value)}
             onKeyDown={async (e) => {
-              if (e.key === "Enter") {
+              if (e.key === "Enter" && e.ctrlKey) {
                 // persist comment with normalized rects from selection
                 const range = commentAnchor.range;
                 const rects = Array.from(range.getClientRects());
@@ -905,8 +961,9 @@ export const ViewerApp: React.FC = () => {
                 setCommentInput("");
               }
             }}
-            placeholder="Type comment and press Enter"
-            className="px-2 py-1 rounded border bg-white dark:bg-neutral-800 text-neutral-900 dark:text-neutral-100"
+            placeholder="Type comment and press Ctrl+Enter"
+            className="px-2 py-1 rounded border bg-white dark:bg-neutral-800 text-neutral-900 dark:text-neutral-100 resize-y"
+            rows={3}
           />
         </div>
       )}

@@ -25,6 +25,10 @@ interface PageProps {
     text: string;
     page: number;
   }>;
+  onNoteDelete?: (id: string) => void;
+  onNoteEdit?: (id: string, newText: string) => void;
+  onCommentDelete?: (id: string) => void;
+  onCommentEdit?: (id: string, newText: string) => void;
 }
 
 export const Page: React.FC<PageProps> = ({
@@ -36,12 +40,20 @@ export const Page: React.FC<PageProps> = ({
   onRender,
   notes = [],
   comments = [],
+  onNoteDelete,
+  onNoteEdit,
+  onCommentDelete,
+  onCommentEdit,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const textLayerRef = useRef<HTMLDivElement>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const renderedScaleRef = useRef<number>(0);
+  const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
+  const [editingNoteText, setEditingNoteText] = useState("");
+  const [editingCommentId, setEditingCommentId] = useState<string | null>(null);
+  const [editingCommentText, setEditingCommentText] = useState("");
 
   console.log("rendering page", pageNum);
 
@@ -287,9 +299,10 @@ export const Page: React.FC<PageProps> = ({
         {notes.map((n) => {
           const mergedLines = mergeRectsIntoLines(n.rects, width, height);
           const hasText = n.text && n.text.trim().length > 0;
+          const isEditing = editingNoteId === n.id;
 
           return (
-            <div key={n.id} className={hasText ? "group" : ""}>
+            <div key={n.id} className="group">
               {mergedLines.map((line, i) => (
                 <div
                   key={`${n.id}-${i}`}
@@ -305,20 +318,97 @@ export const Page: React.FC<PageProps> = ({
                     left: line.left,
                     width: line.width,
                     height: line.height,
-                    pointerEvents: hasText ? "auto" : "none",
+                    pointerEvents: "auto",
                   }}
                 />
               ))}
-              {/* Show tooltip on hover if note has text */}
-              {hasText && (
+              {/* Invisible bridge to connect highlight to tooltip - prevents gap */}
+              <div
+                className="absolute z-40 pointer-events-auto"
+                style={{
+                  top: mergedLines[0].top - 40,
+                  left: mergedLines[0].left,
+                  width: Math.max(mergedLines[0].width, 200),
+                  height: 40 + mergedLines[0].height,
+                }}
+              />
+              {/* Show tooltip/edit interface on hover if note has text or when editing */}
+              {isEditing ? (
                 <div
-                  className="invisible group-hover:visible absolute bg-white dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-600 rounded-md px-2 py-1 text-xs text-neutral-900 dark:text-neutral-100 shadow-lg whitespace-nowrap z-40"
+                  className="absolute bg-white dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-600 rounded-md p-1 shadow-lg z-40 flex gap-2"
                   style={{
-                    top: mergedLines[0].top - 28,
+                    top: mergedLines[0].top - 30,
+                    left: mergedLines[0].left,
+                    minWidth: "200px",
+                  }}
+                >
+                  <input
+                    autoFocus
+                    type="text"
+                    value={editingNoteText}
+                    onChange={(e) => setEditingNoteText(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && onNoteEdit) {
+                        onNoteEdit(n.id, editingNoteText);
+                        setEditingNoteId(null);
+                      } else if (e.key === "Escape") {
+                        setEditingNoteId(null);
+                      }
+                    }}
+                    className="flex-1 px-2 py-1 text-xs bg-white dark:bg-neutral-700 border border-neutral-300 dark:border-neutral-600 rounded text-neutral-900 dark:text-neutral-100"
+                  />
+                  <button
+                    onClick={() => {
+                      if (onNoteEdit) {
+                        onNoteEdit(n.id, editingNoteText);
+                      }
+                      setEditingNoteId(null);
+                    }}
+                    className="px-2 py-1 text-xs bg-blue-500 hover:bg-blue-600 text-white rounded"
+                    title="Save"
+                  >
+                    ✓
+                  </button>
+                  <button
+                    onClick={() => setEditingNoteId(null)}
+                    className="px-2 py-1 text-xs bg-neutral-200 hover:bg-neutral-300 dark:bg-neutral-700 dark:hover:bg-neutral-600 rounded"
+                    title="Cancel"
+                  >
+                    ✕
+                  </button>
+                </div>
+              ) : (
+                <div
+                  className="invisible group-hover:visible absolute bg-white dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-600 rounded-md shadow-lg z-40 flex items-center gap-2 pointer-events-auto p-1"
+                  style={{
+                    top: mergedLines[0].top - 25,
                     left: mergedLines[0].left,
                   }}
                 >
-                  {n.text}
+                  {hasText && (
+                    <span className="p-0.5 text-xs text-neutral-900 dark:text-neutral-100 whitespace-nowrap">
+                      {n.text}
+                    </span>
+                  )}
+                  <button
+                    onClick={() => {
+                      setEditingNoteId(n.id);
+                      setEditingNoteText(n.text || "");
+                    }}
+                    className="p-0.5 text-xs bg-blue-500 hover:bg-blue-600 text-white rounded"
+                    title="Edit note"
+                  >
+                    ✎
+                  </button>
+                  {onNoteDelete && (
+                    <button
+                      onClick={() => onNoteDelete(n.id)}
+                      className="px-2 py-1 text-xs bg-red-500 hover:bg-red-600 text-white rounded mr-1"
+                      title="Delete note"
+                    >
+                      🗑
+                    </button>
+                  )}
                 </div>
               )}
             </div>
@@ -334,6 +424,7 @@ export const Page: React.FC<PageProps> = ({
           }
 
           const mergedLines = mergeRectsIntoLines(c.rects, width, height);
+          const isEditing = editingCommentId === c.id;
 
           return (
             <div key={c.id}>
@@ -379,7 +470,71 @@ export const Page: React.FC<PageProps> = ({
                   maxWidth: "200px",
                 }}
               >
-                <div className="break-words">{c.text}</div>
+                {isEditing ? (
+                  <div className="flex flex-col gap-2">
+                    <textarea
+                      autoFocus
+                      value={editingCommentText}
+                      onChange={(e) => setEditingCommentText(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && e.ctrlKey && onCommentEdit) {
+                          onCommentEdit(c.id, editingCommentText);
+                          setEditingCommentId(null);
+                        } else if (e.key === "Escape") {
+                          setEditingCommentId(null);
+                        }
+                      }}
+                      className="w-full px-2 py-1 text-xs bg-white dark:bg-neutral-700 border border-neutral-300 dark:border-neutral-600 rounded text-neutral-900 dark:text-neutral-100 resize-y"
+                      rows={5}
+                    />
+                    <div className="flex gap-1">
+                      <button
+                        onClick={() => {
+                          if (onCommentEdit) {
+                            onCommentEdit(c.id, editingCommentText);
+                          }
+                          setEditingCommentId(null);
+                        }}
+                        className="flex-1 px-2 py-1 text-xs bg-blue-500 hover:bg-blue-600 text-white rounded"
+                        title="Save (Ctrl+Enter)"
+                      >
+                        Save
+                      </button>
+                      <button
+                        onClick={() => setEditingCommentId(null)}
+                        className="flex-1 px-2 py-1 text-xs bg-neutral-200 hover:bg-neutral-300 dark:bg-neutral-700 dark:hover:bg-neutral-600 rounded"
+                        title="Cancel (Esc)"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <div className="break-words mb-2">{c.text}</div>
+                    <div className="flex gap-1 border-t border-yellow-200 dark:border-yellow-800 pt-2">
+                      <button
+                        onClick={() => {
+                          setEditingCommentId(c.id);
+                          setEditingCommentText(c.text);
+                        }}
+                        className="flex-1 px-2 py-1 text-xs bg-blue-500 hover:bg-blue-600 text-white rounded"
+                        title="Edit comment"
+                      >
+                        Edit
+                      </button>
+                      {onCommentDelete && (
+                        <button
+                          onClick={() => onCommentDelete(c.id)}
+                          className="flex-1 px-2 py-1 text-xs bg-red-500 hover:bg-red-600 text-white rounded"
+                          title="Delete comment"
+                        >
+                          Delete
+                        </button>
+                      )}
+                    </div>
+                  </>
+                )}
               </div>
             </div>
           );
