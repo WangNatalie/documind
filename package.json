@@ -1,0 +1,23 @@
+{
+  "name": "documind",
+  "version": "1.0.0",
+  "description": "AI-powered PDF viewer for efficient learning and studying",
+  "scripts": {
+    "build": "webpack --mode production",
+    "dev": "webpack --mode development --watch",
+    "test": "echo \"No tests specified\""
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.268",
+    "@types/node": "^20.14.0",
+    "copy-webpack-plugin": "^12.0.2",
+    "ts-loader": "^9.5.1",
+    "typescript": "^5.4.5",
+    "webpack": "^5.91.0",
+    "webpack-cli": "^5.1.4"
+  },
+  "dependencies": {
+    "@xenova/transformers": "^2.17.2",
+    "pdfjs-dist": "^4.3.136"
+  }
+}

@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Documind PDF Viewer</title>
+  <link rel="stylesheet" href="viewer.css">
+</head>
+<body>
+  <div id="sidebar" class="sidebar">
+    <div class="sidebar-header">
+      <h2>Table of Contents</h2>
+      <button id="closeSidebar" class="close-btn">&times;</button>
+    </div>
+    <div id="tocContainer" class="toc-container">
+      <div class="loading">Loading table of contents...</div>
+    </div>
+  </div>
+  
+  <div id="sidebarToggle" class="sidebar-toggle">
+    <span>☰</span>
+  </div>
+
+  <div id="mainContainer" class="main-container">
+    <div id="toolbar" class="toolbar">
+      <button id="prevPage" class="toolbar-btn">←</button>
+      <span id="pageInfo" class="page-info">Page <span id="pageNum">1</span> / <span id="pageCount">-</span></span>
+      <button id="nextPage" class="toolbar-btn">→</button>
+      <button id="zoomOut" class="toolbar-btn">-</button>
+      <span id="zoomLevel" class="zoom-info">100%</span>
+      <button id="zoomIn" class="toolbar-btn">+</button>
+    </div>
+    
+    <div id="viewerContainer" class="viewer-container">
+      <canvas id="pdfCanvas"></canvas>
+    </div>
+  </div>
+
+  <script src="viewer.js"></script>
+</body>
+</html>

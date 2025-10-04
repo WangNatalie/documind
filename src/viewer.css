@@ -1,0 +1,197 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+  overflow: hidden;
+  background-color: #2b2b2b;
+  color: #fff;
+}
+
+.main-container {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  width: 100vw;
+}
+
+.toolbar {
+  background-color: #1a1a1a;
+  padding: 10px 20px;
+  display: flex;
+  align-items: center;
+  gap: 15px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+  z-index: 10;
+}
+
+.toolbar-btn {
+  background-color: #3a3a3a;
+  color: #fff;
+  border: none;
+  padding: 8px 16px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+  transition: background-color 0.2s;
+}
+
+.toolbar-btn:hover {
+  background-color: #4a4a4a;
+}
+
+.toolbar-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.page-info, .zoom-info {
+  color: #ccc;
+  font-size: 14px;
+}
+
+.viewer-container {
+  flex: 1;
+  overflow: auto;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding: 20px;
+  background-color: #2b2b2b;
+}
+
+#pdfCanvas {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+  background-color: white;
+  display: block;
+}
+
+/* Sidebar styles */
+.sidebar {
+  position: fixed;
+  left: -320px;
+  top: 0;
+  width: 320px;
+  height: 100vh;
+  background-color: #1a1a1a;
+  box-shadow: 2px 0 8px rgba(0, 0, 0, 0.3);
+  transition: left 0.3s ease;
+  z-index: 1000;
+  overflow-y: auto;
+}
+
+.sidebar.open {
+  left: 0;
+}
+
+.sidebar-header {
+  padding: 20px;
+  background-color: #252525;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid #3a3a3a;
+}
+
+.sidebar-header h2 {
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.close-btn {
+  background: none;
+  border: none;
+  color: #fff;
+  font-size: 24px;
+  cursor: pointer;
+  padding: 0;
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.close-btn:hover {
+  background-color: #3a3a3a;
+  border-radius: 4px;
+}
+
+.sidebar-toggle {
+  position: fixed;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 40px;
+  height: 80px;
+  background-color: #1a1a1a;
+  border-radius: 0 8px 8px 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  z-index: 999;
+  box-shadow: 2px 0 8px rgba(0, 0, 0, 0.3);
+}
+
+.sidebar-toggle:hover {
+  width: 50px;
+  background-color: #252525;
+}
+
+.sidebar-toggle span {
+  font-size: 24px;
+  color: #fff;
+}
+
+.toc-container {
+  padding: 20px;
+}
+
+.loading {
+  text-align: center;
+  color: #888;
+  padding: 20px;
+}
+
+.toc-item {
+  padding: 10px 15px;
+  margin: 5px 0;
+  background-color: #252525;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background-color 0.2s;
+  border-left: 3px solid transparent;
+}
+
+.toc-item:hover {
+  background-color: #3a3a3a;
+  border-left-color: #4a9eff;
+}
+
+.toc-item.active {
+  background-color: #3a3a3a;
+  border-left-color: #4a9eff;
+}
+
+.toc-item-title {
+  font-size: 14px;
+  font-weight: 500;
+  margin-bottom: 4px;
+  color: #fff;
+}
+
+.toc-item-page {
+  font-size: 12px;
+  color: #888;
+}
+
+.error {
+  color: #ff6b6b;
+  padding: 20px;
+  text-align: center;
+}
