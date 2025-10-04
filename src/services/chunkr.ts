@@ -12,18 +12,23 @@ export class ChunkrService {
   private apiUrl: string = 'https://api.chunkr.ai/v1/chunk';
 
   constructor() {
-    // In production, API key should be stored securely
-    // For now, we'll use a placeholder or fallback to local chunking
-    this.apiKey = this.getApiKey();
+    // API key will be loaded from chrome.storage when needed
   }
 
-  private getApiKey(): string {
-    // Try to get from chrome.storage
-    // For demo purposes, return empty string and use fallback
-    return '';
+  private async getApiKey(): Promise<string> {
+    try {
+      const result = await chrome.storage.local.get(['chunkrApiKey']);
+      return result.chunkrApiKey || '';
+    } catch (error) {
+      console.error('Error getting API key:', error);
+      return '';
+    }
   }
 
   async chunkDocument(text: string): Promise<Chunk[]> {
+    // Get API key from storage
+    this.apiKey = await this.getApiKey();
+    
     // If no API key, use local chunking fallback
     if (!this.apiKey) {
       console.log('No Chunkr API key found, using local chunking');

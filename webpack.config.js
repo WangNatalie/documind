@@ -5,7 +5,8 @@ module.exports = {
   entry: {
     background: './src/background.ts',
     content: './src/content.ts',
-    viewer: './src/viewer.ts'
+    viewer: './src/viewer.ts',
+    settings: './src/settings.ts'
   },
   module: {
     rules: [
@@ -30,6 +31,7 @@ module.exports = {
         { from: 'manifest.json', to: 'manifest.json' },
         { from: 'src/viewer.html', to: 'viewer.html' },
         { from: 'src/viewer.css', to: 'viewer.css' },
+        { from: 'src/settings.html', to: 'settings.html' },
         { from: 'icons', to: 'icons', noErrorOnMissing: true },
         {
           from: 'node_modules/pdfjs-dist/build/pdf.worker.mjs',

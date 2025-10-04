@@ -11,16 +11,23 @@ export class GeminiService {
   private apiUrl: string = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent';
 
   constructor() {
-    this.apiKey = this.getApiKey();
+    // API key will be loaded from chrome.storage when needed
   }
 
-  private getApiKey(): string {
-    // In production, API key should be stored securely in chrome.storage
-    // For demo purposes, return empty string and use fallback
-    return '';
+  private async getApiKey(): Promise<string> {
+    try {
+      const result = await chrome.storage.local.get(['geminiApiKey']);
+      return result.geminiApiKey || '';
+    } catch (error) {
+      console.error('Error getting API key:', error);
+      return '';
+    }
   }
 
   async generateTableOfContents(chunkSummaries: any[]): Promise<TOCItem[]> {
+    // Get API key from storage
+    this.apiKey = await this.getApiKey();
+    
     if (!this.apiKey) {
       console.log('No Gemini API key found, using fallback TOC generation');
       return this.fallbackTOC(chunkSummaries);
