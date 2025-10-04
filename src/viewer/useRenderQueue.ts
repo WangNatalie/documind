@@ -6,13 +6,21 @@ export interface RenderTask {
   priority: number;
   page: PDFPageProxy;
   canvas: HTMLCanvasElement;
+  textLayerDiv: HTMLDivElement | null;
   scale: number;
   resolve: () => void;
   reject: (error: Error) => void;
 }
 
 export interface RenderQueue {
-  enqueue: (pageNum: number, page: PDFPageProxy, canvas: HTMLCanvasElement, scale: number, priority: number) => Promise<void>;
+  enqueue: (
+    pageNum: number,
+    page: PDFPageProxy,
+    canvas: HTMLCanvasElement,
+    textLayerDiv: HTMLDivElement | null,
+    scale: number,
+    priority: number
+  ) => Promise<void>;
   cancel: () => void;
   clear: () => void;
 }
@@ -60,6 +68,72 @@ export function useRenderQueue(): RenderQueue {
       currentTaskRef.current = { cancel: () => renderTask.cancel() };
 
       await renderTask.promise;
+
+      // Render text layer for text selection
+      if (task.textLayerDiv) {
+        try {
+          const textContent = await task.page.getTextContent();
+          task.textLayerDiv.innerHTML = ''; // Clear previous content
+
+          // Set text layer to match viewport dimensions (CSS pixels, not canvas pixels)
+          task.textLayerDiv.style.width = `${viewport.width}px`;
+          task.textLayerDiv.style.height = `${viewport.height}px`;
+
+          // Render text items with proper viewport transformation
+          textContent.items.forEach((item: any) => {
+            const textDiv = document.createElement('span');
+            textDiv.textContent = item.str;
+            textDiv.style.position = 'absolute';
+            textDiv.style.whiteSpace = 'pre';
+            textDiv.style.transformOrigin = 'left bottom';
+
+            // Transform matrix: [a, b, c, d, e, f]
+            // where: x' = a*x + c*y + e, y' = b*x + d*y + f
+            const tx = item.transform;
+
+            // Get the transformed position using viewport transform
+            // The viewport already has the scale applied, so we use its transform
+            const transform = viewport.transform;
+
+            // Apply viewport transformation to the text position
+            // viewport.transform is [scaleX, 0, 0, -scaleY, offsetX, offsetY]
+            const x = transform[0] * tx[4] + transform[2] * tx[5] + transform[4];
+            const y = transform[1] * tx[4] + transform[3] * tx[5] + transform[5];
+
+            // Calculate font size - use the vertical scale from the transform
+            const fontHeight = Math.abs(tx[3]);
+            const fontSize = fontHeight * viewport.scale;
+
+            // Calculate width if available
+            if (item.width) {
+              const width = item.width * viewport.scale;
+              textDiv.style.width = `${width}px`;
+            }
+
+            // Position the text - adjust for baseline
+            textDiv.style.left = `${x}px`;
+            // Subtract fontSize to align at baseline (text renders from baseline up)
+            textDiv.style.top = `${y - fontSize}px`;
+            textDiv.style.fontSize = `${fontSize}px`;
+            textDiv.style.fontFamily = item.fontName || 'sans-serif';
+
+            // Handle rotation/skew
+            const hasRotation = tx[0] !== 1 || tx[1] !== 0 || tx[2] !== 0 || tx[3] !== 1;
+            if (hasRotation) {
+              const scaleX = Math.sqrt(tx[0] * tx[0] + tx[1] * tx[1]);
+              const scaleY = Math.sqrt(tx[2] * tx[2] + tx[3] * tx[3]);
+              const angle = Math.atan2(tx[1], tx[0]);
+
+              textDiv.style.transform = `rotate(${angle}rad) scaleX(${scaleX / scaleY})`;
+            }
+
+            task.textLayerDiv!.appendChild(textDiv);
+          });
+        } catch (err) {
+          console.error('Failed to render text layer:', err);
+        }
+      }
+
       task.resolve();
     } catch (error: any) {
       if (error?.name !== 'RenderingCancelledException') {
@@ -74,7 +148,14 @@ export function useRenderQueue(): RenderQueue {
   }, []);
 
   const enqueue = useCallback(
-    (pageNum: number, page: PDFPageProxy, canvas: HTMLCanvasElement, scale: number, priority: number): Promise<void> => {
+    (
+      pageNum: number,
+      page: PDFPageProxy,
+      canvas: HTMLCanvasElement,
+      textLayerDiv: HTMLDivElement | null,
+      scale: number,
+      priority: number
+    ): Promise<void> => {
       return new Promise((resolve, reject) => {
         // Remove existing task for same page
         queueRef.current = queueRef.current.filter(t => t.pageNum !== pageNum);
@@ -85,6 +166,7 @@ export function useRenderQueue(): RenderQueue {
           page,
           canvas,
           scale,
+          textLayerDiv,
           resolve,
           reject,
         });

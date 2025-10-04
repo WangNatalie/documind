@@ -26,7 +26,7 @@ export const ViewerApp: React.FC = () => {
   const observerRef = useRef<IntersectionObserver | null>(null);
   const renderQueue = useRenderQueue();
   const canvasCacheRef = useRef(new CanvasCache());
-  const visiblePagesRef = useRef<Set<number>>(new Set());
+  const visiblePagesRef = useRef<Set<number>>(new Set([1]));
 
   // Parse URL params
   const params = new URLSearchParams(window.location.search);
@@ -184,12 +184,15 @@ export const ViewerApp: React.FC = () => {
       (entries) => {
         let mostVisiblePage = currentPage;
         let maxRatio = 0;
+        let visibilityChanged = false;
 
         entries.forEach((entry) => {
           const pageNum = parseInt(entry.target.getAttribute('data-page-num') || '0', 10);
 
           if (entry.isIntersecting) {
+            const wasVisible = visiblePagesRef.current.has(pageNum);
             visiblePagesRef.current.add(pageNum);
+            if (!wasVisible) visibilityChanged = true;
 
             // Track most visible page (>= 60%)
             if (entry.intersectionRatio > maxRatio) {
@@ -199,13 +202,18 @@ export const ViewerApp: React.FC = () => {
               }
             }
           } else {
+            const wasVisible = visiblePagesRef.current.has(pageNum);
             visiblePagesRef.current.delete(pageNum);
+            if (wasVisible) visibilityChanged = true;
           }
         });
 
         // Update current page if changed
         if (mostVisiblePage !== currentPage && maxRatio >= 0.6) {
           setCurrentPage(mostVisiblePage);
+        } else if (visibilityChanged && mostVisiblePage === currentPage) {
+          // Only force re-render if page didn't change (to update shouldRender for other pages)
+          setCurrentPage(p => p);
         }
       },
       { threshold: [0, 0.25, 0.5, 0.6, 0.75, 1.0] }
@@ -237,33 +245,7 @@ export const ViewerApp: React.FC = () => {
     return () => clearTimeout(timeoutId);
   }, [currentPage, zoom, docHash]);
 
-  // Keyboard navigation
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      const isMod = e.ctrlKey || e.metaKey;
-
-      if (e.key === 'ArrowLeft' || e.key === 'PageUp') {
-        e.preventDefault();
-        handlePrevPage();
-      } else if (e.key === 'ArrowRight' || e.key === 'PageDown') {
-        e.preventDefault();
-        handleNextPage();
-      } else if (isMod && e.key === '+') {
-        e.preventDefault();
-        handleZoomIn();
-      } else if (isMod && e.key === '-') {
-        e.preventDefault();
-        handleZoomOut();
-      } else if (isMod && e.key === '0') {
-        e.preventDefault();
-        setZoom('fitWidth');
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [currentPage, zoom, pages.length]);
-
+  // Handler functions
   const handlePrevPage = useCallback(() => {
     if (currentPage > 1) {
       scrollToPage(currentPage - 1);
@@ -303,11 +285,58 @@ export const ViewerApp: React.FC = () => {
     }
   }, [zoom]);
 
-  const handleRender = useCallback(async (pageNum: number, canvas: HTMLCanvasElement, priority: number) => {
+  // Keyboard navigation and ctrl+scroll zoom
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const isMod = e.ctrlKey || e.metaKey;
+
+      if (e.key === 'ArrowLeft' || e.key === 'PageUp') {
+        e.preventDefault();
+        handlePrevPage();
+      } else if (e.key === 'ArrowRight' || e.key === 'PageDown') {
+        e.preventDefault();
+        handleNextPage();
+      } else if (isMod && e.key === '+') {
+        e.preventDefault();
+        handleZoomIn();
+      } else if (isMod && e.key === '-') {
+        e.preventDefault();
+        handleZoomOut();
+      } else if (isMod && e.key === '0') {
+        e.preventDefault();
+        setZoom('fitWidth');
+      }
+    };
+
+    const handleWheel = (e: WheelEvent) => {
+      if (e.ctrlKey || e.metaKey) {
+        e.preventDefault();
+        if (e.deltaY < 0) {
+          handleZoomIn();
+        } else {
+          handleZoomOut();
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('wheel', handleWheel, { passive: false });
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('wheel', handleWheel);
+    };
+  }, [handlePrevPage, handleNextPage, handleZoomIn, handleZoomOut]);
+
+  const handleRender = useCallback(async (
+    pageNum: number,
+    canvas: HTMLCanvasElement,
+    textLayerDiv: HTMLDivElement | null,
+    priority: number
+  ) => {
     const page = pages[pageNum - 1];
     if (!page) return;
 
-    await renderQueue.enqueue(pageNum, page, canvas, scale, priority);
+    await renderQueue.enqueue(pageNum, page, canvas, textLayerDiv, scale, priority);
     canvasCacheRef.current.add(pageNum, canvas);
   }, [pages, scale, renderQueue]);
 
@@ -383,19 +412,29 @@ export const ViewerApp: React.FC = () => {
 
       <div
         ref={containerRef}
-        className="flex-1 overflow-y-auto overflow-x-hidden"
+        className="flex-1 overflow-auto"
       >
-        <div className="mx-auto max-w-[min(100%,1200px)] py-4">
-          {pages.map((page, idx) => (
-            <Page
-              key={idx + 1}
-              pageNum={idx + 1}
-              page={page}
-              scale={scale}
-              isVisible={visiblePagesRef.current.has(idx + 1)}
-              onRender={handleRender}
-            />
-          ))}
+        <div className="py-4 flex flex-col items-center">
+          {pages.map((page, idx) => {
+            const pageNum = idx + 1;
+            const isVisible = visiblePagesRef.current.has(pageNum);
+            // Render visible pages + 2 pages buffer above/below
+            // Always render first 3 pages initially, then use visibility detection
+            const shouldRender = pageNum <= 3 || isVisible ||
+              Array.from(visiblePagesRef.current).some(vp => Math.abs(vp - pageNum) <= 2);
+
+            return (
+              <Page
+                key={pageNum}
+                pageNum={pageNum}
+                page={page}
+                scale={scale}
+                isVisible={isVisible}
+                shouldRender={shouldRender}
+                onRender={handleRender}
+              />
+            );
+          })}
         </div>
       </div>
     </div>

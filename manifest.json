@@ -4,8 +4,6 @@
   "version": "1.0.0",
   "manifest_version": 3,
   "permissions": [
-    "declarativeNetRequest",
-    "declarativeNetRequestWithHostAccess",
     "storage",
     "unlimitedStorage",
     "webNavigation",
@@ -22,15 +20,6 @@
   "action": {
     "default_popup": "popup.html",
     "default_title": "DocuMind - PDF Viewer"
-  },
-  "declarative_net_request": {
-    "rule_resources": [
-      {
-        "id": "ruleset_1",
-        "enabled": true,
-        "path": "rules.json"
-      }
-    ]
   },
   "web_accessible_resources": [
     {

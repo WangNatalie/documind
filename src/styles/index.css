@@ -15,3 +15,43 @@ body {
 * {
   box-sizing: border-box;
 }
+
+/* PDF.js text layer for text selection */
+.text-layer {
+  position: absolute;
+  text-align: initial;
+  inset: 0;
+  overflow: hidden;
+  opacity: 1;
+  line-height: 1;
+  -webkit-text-size-adjust: none;
+     -moz-text-size-adjust: none;
+          text-size-adjust: none;
+  forced-color-adjust: none;
+  transform-origin: 0 0;
+  z-index: 2;
+  pointer-events: auto;
+}
+
+.text-layer span {
+  color: transparent;
+  position: absolute;
+  white-space: pre;
+  cursor: text;
+  transform-origin: left bottom;
+  pointer-events: auto;
+  overflow: hidden;
+  text-overflow: clip;
+  /* Better font rendering for alignment */
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Show text layer for debugging (optional - remove opacity to see text positioning) */
+.text-layer ::selection {
+  background: rgba(0, 123, 255, 0.3);
+}
+
+.text-layer ::-moz-selection {
+  background: rgba(0, 123, 255, 0.3);
+}
