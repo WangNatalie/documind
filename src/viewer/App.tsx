@@ -23,6 +23,7 @@ import {
 import { readOPFSFile } from "../db/opfs";
 import ContextMenu from "./ContextMenu";
 import { requestGeminiChunking, requestEmbeddings, requestTOC } from "../utils/chunker-client";
+import { buildTOCTree } from "../utils/toc";
 
 const ZOOM_LEVELS = [25, 50, 75, 90, 100, 125, 150, 175, 200, 250, 300, 350, 400, 500];
 
@@ -39,6 +40,10 @@ export const ViewerApp: React.FC = () => {
   const [docHash, setDocHash] = useState<string>("");
   const [isInitialLoad, setIsInitialLoad] = useState(true);
   const [tableOfContents, setTableOfContents] = useState<TableOfContentsRecord | null>(null);
+
+  const nestedTableOfContents = buildTOCTree(tableOfContents?.items || []);
+
+  console.log('nestedTableOfContents:', nestedTableOfContents);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const observerRef = useRef<IntersectionObserver | null>(null);
