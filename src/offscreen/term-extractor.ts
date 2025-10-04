@@ -1,7 +1,8 @@
 // Term Extractor - extracts important technical terms from visible text using Gemini
 import { GoogleGenAI } from '@google/genai';
 import { getGeminiApiKey } from './gemini-config';
-import { getTableOfContents, TableOfContentsRecord, getChunksByDoc, TOCItem } from '../db/index';
+import { getTableOfContents, TableOfContentsRecord, getChunksByDoc, TOCItem, getChunkEmbeddingsByDoc } from '../db/index';
+import { generateEmbedding } from './embedder';
 
 // Configuration
 const GEMINI_MODEL = 'gemini-2.5-flash-lite';
@@ -18,6 +19,7 @@ export interface TermExtractionResult {
 export interface TermWithSection {
   term: string;
   tocItem: TOCItem | null;
+  matchedChunkId?: string; // The chunk ID that was matched for this term
 }
 
 export interface TermSummary {
@@ -27,6 +29,90 @@ export interface TermSummary {
   explanation2: string;
   explanation3: string;
   tocItem: TOCItem | null;
+  matchedChunkId?: string; // The chunk ID used for context
+}
+
+/**
+ * Calculate cosine similarity between two vectors
+ */
+function cosineSimilarity(a: number[], b: number[]): number {
+  if (a.length !== b.length) {
+    throw new Error('Vectors must have the same length');
+  }
+  
+  let dotProduct = 0;
+  let magnitudeA = 0;
+  let magnitudeB = 0;
+  
+  for (let i = 0; i < a.length; i++) {
+    dotProduct += a[i] * b[i];
+    magnitudeA += a[i] * a[i];
+    magnitudeB += b[i] * b[i];
+  }
+  
+  magnitudeA = Math.sqrt(magnitudeA);
+  magnitudeB = Math.sqrt(magnitudeB);
+  
+  if (magnitudeA === 0 || magnitudeB === 0) {
+    return 0;
+  }
+  
+  return dotProduct / (magnitudeA * magnitudeB);
+}
+
+/**
+ * Find most similar chunk using vector similarity search
+ */
+async function findMostSimilarChunk(
+  term: string,
+  docHash: string
+): Promise<{ chunkId: string; similarity: number; chunk: any } | null> {
+  try {
+    console.log(`[VectorSearch] Searching for similar chunks for term: "${term}"`);
+    
+    // Generate embedding for the term
+    const termEmbedding = await generateEmbedding(term);
+    
+    // Get all chunk embeddings for this document
+    const chunkEmbeddings = await getChunkEmbeddingsByDoc(docHash);
+    
+    if (chunkEmbeddings.length === 0) {
+      console.log(`[VectorSearch] No embeddings found for document ${docHash}`);
+      return null;
+    }
+    
+    // Calculate similarity scores
+    const similarities = chunkEmbeddings.map(chunkEmb => ({
+      chunkId: chunkEmb.chunkId,
+      similarity: cosineSimilarity(termEmbedding, chunkEmb.embedding)
+    }));
+    
+    // Sort by similarity (highest first)
+    similarities.sort((a, b) => b.similarity - a.similarity);
+    
+    // Get the most similar chunk
+    const bestMatch = similarities[0];
+    
+    if (bestMatch.similarity < 0.5) {
+      console.log(`[VectorSearch] Best similarity (${bestMatch.similarity.toFixed(3)}) below threshold for term "${term}"`);
+      return null;
+    }
+    
+    console.log(`[VectorSearch] Found similar chunk for "${term}": ${bestMatch.chunkId} (similarity: ${bestMatch.similarity.toFixed(3)})`);
+    
+    // Get the actual chunk data
+    const chunks = await getChunksByDoc(docHash);
+    const chunk = chunks.find(c => c.id === bestMatch.chunkId);
+    
+    return {
+      chunkId: bestMatch.chunkId,
+      similarity: bestMatch.similarity,
+      chunk: chunk || null
+    };
+  } catch (error) {
+    console.error(`[VectorSearch] Error finding similar chunk for "${term}":`, error);
+    return null;
+  }
 }
 
 /**
@@ -45,7 +131,7 @@ export async function extractTerms(passage: string): Promise<TermExtractionResul
   }
 
   try {
-    const prompt = `Extract up to 10 important technical terms, keywords, or phrases from this passage.
+    const prompt = `Extract 5-10 important technical terms, keywords, or phrases from this passage.
 ${passage}
 Prioritize terms that may need clarification as someone reads through this passage for understanding. Return only the list of terms separated by commas.`;
 
@@ -123,7 +209,7 @@ Or return "None" if no relevant section exists.`;
       contents: prompt,
       config: {
         temperature: 0.2,
-        maxOutputTokens: 1000,
+        maxOutputTokens: 2000,
       }
     });
 
@@ -255,10 +341,45 @@ Return ONLY the JSON array, no additional text.`;
     
     // Ensure all terms are present in results (fill in missing ones)
     const resultMap = new Map(results.map(r => [r.term, r.tocItem]));
-    const completeResults: TermWithSection[] = terms.map(term => ({
-      term,
-      tocItem: resultMap.get(term) ?? null
-    }));
+    const completeResults: TermWithSection[] = terms.map(term => {
+      const tocItem = resultMap.get(term) ?? null;
+      return {
+        term,
+        tocItem,
+        // Store chunk ID if the TOC item has one
+        matchedChunkId: tocItem?.chunkId
+      };
+    });
+
+    // Find unmatched terms (those with null tocItem)
+    const unmatchedTerms = completeResults.filter(r => r.tocItem === null);
+    
+    if (unmatchedTerms.length > 0) {
+      console.log(`[SectionFinder] ${unmatchedTerms.length} terms without TOC matches, trying vector similarity search...`);
+      
+      // Try vector similarity search for unmatched terms
+      for (const result of unmatchedTerms) {
+        try {
+          const similarChunk = await findMostSimilarChunk(result.term, docHash);
+          
+          if (similarChunk && similarChunk.chunk) {
+            // Create a synthetic TOC item from the chunk
+            result.tocItem = {
+              title: `Related: ${similarChunk.chunk.sectionHeader || 'Content'}`,
+              page: similarChunk.chunk.page,
+              chunkId: similarChunk.chunkId
+            };
+            // Store the matched chunk ID
+            result.matchedChunkId = similarChunk.chunkId;
+          } 
+        } catch (error) {
+          console.error(`[SectionFinder] Error in vector search for "${result.term}":`, error);
+        }
+      }
+      
+      const matchedByVector = completeResults.filter(r => r.matchedChunkId && !resultMap.has(r.term)).length;
+      console.log(`[SectionFinder] Vector search found matches for ${matchedByVector}/${unmatchedTerms.length} unmatched terms`);
+    }
 
     return completeResults;
   } catch (error) {
@@ -368,7 +489,7 @@ export async function summarizeTerm(
       contents: prompt,
       config: {
         temperature: 0.3,
-        maxOutputTokens: 5000,
+        maxOutputTokens: 10000,
       }
     });
 
@@ -399,6 +520,7 @@ export async function summarizeTerm(
       explanation2: parsed.explanation2 || '',
       explanation3: parsed.explanation3 || '',
       tocItem: termWithSection.tocItem,
+      matchedChunkId: termWithSection.matchedChunkId,
     };
   } catch (error) {
     console.error(`[Summarizer] Error summarizing term "${term}":`, error);
@@ -409,12 +531,13 @@ export async function summarizeTerm(
       explanation2: '',
       explanation3: '',
       tocItem: termWithSection.tocItem,
+      matchedChunkId: termWithSection.matchedChunkId,
     };
   }
 }
 
 /**
- * Generate summaries for all terms with their sections
+ * Generate summaries for all terms with their sections (batch version - single API call)
  */
 export async function summarizeTerms(
   termsWithSections: TermWithSection[],
@@ -422,14 +545,141 @@ export async function summarizeTerms(
 ): Promise<TermSummary[]> {
   console.log(`[Summarizer] Generating summaries for ${termsWithSections.length} terms`);
 
-  const summaries: TermSummary[] = [];
-  
-  for (const termWithSection of termsWithSections) {
-    const summary = await summarizeTerm(termWithSection.term, termWithSection, docHash);
-    summaries.push(summary);
+  if (termsWithSections.length === 0) {
+    return [];
   }
 
-  console.log(`[Summarizer] Generated ${summaries.length} summaries`);
-  return summaries;
+  try {
+    // Gather context for all terms in parallel
+    const termsWithContext = await Promise.all(
+      termsWithSections.map(async (termWithSection) => {
+        const context = await getContextForTerm(termWithSection.term, termWithSection, docHash);
+        return {
+          term: termWithSection.term,
+          context: context || 'No specific context found',
+          tocItem: termWithSection.tocItem,
+          matchedChunkId: termWithSection.matchedChunkId
+        };
+      })
+    );
+
+    console.log('[Summarizer] Gathered context for all terms, sending batch request to Gemini...');
+
+    // Create batch prompt with all terms and their contexts
+    const termsJson = JSON.stringify(
+      termsWithContext.map(t => ({
+        term: t.term,
+        context: t.context.substring(0, 1000), // Limit context per term to avoid token limits
+        section: t.tocItem ? `${t.tocItem.title} (Page ${t.tocItem.page})` : 'No specific section'
+      })),
+      null,
+      2
+    );
+
+    const prompt = `For each term in the following JSON array, write a concise definition (one sentence) and 3 key points of explanation/summary. Use the provided context from the document when available, but supplement with general knowledge if needed.
+
+Terms with context:
+${termsJson}
+
+Return your response as a JSON array where each element has:
+{
+  "term": "the term name",
+  "definition": "one sentence definition",
+  "explanation1": "first key point",
+  "explanation2": "second key point",
+  "explanation3": "third key point"
+}
+
+Return ONLY the JSON array, no additional text or markdown.`;
+
+    const response = await ai.models.generateContent({
+      model: GEMINI_MODEL,
+      contents: prompt,
+      config: {
+        temperature: 0.3,
+        maxOutputTokens: 10000,
+      }
+    });
+
+    const text = response.text;
+    if (!text) {
+      throw new Error('No text in Gemini response');
+    }
+
+    console.log('[Summarizer] Received batch response:', text.substring(0, 200) + '...');
+
+    // Parse JSON array from response (may be wrapped in markdown code blocks)
+    const trimmedText = text.trim();
+    
+    // Remove markdown code blocks if present
+    let jsonText = trimmedText;
+    if (trimmedText.startsWith('```')) {
+      const firstNewline = trimmedText.indexOf('\n');
+      const lastBackticks = trimmedText.lastIndexOf('```');
+      if (firstNewline !== -1 && lastBackticks > firstNewline) {
+        jsonText = trimmedText.substring(firstNewline + 1, lastBackticks).trim();
+      }
+    }
+    
+    // Find the JSON array by locating the opening and closing brackets
+    const startIdx = jsonText.indexOf('[');
+    const endIdx = jsonText.lastIndexOf(']');
+    
+    if (startIdx === -1 || endIdx === -1 || startIdx >= endIdx) {
+      throw new Error('No valid JSON array found in response');
+    }
+    
+    const arrayText = jsonText.substring(startIdx, endIdx + 1);
+    const parsedResults = JSON.parse(arrayText);
+
+    console.log(`[Summarizer] Successfully parsed ${parsedResults.length} summaries`);
+
+    // Map results back to TermSummary objects with tocItems and chunk IDs
+    const resultMap = new Map<string, any>(
+      parsedResults.map((r: any) => [r.term, r])
+    );
+
+    const summaries: TermSummary[] = termsWithContext.map(({ term, tocItem, matchedChunkId }) => {
+      const parsed: any = resultMap.get(term);
+      if (parsed) {
+        return {
+          term,
+          definition: (parsed.definition as string) || '',
+          explanation1: (parsed.explanation1 as string) || '',
+          explanation2: (parsed.explanation2 as string) || '',
+          explanation3: (parsed.explanation3 as string) || '',
+          tocItem,
+          matchedChunkId,
+        };
+      } else {
+        // Fallback if term not found in response
+        return {
+          term,
+          definition: 'Summary not available',
+          explanation1: '',
+          explanation2: '',
+          explanation3: '',
+          tocItem,
+          matchedChunkId,
+        };
+      }
+    });
+
+    console.log(`[Summarizer] Generated ${summaries.length} summaries`);
+    return summaries;
+  } catch (error) {
+    console.error('[Summarizer] Error in batch summarization:', error);
+    console.log('[Summarizer] Falling back to individual term processing...');
+    
+    // Fallback to individual processing if batch fails
+    const summaries: TermSummary[] = [];
+    for (const termWithSection of termsWithSections) {
+      const summary = await summarizeTerm(termWithSection.term, termWithSection, docHash);
+      summaries.push(summary);
+    }
+    
+    console.log(`[Summarizer] Generated ${summaries.length} summaries (fallback)`);
+    return summaries;
+  }
 }
 

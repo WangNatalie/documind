@@ -78,8 +78,6 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
       url: chrome.runtime.getURL('viewer.html*')
     });
 
-    console.log(`[trackViewerState] Found ${tabs.length} viewer tab(s)`);
-
     // Clean up states for closed tabs
     const activeTabs = new Set(tabs.map(t => t.id));
     for (const [tabId] of viewerStates) {
@@ -179,11 +177,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         lastUpdate: Date.now(),
       };
       viewerStates.set(tabId, state);
-      console.log(`[UPDATE_VIEWER_STATE] Received state from tab ${tabId}:`, {
-        fileName: state.fileName,
-        page: `${state.currentPage}/${state.totalPages}`,
-        textLength: state.visibleText.length
-      });
       
       // Extract terms from visible text only if it has changed
       if (state.visibleText && state.visibleText.length > 0) {
@@ -192,8 +185,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           console.log(`[UPDATE_VIEWER_STATE] Visible text changed for tab ${tabId}, extracting terms`);
           lastVisibleText.set(tabId, state.visibleText);
           extractTermsFromText(state.visibleText, tabId, state.fileName, state.currentPage, state.docHash);
-        } else {
-          console.log(`[UPDATE_VIEWER_STATE] Visible text unchanged for tab ${tabId}, skipping term extraction`);
         }
       }
     }
@@ -275,7 +266,8 @@ async function findSectionsForTerms(terms: string[], docHash: string, fileName: 
       // Log each term with its section
       for (const result of response.results) {
         if (result.tocItem) {
-          console.log(`  • ${result.term} → ${result.tocItem.title} (Page ${result.tocItem.page})`);
+          const chunkInfo = result.matchedChunkId ? ` [chunk: ${result.matchedChunkId.substring(0, 8)}...]` : '';
+          console.log(`  • ${result.term} → ${result.tocItem.title} (Page ${result.tocItem.page})${chunkInfo}`);
         } else {
           console.log(`  • ${result.term} → No section found`);
         }
@@ -283,7 +275,8 @@ async function findSectionsForTerms(terms: string[], docHash: string, fileName: 
       
       // Summary
       const termsWithSections = response.results.filter((r: any) => r.tocItem).length;
-      console.log(`[findSections] Found sections for ${termsWithSections}/${terms.length} terms`);
+      const termsWithChunks = response.results.filter((r: any) => r.matchedChunkId).length;
+      console.log(`[findSections] Found sections for ${termsWithSections}/${terms.length} terms (${termsWithChunks} with chunk context)`);
       
       // Generate summaries for all terms
       await summarizeTerms(response.results, docHash, fileName, currentPage);
@@ -315,6 +308,9 @@ async function summarizeTerms(termsWithSections: any[], docHash: string, fileNam
         console.log(`\n📚 Term: ${summary.term}`);
         if (summary.tocItem) {
           console.log(`   Section: ${summary.tocItem.title} (Page ${summary.tocItem.page})`);
+        }
+        if (summary.matchedChunkId) {
+          console.log(`   Context Chunk: ${summary.matchedChunkId}`);
         }
         console.log(`   Definition: ${summary.definition}`);
         console.log(`   Key Points:`);
