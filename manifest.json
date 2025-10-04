@@ -8,7 +8,8 @@
     "unlimitedStorage",
     "webNavigation",
     "tabs",
-    "offscreen"
+    "offscreen",
+    "alarms"
   ],
   "host_permissions": [
     "*://*/*"
