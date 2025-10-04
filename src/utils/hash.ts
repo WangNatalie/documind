@@ -40,9 +40,8 @@ export async function generateDocHash(source: { type: 'url' | 'uploadId'; value:
 }): Promise<string> {
   const encoder = new TextEncoder();
   let data: Uint8Array;
-
   if (source.type === 'url') {
-    // Hash: URL + ETag + Content-Length
+    // Hash: URL + ETag + Content-Length (leave URL-based hashing unchanged)
     const parts = [
       source.value,
       metadata?.etag || '',
@@ -50,11 +49,10 @@ export async function generateDocHash(source: { type: 'url' | 'uploadId'; value:
     ];
     data = encoder.encode(parts.join('|'));
   } else {
-    // Hash: uploadId + size + first/last 64KB
-    const parts = [
-      source.value,
-      metadata?.size?.toString() || '',
-    ];
+    // For uploadId (OPFS) flows, compute a content-only hash so identical files
+    // produce the same hash regardless of the ephemeral uploadId.
+    // Hash input: size + firstBytes + lastBytes (when available)
+    const parts = [metadata?.size?.toString() || ''];
     let combined = encoder.encode(parts.join('|'));
 
     // Append first/last bytes if available
@@ -77,6 +75,60 @@ export async function generateDocHash(source: { type: 'url' | 'uploadId'; value:
   }
 
   // Use SubtleCrypto to hash - create a new ArrayBuffer to ensure proper typing
+  const buffer = new ArrayBuffer(data.length);
+  const view = new Uint8Array(buffer);
+  view.set(data);
+
+  const hashBuffer = await crypto.subtle.digest('SHA-256', buffer);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+// Legacy hash generator that reproduces the previous behavior for uploadId-based hashing
+// (included uploadId string as part of the hashed input). This is exported so callers
+// can do a fallback lookup for existing DB records created with the old algorithm.
+export async function generateLegacyUploadHash(source: { type: 'url' | 'uploadId'; value: string }, metadata?: {
+  size?: number;
+  firstBytes?: ArrayBuffer;
+  lastBytes?: ArrayBuffer;
+}): Promise<string> {
+  const encoder = new TextEncoder();
+  let data: Uint8Array;
+
+  if (source.type === 'uploadId') {
+    // Legacy: uploadId + size + first/last 64KB
+    const parts = [
+      source.value,
+      metadata?.size?.toString() || '',
+    ];
+    let combined = encoder.encode(parts.join('|'));
+
+    if (metadata?.firstBytes) {
+      const firstArray = new Uint8Array(metadata.firstBytes);
+      const temp = new Uint8Array(combined.length + firstArray.length);
+      temp.set(combined);
+      temp.set(firstArray, combined.length);
+      combined = temp;
+    }
+    if (metadata?.lastBytes) {
+      const lastArray = new Uint8Array(metadata.lastBytes);
+      const temp = new Uint8Array(combined.length + lastArray.length);
+      temp.set(combined);
+      temp.set(lastArray, combined.length);
+      combined = temp;
+    }
+
+    data = combined;
+  } else {
+    // For URL-based sources, reuse the existing URL hash behavior
+    const parts = [
+      source.value,
+      '',
+      '',
+    ];
+    data = encoder.encode(parts.join('|'));
+  }
+
   const buffer = new ArrayBuffer(data.length);
   const view = new Uint8Array(buffer);
   view.set(data);
