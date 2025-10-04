@@ -6,7 +6,7 @@ import { Toolbar } from './Toolbar';
 import { useRenderQueue, CanvasCache } from './useRenderQueue';
 import { parseHash, updateHash } from '../utils/hash';
 import { generateDocHash } from '../utils/hash';
-import { getDoc, putDoc, updateDocState } from '../db';
+import { getDoc, putDoc, updateDocState, putHighlight, getHighlightsByDoc } from '../db';
 import { readOPFSFile } from '../db/opfs';
 import ContextMenu from './ContextMenu';
 
@@ -32,6 +32,7 @@ export const ViewerApp: React.FC = () => {
   // Context menu state
   const [contextVisible, setContextVisible] = useState(false);
   const [contextPos, setContextPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const [highlights, setHighlights] = useState<Array<any>>([]);
 
   // Parse URL params
   const params = new URLSearchParams(window.location.search);
@@ -138,6 +139,16 @@ export const ViewerApp: React.FC = () => {
           setIsInitialLoad(false);
         }, 200);
 
+        // Load highlights for this document
+        (async () => {
+          try {
+            const hs = await getHighlightsByDoc(hash);
+            setHighlights(hs || []);
+          } catch (err) {
+            console.error('Failed to load highlights', err);
+          }
+        })();
+
         // Create or update doc record
         if (!existingDoc) {
           await putDoc({
@@ -185,6 +196,61 @@ export const ViewerApp: React.FC = () => {
       window.removeEventListener('click', onClick);
     };
   }, []);
+
+  // Handle context menu actions (highlight creation, note, etc.)
+  const handleContextAction = async (action: string) => {
+    if (!action.startsWith('highlight:')) return;
+    const color = action.split(':')[1];
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return;
+
+    const range = sel.getRangeAt(0);
+    const rects = Array.from(range.getClientRects()).map(r => ({
+      top: r.top,
+      left: r.left,
+      width: r.width,
+      height: r.height,
+    }));
+
+    // Find which page these rects belong to (use first rect)
+    const first = rects[0];
+    if (!first) return;
+
+    // Determine page element and compute rects relative to page box
+    const pageEl = document.elementFromPoint(first.left + 1, first.top + 1)?.closest('[data-page-num]') as HTMLElement | null;
+    if (!pageEl) return;
+    const pageNum = parseInt(pageEl.getAttribute('data-page-num') || '0', 10);
+    const pageBox = pageEl.getBoundingClientRect();
+
+    const relRects = rects.map(r => ({
+      top: r.top - pageBox.top,
+      left: r.left - pageBox.left,
+      width: r.width,
+      height: r.height,
+    }));
+
+    // Persist highlight
+    const id = `${docHash}:${pageNum}:${Date.now()}`;
+    const h = {
+      id,
+      docHash,
+      page: pageNum,
+      rects: relRects,
+      color,
+      createdAt: Date.now(),
+    };
+
+    try {
+      await putHighlight(h);
+      setHighlights(prev => [...prev, h]);
+    } catch (err) {
+      console.error('Failed to save highlight', err);
+    }
+
+    // Clear selection and close menu
+    window.getSelection()?.removeAllRanges();
+    setContextVisible(false);
+  };
 
   // Calculate scale when zoom changes or container resizes
   useEffect(() => {
@@ -484,16 +550,13 @@ export const ViewerApp: React.FC = () => {
                 isVisible={isVisible}
                 shouldRender={shouldRender}
                 onRender={handleRender}
+                highlights={highlights.filter((h) => h.page === pageNum)}
               />
             );
           })}
         </div>
       </div>
-      <ContextMenu visible={contextVisible} x={contextPos.x} y={contextPos.y} onSelect={(a) => {
-        // Placeholder: we will implement actions later
-        console.log('Context action:', a);
-        setContextVisible(false);
-      }} />
+      <ContextMenu visible={contextVisible} x={contextPos.x} y={contextPos.y} onSelect={(a) => handleContextAction(a)} />
     </div>
   );
 };

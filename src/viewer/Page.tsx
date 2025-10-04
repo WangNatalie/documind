@@ -13,6 +13,11 @@ interface PageProps {
     textLayerDiv: HTMLDivElement | null,
     priority: number
   ) => Promise<void>;
+  highlights?: Array<{
+    id: string;
+    rects: { top: number; left: number; width: number; height: number }[];
+    color: string;
+  }>;
 }
 
 export const Page: React.FC<PageProps> = ({
@@ -22,6 +27,7 @@ export const Page: React.FC<PageProps> = ({
   isVisible,
   shouldRender,
   onRender,
+  highlights = [],
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const textLayerRef = useRef<HTMLDivElement>(null);
@@ -126,12 +132,26 @@ export const Page: React.FC<PageProps> = ({
           ref={canvasRef}
           className={`block ${isLoading || error ? "invisible" : "visible"}`}
         />
-        {/* Text layer for text selection */}
+        {/* Text layer for text selection (hidden visually but present for selection) */}
         <div
           ref={textLayerRef}
-          className="absolute top-0 left-0 text-layer"
+          className="absolute top-0 left-0 text-layer z-10 text-transparent"
           style={{ width: `${width}px`, height: `${height}px` }}
         />
+        {/* Highlights overlays */}
+        {highlights.map(h => (
+          <React.Fragment key={h.id}>
+            {h.rects.map((r, i) => (
+              <div
+                key={`${h.id}-${i}`}
+                className={`absolute rounded-md pointer-events-none z-20 ${
+                  h.color === 'yellow' ? 'bg-yellow-300/30' : h.color === 'green' ? 'bg-emerald-200/30' : 'bg-sky-200/30'
+                }`}
+                style={{ top: r.top, left: r.left, width: r.width, height: r.height }}
+              />
+            ))}
+          </React.Fragment>
+        ))}
       </div>
     </div>
   );
