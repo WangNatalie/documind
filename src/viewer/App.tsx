@@ -9,13 +9,16 @@ import { generateDocHash } from '../utils/hash';
 import { getDoc, putDoc, updateDocState } from '../db';
 import { readOPFSFile } from '../db/opfs';
 
-const ZOOM_LEVELS = [50, 75, 100, 125, 150, 200, 300];
+const ZOOM_LEVELS = [50, 75, 90, 100, 125, 150, 175, 200, 250, 300];
 
 export const ViewerApp: React.FC = () => {
+  console.log('🚀 ViewerApp component rendering - RELOAD VERIFIED');
+
   const [pdf, setPdf] = useState<PDFDocumentProxy | null>(null);
   const [pages, setPages] = useState<(PDFPageProxy | null)[]>([]);
   const [currentPage, setCurrentPage] = useState(1);
-  const [zoom, setZoom] = useState<string>('fitWidth');
+
+  const [zoom, setZoom] = useState<string>('fitPage');
   const [scale, setScale] = useState(1);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -25,7 +28,7 @@ export const ViewerApp: React.FC = () => {
   const observerRef = useRef<IntersectionObserver | null>(null);
   const renderQueue = useRenderQueue();
   const canvasCacheRef = useRef(new CanvasCache());
-  const visiblePagesRef = useRef<Set<number>>(new Set());
+  const visiblePagesRef = useRef<Set<number>>(new Set([1]));
 
   // Parse URL params
   const params = new URLSearchParams(window.location.search);
@@ -82,6 +85,7 @@ export const ViewerApp: React.FC = () => {
 
         setDocHash(hash);
         setPdf(pdfDoc);
+        console.log('📄 PDF loaded successfully, pages:', pdfDoc.numPages);
 
         // Load all pages
         const pageCount = pdfDoc.numPages;
@@ -91,6 +95,7 @@ export const ViewerApp: React.FC = () => {
         }
         const loadedPages = await Promise.all(pagePromises);
         setPages(loadedPages);
+        console.log('📚 All pages loaded into state, count:', loadedPages.length);
 
         // Restore last state or use hash
         const existingDoc = await getDoc(hash);
@@ -161,45 +166,79 @@ export const ViewerApp: React.FC = () => {
   useEffect(() => {
     if (!containerRef.current || pages.length === 0) return;
 
-    observerRef.current = new IntersectionObserver(
-      (entries) => {
-        let mostVisiblePage = currentPage;
-        let maxRatio = 0;
+    console.log('[IntersectionObserver] Setting up observer, pages:', pages.length);
 
-        entries.forEach((entry) => {
-          const pageNum = parseInt(entry.target.getAttribute('data-page-num') || '0', 10);
+    // Small delay to ensure page elements are in the DOM
+    const timeoutId = setTimeout(() => {
+      const container = containerRef.current;
+      if (!container) {
+        console.log('[IntersectionObserver] Container not available');
+        return;
+      }
 
-          if (entry.isIntersecting) {
-            visiblePagesRef.current.add(pageNum);
+      const updateCurrentPage = (pageNum: number) => {
+        console.log('[IntersectionObserver] Updating current page to:', pageNum);
+        setCurrentPage(pageNum);
+      };
 
-            // Track most visible page (>= 60%)
-            if (entry.intersectionRatio > maxRatio) {
-              maxRatio = entry.intersectionRatio;
-              if (entry.intersectionRatio >= 0.6) {
+      observerRef.current = new IntersectionObserver(
+        (entries) => {
+          let mostVisiblePage = 0;
+          let maxRatio = 0;
+
+          entries.forEach((entry) => {
+            const pageNum = parseInt(entry.target.getAttribute('data-page-num') || '0', 10);
+
+            if (entry.isIntersecting) {
+              visiblePagesRef.current.add(pageNum);
+
+              // Track most visible page
+              if (entry.intersectionRatio > maxRatio) {
+                maxRatio = entry.intersectionRatio;
                 mostVisiblePage = pageNum;
               }
+            } else {
+              visiblePagesRef.current.delete(pageNum);
             }
-          } else {
-            visiblePagesRef.current.delete(pageNum);
+          });
+
+          // Update current page if we found a visible page with decent ratio
+          if (mostVisiblePage > 0 && maxRatio >= 0.3) {
+            updateCurrentPage(mostVisiblePage);
           }
-        });
-
-        // Update current page if changed
-        if (mostVisiblePage !== currentPage && maxRatio >= 0.6) {
-          setCurrentPage(mostVisiblePage);
+        },
+        {
+          root: container,
+          threshold: [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0],
+          rootMargin: '0px'
         }
-      },
-      { threshold: [0, 0.25, 0.5, 0.6, 0.75, 1.0] }
-    );
+      );
 
-    // Observe all pages
-    const pageElements = containerRef.current.querySelectorAll('[data-page-num]');
-    pageElements.forEach((el) => observerRef.current?.observe(el));
+      // Observe all pages
+      const pageElements = container.querySelectorAll('[data-page-num]');
+      console.log(`[IntersectionObserver] Found ${pageElements.length} page elements to observe`);
+      pageElements.forEach((el) => observerRef.current?.observe(el));
+
+      // Trigger initial visibility check
+      if (pageElements.length > 0) {
+        console.log('[IntersectionObserver] Triggering initial visibility check');
+        // Small delay to ensure layout is complete
+        setTimeout(() => {
+          // Force re-observation to trigger initial callbacks
+          pageElements.forEach((el) => {
+            observerRef.current?.unobserve(el);
+            observerRef.current?.observe(el);
+          });
+        }, 50);
+      }
+    }, 150);
 
     return () => {
+      console.log('[IntersectionObserver] Cleaning up observer');
+      clearTimeout(timeoutId);
       observerRef.current?.disconnect();
     };
-  }, [pages, currentPage]);
+  }, [pages]);
 
   // Update hash when page/zoom changes
   useEffect(() => {
@@ -218,33 +257,7 @@ export const ViewerApp: React.FC = () => {
     return () => clearTimeout(timeoutId);
   }, [currentPage, zoom, docHash]);
 
-  // Keyboard navigation
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      const isMod = e.ctrlKey || e.metaKey;
-
-      if (e.key === 'ArrowLeft' || e.key === 'PageUp') {
-        e.preventDefault();
-        handlePrevPage();
-      } else if (e.key === 'ArrowRight' || e.key === 'PageDown') {
-        e.preventDefault();
-        handleNextPage();
-      } else if (isMod && e.key === '+') {
-        e.preventDefault();
-        handleZoomIn();
-      } else if (isMod && e.key === '-') {
-        e.preventDefault();
-        handleZoomOut();
-      } else if (isMod && e.key === '0') {
-        e.preventDefault();
-        setZoom('fitWidth');
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [currentPage, zoom, pages.length]);
-
+  // Handler functions
   const handlePrevPage = useCallback(() => {
     if (currentPage > 1) {
       scrollToPage(currentPage - 1);
@@ -284,11 +297,58 @@ export const ViewerApp: React.FC = () => {
     }
   }, [zoom]);
 
-  const handleRender = useCallback(async (pageNum: number, canvas: HTMLCanvasElement, priority: number) => {
+  // Keyboard navigation and ctrl+scroll zoom
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const isMod = e.ctrlKey || e.metaKey;
+
+      if (e.key === 'ArrowLeft' || e.key === 'PageUp') {
+        e.preventDefault();
+        handlePrevPage();
+      } else if (e.key === 'ArrowRight' || e.key === 'PageDown') {
+        e.preventDefault();
+        handleNextPage();
+      } else if (isMod && e.key === '+') {
+        e.preventDefault();
+        handleZoomIn();
+      } else if (isMod && e.key === '-') {
+        e.preventDefault();
+        handleZoomOut();
+      } else if (isMod && e.key === '0') {
+        e.preventDefault();
+        setZoom('fitWidth');
+      }
+    };
+
+    const handleWheel = (e: WheelEvent) => {
+      if (e.ctrlKey || e.metaKey) {
+        e.preventDefault();
+        if (e.deltaY < 0) {
+          handleZoomIn();
+        } else {
+          handleZoomOut();
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('wheel', handleWheel, { passive: false });
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('wheel', handleWheel);
+    };
+  }, [handlePrevPage, handleNextPage, handleZoomIn, handleZoomOut]);
+
+  const handleRender = useCallback(async (
+    pageNum: number,
+    canvas: HTMLCanvasElement,
+    textLayerDiv: HTMLDivElement | null,
+    priority: number
+  ) => {
     const page = pages[pageNum - 1];
     if (!page) return;
 
-    await renderQueue.enqueue(pageNum, page, canvas, scale, priority);
+    await renderQueue.enqueue(pageNum, page, canvas, textLayerDiv, scale, priority);
     canvasCacheRef.current.add(pageNum, canvas);
   }, [pages, scale, renderQueue]);
 
@@ -364,19 +424,28 @@ export const ViewerApp: React.FC = () => {
 
       <div
         ref={containerRef}
-        className="flex-1 overflow-y-auto overflow-x-hidden"
+        className="flex-1 overflow-auto"
       >
-        <div className="mx-auto max-w-[min(100%,1200px)] py-4">
-          {pages.map((page, idx) => (
-            <Page
-              key={idx + 1}
-              pageNum={idx + 1}
-              page={page}
-              scale={scale}
-              isVisible={visiblePagesRef.current.has(idx + 1)}
-              onRender={handleRender}
-            />
-          ))}
+        <div className="py-4 flex flex-col items-center">
+          {pages.map((page, idx) => {
+            const pageNum = idx + 1;
+            const isVisible = visiblePagesRef.current.has(pageNum);
+            // Render visible pages + 2 pages buffer above/below
+            const shouldRender = isVisible ||
+              Array.from(visiblePagesRef.current).some(vp => Math.abs(vp - pageNum) <= 2);
+
+            return (
+              <Page
+                key={pageNum}
+                pageNum={pageNum}
+                page={page}
+                scale={scale}
+                isVisible={isVisible}
+                shouldRender={shouldRender}
+                onRender={handleRender}
+              />
+            );
+          })}
         </div>
       </div>
     </div>
