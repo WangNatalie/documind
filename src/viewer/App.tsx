@@ -239,7 +239,7 @@ export const ViewerApp: React.FC = () => {
               getChunksByDoc(hash),
               getTableOfContents(hash)
             ]);
-            
+
             if (chunks.length > 0 && !toc) {
               console.log('[App] Document has chunks but no TOC, triggering TOC generation');
               const tocResponse = await requestTOC({
@@ -247,7 +247,7 @@ export const ViewerApp: React.FC = () => {
                 fileUrl: fileUrl || undefined,
                 uploadId: uploadId || undefined,
               });
-              
+
               if (tocResponse.success) {
                 console.log('TOC generation task created:', tocResponse.taskId);
               } else {
