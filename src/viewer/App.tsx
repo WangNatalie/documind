@@ -17,12 +17,15 @@ import {
   getCommentsByDoc,
   deleteNote,
   deleteComment,
-  getChunksByDoc,
   getTableOfContents,
+  getChunksByDoc,
+  type TableOfContentsRecord,
 } from "../db";
 import { readOPFSFile } from "../db/opfs";
 import ContextMenu from "./ContextMenu";
 import { requestGeminiChunking, requestEmbeddings, requestTOC } from "../utils/chunker-client";
+import { buildTOCTree } from "../utils/toc";
+import { TOC } from "./TOC";
 
 const ZOOM_LEVELS = [50, 75, 90, 100, 125, 150, 175, 200, 250, 300, 350, 400, 500];
 
@@ -38,6 +41,9 @@ export const ViewerApp: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [docHash, setDocHash] = useState<string>("");
   const [isInitialLoad, setIsInitialLoad] = useState(true);
+  const [tableOfContents, setTableOfContents] = useState<TableOfContentsRecord | null>(null);
+
+  // (nestedTOCNodes computed later for use in render)
 
   const containerRef = useRef<HTMLDivElement>(null);
   const observerRef = useRef<IntersectionObserver | null>(null);
@@ -79,6 +85,11 @@ export const ViewerApp: React.FC = () => {
     color: string;
     rects: Array<{ top: number; left: number; width: number; height: number }>;
   } | null>(null);
+  const [tocOpen, setTocOpen] = useState(false);
+  const [tocPinned, setTocPinned] = useState(false);
+  // Toolbar ref so we can measure its height and avoid covering it with the TOC drawer
+  const toolbarRef = useRef<HTMLDivElement | null>(null);
+  const [toolbarHeight, setToolbarHeight] = useState(0);
 
   // Parse URL params
   const params = new URLSearchParams(window.location.search);
@@ -94,9 +105,9 @@ export const ViewerApp: React.FC = () => {
         // Extract text from visible pages
         let visibleText = '';
         const visiblePages = Array.from(visiblePagesRef.current).sort((a, b) => a - b);
-        
+
         console.log('[VIEWER] Processing state request for visible pages:', visiblePages);
-        
+
         for (const pageNum of visiblePages) {
           const pageEl = document.querySelector(`[data-page-num="${pageNum}"]`);
           if (pageEl) {
@@ -341,113 +352,111 @@ export const ViewerApp: React.FC = () => {
           }
         }
 
-        // Helper function to check and generate TOC if needed
+        // Helper: check DB for chunks/TOC and generate TOC when appropriate.
         const checkAndGenerateTOC = async () => {
           console.log('[App] checkAndGenerateTOC called for document:', hash);
           try {
             const [chunks, toc] = await Promise.all([
               getChunksByDoc(hash),
-              getTableOfContents(hash)
+              getTableOfContents(hash),
             ]);
-            
+
             console.log('[App] TOC check results:', {
               chunksCount: chunks.length,
               hasTOC: !!toc,
-              tocItemsCount: toc?.items?.length || 0
+              tocItemsCount: toc?.items?.length || 0,
             });
-            
-            if (chunks.length > 0 && !toc) {
-              console.log('[App] Document has chunks but no TOC, triggering TOC generation');
-              const tocResponse = await requestTOC({
-                docHash: hash,
-                fileUrl: fileUrl || undefined,
-                uploadId: uploadId || undefined,
-              });
 
-              if (tocResponse.success) {
-                console.log('[App] TOC generation task created:', tocResponse.taskId);
-              } else {
-                console.warn('[App] Failed to create TOC task:', tocResponse.error);
-              }
-            } else if (chunks.length === 0) {
+            if (toc) {
+              setTableOfContents(toc);
+              console.log('[App] TOC already present, skipping generation');
+              return;
+            }
+
+            if (chunks.length === 0) {
               console.log('[App] No chunks found, skipping TOC generation');
-            } else if (toc) {
-              console.log('[App] TOC already exists, skipping generation');
+              return;
+            }
+
+            // There are chunks but no TOC — request TOC generation
+            console.log('[App] Document has chunks but no TOC, requesting TOC generation');
+            const tocResponse = await requestTOC({
+              docHash: hash,
+              fileUrl: fileUrl || undefined,
+              uploadId: uploadId || undefined,
+            });
+
+            if (!tocResponse.success) {
+              console.warn('[App] Failed to create TOC task:', tocResponse.error);
+              return;
+            }
+
+            console.log('[App] TOC generation task created:', tocResponse.taskId);
+
+            // Poll for TOC to appear in DB (bounded retries)
+            const maxAttempts = 15;
+            const baseDelayMs = 1000;
+            for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+              try {
+                await new Promise((res) => setTimeout(res, baseDelayMs));
+                const newTOC = await getTableOfContents(hash);
+                if (newTOC) {
+                  console.log(`[App] TOC ready after ${attempt} ${attempt === 1 ? 'attempt' : 'attempts'}`);
+                  setTableOfContents(newTOC);
+                  break;
+                }
+              } catch (pollErr) {
+                console.warn('[App] Error while polling for TOC (non-fatal):', pollErr);
+              }
             }
           } catch (err) {
-            console.error('[App] Error checking TOC status (non-fatal):', err);
+            console.error('[App] Error checking/creating TOC (non-fatal):', err);
           }
         };
 
-        // Check immediately for existing chunks (handles documents processed before TOC feature)
+        // Kick off initial check
         console.log('[App] Starting initial TOC check...');
         checkAndGenerateTOC();
 
-        // Pass URL directly for url-based PDFs
+        // Start chunking+embedding workflow (for URL or OPFS uploadId)
         if (fileUrl) {
-          requestGeminiChunking({
-            docHash: hash,
-            fileUrl: fileUrl,
-          })
+          requestGeminiChunking({ docHash: hash, fileUrl })
             .then((response) => {
-              if (response.success) {
-                console.log("Chunking task created:", response.taskId);
-              } else {
-                console.error(
-                  "Failed to create chunking task:",
-                  response.error
-                );
-              }
-
-              // Always request embeddings after chunking (will only generate missing ones)
+              if (response.success) console.log('Chunking task created:', response.taskId);
+              else console.error('Failed to create chunking task:', response.error);
               return requestEmbeddings(hash);
             })
             .then((embeddingResponse) => {
               if (embeddingResponse?.success) {
                 console.log(`Embeddings generated: ${embeddingResponse.count} new embeddings`);
               } else if (embeddingResponse?.error) {
-                console.warn("Failed to generate embeddings:", embeddingResponse.error);
+                console.warn('Failed to generate embeddings:', embeddingResponse.error);
               }
-              
-              // After embeddings, check again for TOC (in case chunks were just created)
               console.log('[App] Checking for TOC after embeddings complete...');
               return checkAndGenerateTOC();
             })
             .catch((err) => {
-              console.error("Error in chunking/embedding workflow:", err);
+              console.error('Error in chunking/embedding workflow:', err);
             });
         } else if (uploadId) {
-          console.log("[App.tsx] Requesting chunking with uploadId:", uploadId);
-          requestGeminiChunking({
-            docHash: hash,
-            uploadId: uploadId,
-          })
+          console.log('[App.tsx] Requesting chunking with uploadId:', uploadId);
+          requestGeminiChunking({ docHash: hash, uploadId })
             .then((response) => {
-              if (response.success) {
-                console.log("Chunking task created:", response.taskId);
-              } else {
-                console.error(
-                  "Failed to create chunking task:",
-                  response.error
-                );
-              }
-
-              // Always request embeddings after chunking (will only generate missing ones)
+              if (response.success) console.log('Chunking task created:', response.taskId);
+              else console.error('Failed to create chunking task:', response.error);
               return requestEmbeddings(hash);
             })
             .then((embeddingResponse) => {
               if (embeddingResponse?.success) {
                 console.log(`Embeddings generated: ${embeddingResponse.count} new embeddings`);
               } else if (embeddingResponse?.error) {
-                console.warn("Failed to generate embeddings:", embeddingResponse.error);
+                console.warn('Failed to generate embeddings:', embeddingResponse.error);
               }
-              
-              // After embeddings, check again for TOC (in case chunks were just created)
               console.log('[App] Checking for TOC after embeddings complete...');
               return checkAndGenerateTOC();
             })
             .catch((err) => {
-              console.error("Error in chunking/embedding workflow:", err);
+              console.error('Error in chunking/embedding workflow:', err);
             });
         }
 
@@ -461,6 +470,63 @@ export const ViewerApp: React.FC = () => {
 
     loadDocument();
   }, [fileUrl, uploadId]);
+
+  // Keep track of TOC state changes for debugging and to ensure the value is used
+  useEffect(() => {
+    if (tableOfContents) {
+      console.log('[App] Table of Contents updated:', tableOfContents);
+    }
+  }, [tableOfContents]);
+
+  const handleToggleTOC = useCallback(() => {
+    // Treat the toolbar hamburger as the "pin" toggle: clicking it toggles pinned state
+    setTocPinned((prev) => {
+      const next = !prev;
+      if (next) setTocOpen(true); // when pinned, ensure the TOC is open
+      else setTocOpen(false); // when unpinned, close the TOC
+      return next;
+    });
+  }, []);
+
+  const handleTOCSelect = useCallback((item: any) => {
+    // scroll to page when TOC entry clicked
+    if (typeof item.page === 'number') {
+      scrollToPage(item.page);
+      if (!tocPinned) setTocOpen(false);
+    }
+  }, [tocPinned]);
+
+  // Measure toolbar height so the TOC drawer doesn't cover it
+  useEffect(() => {
+    const el = toolbarRef.current;
+    if (!el) return;
+
+    const update = () => setToolbarHeight(el.getBoundingClientRect().height || 0);
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [toolbarRef.current]);
+
+  // Hover behavior: auto-open when cursor hits left edge; auto-close when leaving unless pinned
+  const hoverCloseTimeout = useRef<number | null>(null);
+
+  const openFromHover = useCallback(() => {
+    if (hoverCloseTimeout.current) {
+      window.clearTimeout(hoverCloseTimeout.current);
+      hoverCloseTimeout.current = null;
+    }
+    setTocOpen(true);
+  }, []);
+
+  const scheduleCloseFromHover = useCallback(() => {
+    if (tocPinned) return; // don't auto-close when pinned
+    if (hoverCloseTimeout.current) window.clearTimeout(hoverCloseTimeout.current);
+    hoverCloseTimeout.current = window.setTimeout(() => {
+      setTocOpen(false);
+      hoverCloseTimeout.current = null;
+    }, 200); // small delay to avoid flicker
+  }, [tocPinned]);
 
   // Right-click to open custom context menu
   useEffect(() => {
@@ -950,12 +1016,12 @@ export const ViewerApp: React.FC = () => {
         console.error("Failed to delete note", err);
       }
     }, []);
-  
+
     const handleNoteEdit = useCallback(async (id: string, newText: string) => {
       try {
         const note = notes.find((n) => n.id === id);
         if (!note) return;
-  
+
         const updatedNote = { ...note, text: newText.trim() || undefined };
         await putNote(updatedNote);
         setNotes((prev) =>
@@ -965,7 +1031,7 @@ export const ViewerApp: React.FC = () => {
         console.error("Failed to update note", err);
       }
     }, [notes]);
-  
+
     // Comment handlers
     const handleCommentDelete = useCallback(async (id: string) => {
       try {
@@ -975,12 +1041,12 @@ export const ViewerApp: React.FC = () => {
         console.error("Failed to delete comment", err);
       }
     }, []);
-  
+
     const handleCommentEdit = useCallback(async (id: string, newText: string) => {
       try {
         const comment = comments.find((c) => c.id === id);
         if (!comment) return;
-  
+
         const updatedComment = { ...comment, text: newText };
         await putComment(updatedComment);
         setComments((prev) =>
@@ -1286,9 +1352,11 @@ export const ViewerApp: React.FC = () => {
   return (
     <div className="h-screen flex flex-col bg-neutral-50 dark:bg-neutral-900">
       <Toolbar
+        ref={toolbarRef}
         currentPage={currentPage}
         totalPages={pages.length}
         zoom={zoom}
+        onToggleTOC={handleToggleTOC}
         onPrevPage={handlePrevPage}
         onNextPage={handleNextPage}
         onZoomIn={handleZoomIn}
@@ -1299,6 +1367,34 @@ export const ViewerApp: React.FC = () => {
         onDownload={handleDownload}
         onPrint={handlePrint}
       />
+
+      {/* Left-edge hover target: 12px wide invisible strip to auto-open TOC when cursor hits the edge */}
+      <div
+        onMouseEnter={() => openFromHover()}
+        onMouseLeave={() => scheduleCloseFromHover()}
+        style={{ width: 12 }}
+        className="fixed left-0 top-0 h-full z-40 bg-transparent"
+        aria-hidden
+      />
+
+      {/* TOC slide-out panel. It is positioned below the toolbar and does not cover toolbar.
+          When TOC is open from hover, overlay does not block interaction (pointer-events-none).
+          If pinned, we add a small clickable close area and pointer events for overlay. */}
+      <div
+        className={`fixed left-0 top-0 z-50 transform transition-transform ${tocOpen ? 'translate-x-0' : '-translate-x-full'}`}
+        style={{
+          // offset by toolbar height so the drawer doesn't cover the toolbar
+          top: toolbarHeight,
+          height: `calc(100% - ${toolbarHeight}px)`,
+          // ensure it doesn't capture pointer events when open due to hover-only
+        }}
+        onMouseEnter={() => openFromHover()}
+        onMouseLeave={() => scheduleCloseFromHover()}
+      >
+        <div className="relative h-full">
+          <TOC items={tableOfContents ? buildTOCTree(tableOfContents.items) : []} onSelect={handleTOCSelect} />
+        </div>
+      </div>
 
       <div ref={containerRef} className="flex-1 overflow-auto">
         <div className="py-4 flex flex-col items-center">
