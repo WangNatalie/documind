@@ -13,6 +13,7 @@ import { GoogleGenAI } from '@google/genai';
 import { getGeminiApiKey } from './gemini-config';
 
 // Configuration
+import { GEMINI_API_KEY } from './api_key';
 const GEMINI_MODEL = 'gemini-2.5-flash'; // Fast model for TOC generation
 const MAX_FIRST_CHUNKS = 5; // Number of first chunks to include in AI prompt
 

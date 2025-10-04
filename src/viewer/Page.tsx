@@ -33,8 +33,6 @@ interface PageProps {
 
 const ZOOM_DEBOUNCE_MS = 75;
 
-const ZOOM_DEBOUNCE_MS = 75;
-
 export const Page: React.FC<PageProps> = ({
   pageNum,
   page,
@@ -54,6 +52,10 @@ export const Page: React.FC<PageProps> = ({
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const renderedScaleRef = useRef<number>(0);
+  const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
+  const [editingNoteText, setEditingNoteText] = useState("");
+  const [editingCommentId, setEditingCommentId] = useState<string | null>(null);
+  const [editingCommentText, setEditingCommentText] = useState("");
   const targetScaleRef = useRef<number>(0);
   const renderTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const lastCSSScaleRef = useRef<number>(0);
