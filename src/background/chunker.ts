@@ -230,3 +230,108 @@ export async function processPendingTasks(): Promise<void> {
   }
 }
 
+
+/**
+ * Create a new Gemini-based chunking task for a PDF document
+ * This is a new method that uses Gemini instead of Chunkr while maintaining backwards compatibility
+ */
+export async function createGeminiChunkingTask(options: ChunkrTaskOptions): Promise<string> {
+  console.log('[background/chunker] createGeminiChunkingTask called with:', options);
+  const { docHash, fileUrl, uploadId } = options;
+
+  // Check if task already exists for this document
+  const existingTask = await getTaskByDocHash(docHash);
+  
+  if (existingTask) {
+    // If task is pending or processing, don't create a duplicate
+    if (existingTask.status === 'pending' || existingTask.status === 'processing') {
+      console.log(`Chunking task already in progress for document ${docHash} (status: ${existingTask.status})`);
+      return existingTask.taskId;
+    }
+    // If task is completed, verify chunks exist in IndexedDB
+    else if (existingTask.status === 'completed') {
+      console.log(`Task marked as completed for document ${docHash}, verifying chunks exist...`);
+      const chunksExist = await verifyChunksExist(docHash);
+      if (chunksExist) {
+        console.log(`Document ${docHash} already chunked with verified chunks`);
+        return existingTask.taskId;
+      } else {
+        console.warn(`Task marked completed but no chunks found. Re-chunking document ${docHash}`);
+        // Clean up the invalid task from storage
+        const tasks = await getTasksFromStorage();
+        delete tasks[existingTask.taskId];
+        await saveTasksToStorage(tasks);
+      }
+    }
+    // If task failed, we'll create a new one
+    else if (existingTask.status === 'failed') {
+      console.log(`Previous chunking task failed. Creating new Gemini task for document ${docHash}`);
+      const tasks = await getTasksFromStorage();
+      delete tasks[existingTask.taskId];
+      await saveTasksToStorage(tasks);
+    }
+  }
+
+  // Create task record
+  const taskId = nanoid();
+  const task: ChunkTaskRecord = {
+    taskId,
+    docHash,
+    status: 'pending',
+    fileUrl,
+    uploadId,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  };
+
+  await saveTask(task);
+  console.log(`Created Gemini chunking task ${taskId} for document ${docHash}`);
+
+  // Process the task in offscreen document (using Gemini)
+  processGeminiChunkingTask(taskId).catch((error) => {
+    console.error(`Failed to process Gemini chunking task ${taskId}:`, error);
+  });
+
+  return taskId;
+}
+
+/**
+ * Process a Gemini chunking task by delegating to offscreen document
+ */
+async function processGeminiChunkingTask(taskId: string): Promise<void> {
+  try {
+    // Get task from storage
+    const task = await getTaskById(taskId);
+    if (!task) {
+      console.error(`Task ${taskId} not found`);
+      return;
+    }
+
+    // Ensure offscreen document exists
+    await ensureOffscreenDocument();
+
+    // Send message to offscreen document for Gemini processing
+    const payload = { 
+      taskId: task.taskId,
+      docHash: task.docHash,
+      fileUrl: task.fileUrl,
+      uploadId: task.uploadId,
+    };
+    console.log('[background/chunker] Sending Gemini chunking to offscreen with payload:', payload);
+    const response = await chrome.runtime.sendMessage({
+      type: 'PROCESS_CHUNKING_TASK_GEMINI',
+      payload: payload,
+    });
+
+    if (!response.success) {
+      throw new Error(response.error || 'Unknown error processing Gemini task');
+    }
+    
+    // Update task status to completed in storage
+    await updateTaskStatus(taskId, 'completed');
+  } catch (error) {
+    console.error(`Error delegating Gemini chunking task ${taskId}:`, error);
+    // Update task status to failed
+    await updateTaskStatus(taskId, 'failed', error instanceof Error ? error.message : String(error));
+  }
+}

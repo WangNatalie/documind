@@ -17,10 +17,12 @@ import {
   getCommentsByDoc,
   deleteNote,
   deleteComment,
+  getChunksByDoc,
+  getTableOfContents,
 } from "../db";
 import { readOPFSFile } from "../db/opfs";
 import ContextMenu from "./ContextMenu";
-import { requestChunking, requestEmbeddings } from "../utils/chunker-client";
+import { requestGeminiChunking, requestEmbeddings, requestTOC } from "../utils/chunker-client";
 
 const ZOOM_LEVELS = [25, 50, 75, 90, 100, 125, 150, 175, 200, 250, 300, 350, 400, 500];
 
@@ -229,9 +231,37 @@ export const ViewerApp: React.FC = () => {
           }
         }
 
+        // Check if we need to generate TOC (for documents that have chunks but no TOC)
+        // This handles the case where a document was processed before TOC feature was added
+        (async () => {
+          try {
+            const [chunks, toc] = await Promise.all([
+              getChunksByDoc(hash),
+              getTableOfContents(hash)
+            ]);
+            
+            if (chunks.length > 0 && !toc) {
+              console.log('[App] Document has chunks but no TOC, triggering TOC generation');
+              const tocResponse = await requestTOC({
+                docHash: hash,
+                fileUrl: fileUrl || undefined,
+                uploadId: uploadId || undefined,
+              });
+              
+              if (tocResponse.success) {
+                console.log('TOC generation task created:', tocResponse.taskId);
+              } else {
+                console.warn('Failed to create TOC task:', tocResponse.error);
+              }
+            }
+          } catch (err) {
+            console.error('Error checking TOC status (non-fatal):', err);
+          }
+        })();
+
         // Pass URL directly for url-based PDFs
         if (fileUrl) {
-          requestChunking({
+          requestGeminiChunking({
             docHash: hash,
             fileUrl: fileUrl,
           })
@@ -260,7 +290,7 @@ export const ViewerApp: React.FC = () => {
             });
         } else if (uploadId) {
           console.log("[App.tsx] Requesting chunking with uploadId:", uploadId);
-          requestChunking({
+          requestGeminiChunking({
             docHash: hash,
             uploadId: uploadId,
           })

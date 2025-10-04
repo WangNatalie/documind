@@ -1,5 +1,6 @@
 // Background service worker for MV3
-import { createChunkingTask, processPendingTasks } from './chunker';
+import { createChunkingTask, createGeminiChunkingTask, processPendingTasks } from './chunker';
+import { createTOCTask, processPendingTOCTasks } from './toc';
 
 console.log('DocuMind background service worker loaded');
 
@@ -38,6 +39,13 @@ chrome.runtime.onInstalled.addListener(async () => {
     console.error('Failed to process pending chunking tasks:', error);
   }
 
+  // Process any pending TOC tasks from previous session
+  try {
+    await processPendingTOCTasks();
+  } catch (error) {
+    console.error('Failed to process pending TOC tasks:', error);
+  }
+
   // Future: Set up cleanup alarm
   // chrome.alarms.create('cleanup', { periodInMinutes: 60 });
 });
@@ -51,7 +59,7 @@ chrome.runtime.onInstalled.addListener(async () => {
 
 // Message handler for creating chunking tasks
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  if (message.type === 'CREATE_CHUNKING_TASK') {
+  if (message.type === 'CREATE_CHUNKING_TASK_CHUNKR') {
     console.log('[background/index] Received message:', message);
     const { docHash, fileUrl, uploadId } = message.payload;
     console.log('[background/index] Extracted params:', { docHash, fileUrl, uploadId });
@@ -62,6 +70,42 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       })
       .catch((error) => {
         console.error('Failed to create chunking task:', error);
+        sendResponse({ success: false, error: error.message });
+      });
+    
+    // Return true to indicate we'll send response asynchronously
+    return true;
+  }
+
+  if (message.type === 'CREATE_CHUNKING_TASK_GEMINI') {
+    console.log('[background/index] Received CREATE_CHUNKING_TASK_GEMINI message:', message);
+    const { docHash, fileUrl, uploadId } = message.payload;
+    console.log('[background/index] Extracted params:', { docHash, fileUrl, uploadId });
+    
+    createGeminiChunkingTask({ docHash, fileUrl, uploadId })
+      .then((taskId) => {
+        sendResponse({ success: true, taskId });
+      })
+      .catch((error) => {
+        console.error('Failed to create Gemini chunking task:', error);
+        sendResponse({ success: false, error: error.message });
+      });
+    
+    // Return true to indicate we'll send response asynchronously
+    return true;
+  }
+
+  if (message.type === 'CREATE_TOC_TASK') {
+    console.log('[background/index] Received CREATE_TOC_TASK message:', message);
+    const { docHash, fileUrl, uploadId } = message.payload;
+    console.log('[background/index] Extracted params:', { docHash, fileUrl, uploadId });
+    
+    createTOCTask({ docHash, fileUrl, uploadId })
+      .then((taskId) => {
+        sendResponse({ success: true, taskId });
+      })
+      .catch((error) => {
+        console.error('Failed to create TOC task:', error);
         sendResponse({ success: false, error: error.message });
       });
     

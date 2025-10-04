@@ -48,6 +48,28 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
   
+  if (message.type === 'PROCESS_CHUNKING_TASK_GEMINI') {
+    const { taskId, docHash, fileUrl, uploadId } = message.payload;
+    console.log(`Received PROCESS_CHUNKING_TASK_GEMINI message for task ${taskId}`);
+    
+    // Start keepalive during processing
+    startKeepalive();
+    
+    import('./chunker-offscreen.js').then(async (chunker) => {
+      await chunker.processChunkingTaskInOffscreenWithGemini({ taskId, docHash, fileUrl, uploadId });
+      console.log(`Gemini chunking task ${taskId} completed successfully`);
+      stopKeepalive();
+      sendResponse({ success: true });
+    }).catch((error: Error) => {
+      console.error('Failed to process Gemini chunking task in offscreen:', error);
+      stopKeepalive();
+      sendResponse({ success: false, error: error.message });
+    });
+    
+    // Return true to indicate we'll send response asynchronously
+    return true;
+  }
+  
   if (message.type === 'VERIFY_CHUNKS_EXIST') {
     const { docHash } = message.payload;
     console.log(`Verifying chunks exist for document ${docHash}`);
@@ -83,6 +105,47 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       console.error('Error generating embeddings:', error);
       stopKeepalive();
       sendResponse({ success: false, error: error.message });
+    });
+    
+    // Return true to indicate we'll send response asynchronously
+    return true;
+  }
+  
+  if (message.type === 'PROCESS_TOC_TASK') {
+    const { taskId, docHash, fileUrl, uploadId } = message.payload;
+    console.log(`Received PROCESS_TOC_TASK message for task ${taskId}`);
+    
+    // Start keepalive during processing
+    startKeepalive();
+    
+    import('./toc-generator.js').then(async (toc) => {
+      await toc.generateTableOfContents(docHash, fileUrl, uploadId);
+      console.log(`TOC task ${taskId} completed successfully`);
+      stopKeepalive();
+      sendResponse({ success: true });
+    }).catch((error: Error) => {
+      console.error('Failed to process TOC task in offscreen:', error);
+      stopKeepalive();
+      sendResponse({ success: false, error: error.message });
+    });
+    
+    // Return true to indicate we'll send response asynchronously
+    return true;
+  }
+  
+  if (message.type === 'VERIFY_TOC_EXISTS') {
+    const { docHash } = message.payload;
+    console.log(`Verifying TOC exists for document ${docHash}`);
+    
+    // Import getTableOfContents dynamically
+    import('../db/index.js').then(async (db) => {
+      const toc = await db.getTableOfContents(docHash);
+      const exists = !!toc;
+      console.log(`Document ${docHash} has TOC: ${exists}`);
+      sendResponse({ exists });
+    }).catch((error: Error) => {
+      console.error('Error verifying TOC:', error);
+      sendResponse({ exists: false });
     });
     
     // Return true to indicate we'll send response asynchronously
