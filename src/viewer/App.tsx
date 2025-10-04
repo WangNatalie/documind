@@ -73,7 +73,8 @@ export const ViewerApp: React.FC = () => {
   const params = new URLSearchParams(window.location.search);
   const fileUrl = params.get("file");
   const uploadId = params.get("uploadId");
-  const fileName = params.get("name") || "document.pdf";
+    // Keep filename in state so we can update it after reading PDF metadata
+    const [fileName, setFileName] = useState<string>(params.get("name") || "document.pdf");
 
   // Load PDF on mount
   useEffect(() => {
@@ -123,6 +124,43 @@ export const ViewerApp: React.FC = () => {
 
         setDocHash(hash);
         setPdf(pdfDoc);
+        // Update the browser tab title to the document name
+        try {
+            document.title = fileName || 'document.pdf';
+        } catch (e) {
+          // ignore in non-browser environments
+        }
+
+          // Derive a better filename synchronously (await metadata) so we can use it when persisting
+          let derivedName: string | undefined = params.get("name") || undefined;
+          if (!derivedName) {
+            try {
+              const meta = await (pdfDoc as any).getMetadata?.();
+              const title = meta?.info?.Title || meta?.info?.title || (meta?.metadata && typeof meta.metadata.get === 'function' ? meta.metadata.get('dc:title') : undefined);
+              if (title && typeof title === 'string' && title.trim().length > 0) {
+                derivedName = title.trim();
+              }
+            } catch (e) {
+              // ignore metadata errors
+            }
+          }
+
+          if (!derivedName && fileUrl) {
+            try {
+              const u = new URL(fileUrl);
+              const parts = u.pathname.split('/').filter(Boolean);
+              const last = parts[parts.length - 1] || '';
+              if (last) {
+                derivedName = decodeURIComponent(last.split('?')[0]) || undefined;
+              }
+            } catch (e) {
+              // ignore
+            }
+          }
+
+          if (!derivedName) derivedName = 'document.pdf';
+          setFileName(derivedName);
+          try { document.title = derivedName; } catch (e) {}
 
         // Load all pages
         const pageCount = pdfDoc.numPages;
@@ -330,7 +368,7 @@ export const ViewerApp: React.FC = () => {
     };
 
     loadDocument();
-  }, [fileUrl, uploadId, fileName]);
+  }, [fileUrl, uploadId]);
 
   // Right-click to open custom context menu
   useEffect(() => {
@@ -627,9 +665,11 @@ export const ViewerApp: React.FC = () => {
     // (especially after scale changes like fitPage/fitWidth) has settled and measurements are correct.
     if (isInitialLoad) {
       // Wait briefly for the scroll restoration to complete before checking visible pages
-      setTimeout(() => {
-        handleScroll();
-      }, 150);
+      // Call multiple times (staggered) to handle timing races in different browsers/devices
+      setTimeout(() => { handleScroll(); }, 150);
+      setTimeout(() => { handleScroll(); }, 350);
+      // immediate attempt as well (non-blocking)
+      setTimeout(() => { handleScroll(); }, 0);
     } else {
       // Use two RAFs to wait for layout & style updates (ensures accurate getBoundingClientRect after scale changes)
       requestAnimationFrame(() => {
