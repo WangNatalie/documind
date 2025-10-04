@@ -74,6 +74,66 @@ export const ViewerApp: React.FC = () => {
   const uploadId = params.get("uploadId");
   const fileName = params.get("name") || "document.pdf";
 
+  // Listen for state requests from background
+  useEffect(() => {
+    const handleMessage = (message: any) => {
+      if (message.type === 'REQUEST_VIEWER_STATE') {
+        // Extract text from visible pages
+        let visibleText = '';
+        const visiblePages = Array.from(visiblePagesRef.current).sort((a, b) => a - b);
+        
+        console.log('[VIEWER] Processing state request for visible pages:', visiblePages);
+        
+        for (const pageNum of visiblePages) {
+          const pageEl = document.querySelector(`[data-page-num="${pageNum}"]`);
+          if (pageEl) {
+            // Try both possible class names for text layer
+            const textLayer = pageEl.querySelector('.text-layer') || pageEl.querySelector('.textLayer');
+            if (textLayer) {
+              const pageText = textLayer.textContent || '';
+              console.log(`[VIEWER] Page ${pageNum} text length: ${pageText.length} chars`);
+              if (pageText.trim()) {
+                visibleText += `\n=== Page ${pageNum} ===\n${pageText}\n`;
+              }
+            } else {
+              console.log(`[VIEWER] No text layer found for page ${pageNum}`);
+            }
+          } else {
+            console.log(`[VIEWER] Page element not found for page ${pageNum}`);
+          }
+        }
+
+        console.log('[VIEWER] Sending state to background:', {
+          fileName,
+          currentPage,
+          totalPages: pages.length,
+          visiblePages,
+          textLength: visibleText.length
+        });
+
+        // Send current state to background
+        chrome.runtime.sendMessage({
+          type: 'UPDATE_VIEWER_STATE',
+          payload: {
+            docHash,
+            fileName,
+            currentPage,
+            totalPages: pages.length,
+            zoom,
+            visibleText: visibleText.trim(),
+          }
+        }).catch((error) => {
+          console.error('Failed to send viewer state:', error);
+        });
+      }
+    };
+
+    chrome.runtime.onMessage.addListener(handleMessage);
+    return () => {
+      chrome.runtime.onMessage.removeListener(handleMessage);
+    };
+  }, [docHash, fileName, currentPage, pages.length, zoom]);
+
   // Load PDF on mount
   useEffect(() => {
     const loadDocument = async () => {
@@ -231,14 +291,20 @@ export const ViewerApp: React.FC = () => {
           }
         }
 
-        // Check if we need to generate TOC (for documents that have chunks but no TOC)
-        // This handles the case where a document was processed before TOC feature was added
-        (async () => {
+        // Helper function to check and generate TOC if needed
+        const checkAndGenerateTOC = async () => {
+          console.log('[App] checkAndGenerateTOC called for document:', hash);
           try {
             const [chunks, toc] = await Promise.all([
               getChunksByDoc(hash),
               getTableOfContents(hash)
             ]);
+            
+            console.log('[App] TOC check results:', {
+              chunksCount: chunks.length,
+              hasTOC: !!toc,
+              tocItemsCount: toc?.items?.length || 0
+            });
             
             if (chunks.length > 0 && !toc) {
               console.log('[App] Document has chunks but no TOC, triggering TOC generation');
@@ -249,15 +315,23 @@ export const ViewerApp: React.FC = () => {
               });
               
               if (tocResponse.success) {
-                console.log('TOC generation task created:', tocResponse.taskId);
+                console.log('[App] TOC generation task created:', tocResponse.taskId);
               } else {
-                console.warn('Failed to create TOC task:', tocResponse.error);
+                console.warn('[App] Failed to create TOC task:', tocResponse.error);
               }
+            } else if (chunks.length === 0) {
+              console.log('[App] No chunks found, skipping TOC generation');
+            } else if (toc) {
+              console.log('[App] TOC already exists, skipping generation');
             }
           } catch (err) {
-            console.error('Error checking TOC status (non-fatal):', err);
+            console.error('[App] Error checking TOC status (non-fatal):', err);
           }
-        })();
+        };
+
+        // Check immediately for existing chunks (handles documents processed before TOC feature)
+        console.log('[App] Starting initial TOC check...');
+        checkAndGenerateTOC();
 
         // Pass URL directly for url-based PDFs
         if (fileUrl) {
@@ -284,6 +358,10 @@ export const ViewerApp: React.FC = () => {
               } else if (embeddingResponse?.error) {
                 console.warn("Failed to generate embeddings:", embeddingResponse.error);
               }
+              
+              // After embeddings, check again for TOC (in case chunks were just created)
+              console.log('[App] Checking for TOC after embeddings complete...');
+              return checkAndGenerateTOC();
             })
             .catch((err) => {
               console.error("Error in chunking/embedding workflow:", err);
@@ -313,6 +391,10 @@ export const ViewerApp: React.FC = () => {
               } else if (embeddingResponse?.error) {
                 console.warn("Failed to generate embeddings:", embeddingResponse.error);
               }
+              
+              // After embeddings, check again for TOC (in case chunks were just created)
+              console.log('[App] Checking for TOC after embeddings complete...');
+              return checkAndGenerateTOC();
             })
             .catch((err) => {
               console.error("Error in chunking/embedding workflow:", err);
