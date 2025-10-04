@@ -431,8 +431,7 @@ export const ViewerApp: React.FC = () => {
             const pageNum = idx + 1;
             const isVisible = visiblePagesRef.current.has(pageNum);
             // Render visible pages + 2 pages buffer above/below
-            // Always render first 3 pages initially, then use visibility detection
-            const shouldRender = pageNum <= 3 || isVisible ||
+            const shouldRender = isVisible ||
               Array.from(visiblePagesRef.current).some(vp => Math.abs(vp - pageNum) <= 2);
 
             return (
