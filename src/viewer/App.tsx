@@ -11,10 +11,10 @@ import {
   putDoc,
   updateDocState,
   resetDB,
-  putHighlight,
-  getHighlightsByDoc,
   putNote,
   getNotesByDoc,
+  putComment,
+  getCommentsByDoc,
 } from "../db";
 import { readOPFSFile } from "../db/opfs";
 import ContextMenu from "./ContextMenu";
@@ -45,14 +45,22 @@ export const ViewerApp: React.FC = () => {
     x: 0,
     y: 0,
   });
-  const [highlights, setHighlights] = useState<Array<any>>([]);
   const [notes, setNotes] = useState<Array<any>>([]);
+  const [comments, setComments] = useState<Array<any>>([]);
+  const [commentInput, setCommentInput] = useState<string>("");
+  const [commentAnchor, setCommentAnchor] = useState<{
+    x: number;
+    y: number;
+    page: number;
+    range: Range;
+  } | null>(null);
   const [noteInput, setNoteInput] = useState<string>("");
   const [noteAnchor, setNoteAnchor] = useState<{
     x: number;
     y: number;
     page: number;
-    range: Range;
+    color: string;
+    rects: Array<{ top: number; left: number; width: number; height: number }>;
   } | null>(null);
 
   // Parse URL params
@@ -162,22 +170,6 @@ export const ViewerApp: React.FC = () => {
           setIsInitialLoad(false);
         }, 200);
 
-        // Load highlights for this document (non-fatal)
-        (async () => {
-          try {
-            const hs = await getHighlightsByDoc(hash);
-            setHighlights(hs || []);
-          } catch (err) {
-            console.error("Failed to load highlights (non-fatal)", err);
-            try {
-              // reset DB connection in case it is stale or deleted
-              resetDB();
-            } catch (resetErr) {
-              console.warn('resetDB failed while loading highlights:', resetErr);
-            }
-            setHighlights([]);
-          }
-        })();
         // Load notes for this document (non-fatal)
         (async () => {
           try {
@@ -186,11 +178,27 @@ export const ViewerApp: React.FC = () => {
           } catch (err) {
             console.error("Failed to load notes (non-fatal)", err);
             try {
+              // reset DB connection in case it is stale or deleted
               resetDB();
             } catch (resetErr) {
               console.warn('resetDB failed while loading notes:', resetErr);
             }
             setNotes([]);
+          }
+        })();
+        // Load comments for this document (non-fatal)
+        (async () => {
+          try {
+            const cs = await getCommentsByDoc(hash);
+            setComments(cs || []);
+          } catch (err) {
+            console.error("Failed to load comments (non-fatal)", err);
+            try {
+              resetDB();
+            } catch (resetErr) {
+              console.warn('resetDB failed while loading comments:', resetErr);
+            }
+            setComments([]);
           }
         })();
 
@@ -274,9 +282,9 @@ export const ViewerApp: React.FC = () => {
     };
   }, []);
 
-  // Handle context menu actions (highlight creation, note, etc.)
+  // Handle context menu actions (note creation, comment, etc.)
   const handleContextAction = async (action: string) => {
-    if (action === "note") {
+    if (action === "comment") {
       // Open a small input anchored to the selection
       const sel = window.getSelection();
       if (!sel || sel.rangeCount === 0) return;
@@ -289,13 +297,13 @@ export const ViewerApp: React.FC = () => {
         ?.closest("[data-page-num]") as HTMLElement | null;
       if (!pageEl) return;
       const pageNum = parseInt(pageEl.getAttribute("data-page-num") || "0", 10);
-      setNoteAnchor({ x: first.left, y: first.top - 24, page: pageNum, range });
-      setNoteInput("");
+      setCommentAnchor({ x: first.left, y: first.top - 24, page: pageNum, range });
+      setCommentInput("");
       setContextVisible(false);
       return;
     }
 
-    if (!action.startsWith("highlight:")) return;
+    if (!action.startsWith("note:")) return;
     const color = action.split(":")[1];
     const sel = window.getSelection();
     if (!sel || sel.rangeCount === 0) return;
@@ -320,7 +328,7 @@ export const ViewerApp: React.FC = () => {
     const pageNum = parseInt(pageEl.getAttribute("data-page-num") || "0", 10);
     const pageBox = pageEl.getBoundingClientRect();
 
-    // Normalize rects to fractions of page width/height so highlights scale with zoom
+    // Normalize rects to fractions of page width/height so notes scale with zoom
     const relRects = rects.map((r) => ({
       top: (r.top - pageBox.top) / pageBox.height,
       left: (r.left - pageBox.left) / pageBox.width,
@@ -328,23 +336,9 @@ export const ViewerApp: React.FC = () => {
       height: r.height / pageBox.height,
     }));
 
-    // Persist highlight
-    const id = `${docHash}:${pageNum}:${Date.now()}`;
-    const h = {
-      id,
-      docHash,
-      page: pageNum,
-      rects: relRects,
-      color,
-      createdAt: Date.now(),
-    };
-
-    try {
-      await putHighlight(h);
-      setHighlights((prev) => [...prev, h]);
-    } catch (err) {
-      console.error("Failed to save highlight", err);
-    }
+    // Open input field for note text
+    setNoteAnchor({ x: first.left, y: first.top - 24, page: pageNum, color, rects: relRects });
+    setNoteInput("");
 
     // Clear selection and close menu
     window.getSelection()?.removeAllRanges();
@@ -676,8 +670,8 @@ export const ViewerApp: React.FC = () => {
                 isVisible={isVisible}
                 shouldRender={shouldRender}
                 onRender={handleRender}
-                highlights={highlights.filter((h) => h.page === pageNum)}
                 notes={notes.filter((n) => n.page === pageNum)}
+                comments={comments.filter((c) => c.page === pageNum)}
               />
             );
           })}
@@ -699,13 +693,60 @@ export const ViewerApp: React.FC = () => {
             onChange={(e) => setNoteInput(e.target.value)}
             onKeyDown={async (e) => {
               if (e.key === "Enter") {
-                // persist note with normalized rects from selection
-                const range = noteAnchor.range;
+                // Create note with optional text
+                const id = `${docHash}:${noteAnchor.page}:${Date.now()}`;
+                const n = {
+                  id,
+                  docHash,
+                  page: noteAnchor.page,
+                  rects: noteAnchor.rects,
+                  color: noteAnchor.color,
+                  text: noteInput.trim() || undefined,
+                  createdAt: Date.now(),
+                };
+
+                try {
+                  await putNote(n);
+                  setNotes((prev) => [...prev, n]);
+                } catch (err) {
+                  console.error("Failed to save note", err);
+                }
+                setNoteAnchor(null);
+                setNoteInput("");
+              } else if (e.key === "Escape") {
+                setNoteAnchor(null);
+                setNoteInput("");
+              }
+            }}
+            placeholder="Add note text (optional)"
+            className="px-2 py-1 rounded border bg-white dark:bg-neutral-800 text-neutral-900 dark:text-neutral-100"
+          />
+        </div>
+      )}
+
+      {/* Comment input floating box */}
+      {commentAnchor && (
+        <div
+          style={{
+            position: "fixed",
+            left: commentAnchor.x,
+            top: commentAnchor.y,
+            zIndex: 60,
+          }}
+        >
+          <input
+            autoFocus
+            value={commentInput}
+            onChange={(e) => setCommentInput(e.target.value)}
+            onKeyDown={async (e) => {
+              if (e.key === "Enter") {
+                // persist comment with normalized rects from selection
+                const range = commentAnchor.range;
                 const rects = Array.from(range.getClientRects());
                 if (rects.length === 0) return;
 
                 const pageEl = document.querySelector(
-                  `[data-page-num="${noteAnchor.page}"]`
+                  `[data-page-num="${commentAnchor.page}"]`
                 ) as HTMLElement;
                 if (!pageEl) return;
                 const pageBox = pageEl.getBoundingClientRect();
@@ -718,28 +759,30 @@ export const ViewerApp: React.FC = () => {
                   height: r.height / pageBox.height,
                 }));
 
-                const id = `${docHash}:${noteAnchor.page}:${Date.now()}`;
-                const note = {
+                const id = `${docHash}:${commentAnchor.page}:${Date.now()}`;
+                const comment = {
                   id,
                   docHash,
-                  page: noteAnchor.page,
+                  page: commentAnchor.page,
                   rects: normalizedRects,
-                  text: noteInput,
+                  text: commentInput,
                   createdAt: Date.now(),
                 };
                 try {
-                  await putNote(note);
-                  setNotes((prev) => [...prev, note]);
+                  await putComment(comment);
+                  setComments((prev) => [...prev, comment]);
                 } catch (err) {
-                  console.error("Failed to save note", err);
+                  console.error("Failed to save comment", err);
                 }
-                setNoteAnchor(null);
+                setCommentAnchor(null);
+                setCommentInput("");
               } else if (e.key === "Escape") {
-                setNoteAnchor(null);
+                setCommentAnchor(null);
+                setCommentInput("");
               }
             }}
-            placeholder="Type note and press Enter"
-            className="px-2 py-1 rounded border"
+            placeholder="Type comment and press Enter"
+            className="px-2 py-1 rounded border bg-white dark:bg-neutral-800 text-neutral-900 dark:text-neutral-100"
           />
         </div>
       )}
