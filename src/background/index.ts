@@ -18,6 +18,9 @@ interface ViewerState {
 
 const viewerStates = new Map<number, ViewerState>();
 
+// Track the last visible text for each tab to avoid re-processing unchanged text
+const lastVisibleText = new Map<number, string>();
+
 // Intercept PDF navigation and redirect to our viewer
 // Using onCommitted instead of onBeforeNavigate for earlier interception
 chrome.webNavigation.onCommitted.addListener(
@@ -82,6 +85,7 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     for (const [tabId] of viewerStates) {
       if (!activeTabs.has(tabId)) {
         viewerStates.delete(tabId);
+        lastVisibleText.delete(tabId);
         console.log(`[trackViewerState] Removed state for closed tab ${tabId}`);
       }
     }
@@ -94,17 +98,6 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
         } catch (error) {
           console.error(`Failed to request state from tab ${tab.id}:`, error);
         }
-      }
-    }
-
-    // Log current viewer states
-    if (viewerStates.size > 0) {
-      console.log('[trackViewerState] Current viewer states:');
-      for (const [tabId, state] of viewerStates) {
-        console.log(`  Tab ${tabId}: ${state.fileName} - Page ${state.currentPage}/${state.totalPages} (${state.zoom})`);
-        console.log(`  Visible Text (${state.visibleText.length} chars):`);
-        console.log(state.visibleText);
-        console.log('--- End of visible text ---');
       }
     }
   }
@@ -191,11 +184,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         page: `${state.currentPage}/${state.totalPages}`,
         textLength: state.visibleText.length
       });
-      console.log('[UPDATE_VIEWER_STATE] Full visible text:', state.visibleText);
       
-      // Extract terms from visible text if there's content
+      // Extract terms from visible text only if it has changed
       if (state.visibleText && state.visibleText.length > 0) {
-        extractTermsFromText(state.visibleText, tabId, state.fileName, state.currentPage, state.docHash);
+        const previousText = lastVisibleText.get(tabId);
+        if (previousText !== state.visibleText) {
+          console.log(`[UPDATE_VIEWER_STATE] Visible text changed for tab ${tabId}, extracting terms`);
+          lastVisibleText.set(tabId, state.visibleText);
+          extractTermsFromText(state.visibleText, tabId, state.fileName, state.currentPage, state.docHash);
+        } else {
+          console.log(`[UPDATE_VIEWER_STATE] Visible text unchanged for tab ${tabId}, skipping term extraction`);
+        }
       }
     }
     return false;
@@ -267,7 +266,11 @@ async function findSectionsForTerms(terms: string[], docHash: string, fileName: 
     });
 
     if (response.success && response.results) {
-      console.log(`[findSections] Successfully found sections for "${fileName}" page ${currentPage}:`);
+      if (response.results.length > 0) {
+        console.log(`[findSections] Successfully found sections for "${fileName}" page ${currentPage}:`);
+      } else {
+        console.log(`[findSections] No sections found for "${fileName}" page ${currentPage}`);
+      }
       
       // Log each term with its section
       for (const result of response.results) {

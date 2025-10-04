@@ -92,67 +92,6 @@ export const ViewerApp: React.FC = () => {
             const textLayer = pageEl.querySelector('.text-layer') || pageEl.querySelector('.textLayer');
             if (textLayer) {
               const pageText = textLayer.textContent || '';
-              console.log(`[VIEWER] Page ${pageNum} text length: ${pageText.length} chars`);
-              if (pageText.trim()) {
-                visibleText += `\n=== Page ${pageNum} ===\n${pageText}\n`;
-              }
-            } else {
-              console.log(`[VIEWER] No text layer found for page ${pageNum}`);
-            }
-          } else {
-            console.log(`[VIEWER] Page element not found for page ${pageNum}`);
-          }
-        }
-
-        console.log('[VIEWER] Sending state to background:', {
-          fileName,
-          currentPage,
-          totalPages: pages.length,
-          visiblePages,
-          textLength: visibleText.length
-        });
-
-        // Send current state to background
-        chrome.runtime.sendMessage({
-          type: 'UPDATE_VIEWER_STATE',
-          payload: {
-            docHash,
-            fileName,
-            currentPage,
-            totalPages: pages.length,
-            zoom,
-            visibleText: visibleText.trim(),
-          }
-        }).catch((error) => {
-          console.error('Failed to send viewer state:', error);
-        });
-      }
-    };
-
-    chrome.runtime.onMessage.addListener(handleMessage);
-    return () => {
-      chrome.runtime.onMessage.removeListener(handleMessage);
-    };
-  }, [docHash, fileName, currentPage, pages.length, zoom]);
-
-  // Listen for state requests from background
-  useEffect(() => {
-    const handleMessage = (message: any) => {
-      if (message.type === 'REQUEST_VIEWER_STATE') {
-        // Extract text from visible pages
-        let visibleText = '';
-        const visiblePages = Array.from(visiblePagesRef.current).sort((a, b) => a - b);
-        
-        console.log('[VIEWER] Processing state request for visible pages:', visiblePages);
-        
-        for (const pageNum of visiblePages) {
-          const pageEl = document.querySelector(`[data-page-num="${pageNum}"]`);
-          if (pageEl) {
-            // Try both possible class names for text layer
-            const textLayer = pageEl.querySelector('.text-layer') || pageEl.querySelector('.textLayer');
-            if (textLayer) {
-              const pageText = textLayer.textContent || '';
-              console.log(`[VIEWER] Page ${pageNum} text length: ${pageText.length} chars`);
               if (pageText.trim()) {
                 visibleText += `\n=== Page ${pageNum} ===\n${pageText}\n`;
               }
@@ -933,6 +872,56 @@ export const ViewerApp: React.FC = () => {
       }
     };
   }, [handlePrevPage, handleNextPage, handleZoomIn, handleZoomOut]);
+
+    // Note handlers
+    const handleNoteDelete = useCallback(async (id: string) => {
+      try {
+        await deleteNote(id);
+        setNotes((prev) => prev.filter((n) => n.id !== id));
+      } catch (err) {
+        console.error("Failed to delete note", err);
+      }
+    }, []);
+  
+    const handleNoteEdit = useCallback(async (id: string, newText: string) => {
+      try {
+        const note = notes.find((n) => n.id === id);
+        if (!note) return;
+  
+        const updatedNote = { ...note, text: newText.trim() || undefined };
+        await putNote(updatedNote);
+        setNotes((prev) =>
+          prev.map((n) => (n.id === id ? updatedNote : n))
+        );
+      } catch (err) {
+        console.error("Failed to update note", err);
+      }
+    }, [notes]);
+  
+    // Comment handlers
+    const handleCommentDelete = useCallback(async (id: string) => {
+      try {
+        await deleteComment(id);
+        setComments((prev) => prev.filter((c) => c.id !== id));
+      } catch (err) {
+        console.error("Failed to delete comment", err);
+      }
+    }, []);
+  
+    const handleCommentEdit = useCallback(async (id: string, newText: string) => {
+      try {
+        const comment = comments.find((c) => c.id === id);
+        if (!comment) return;
+  
+        const updatedComment = { ...comment, text: newText };
+        await putComment(updatedComment);
+        setComments((prev) =>
+          prev.map((c) => (c.id === id ? updatedComment : c))
+        );
+      } catch (err) {
+        console.error("Failed to update comment", err);
+      }
+    }, [comments]);
 
   // Ctrl+scroll zoom handler - attached to container only
   useEffect(() => {

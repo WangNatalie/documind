@@ -10,7 +10,6 @@ import {
 import { readOPFSFile } from '../db/opfs';
 
 import { CHUNKR_API_KEY } from './api_key';
-import { GEMINI_API_KEY } from './api_key';
 const chunkr = new ChunkrAI({ apiKey: CHUNKR_API_KEY });
 
 interface ChunkingTaskData {

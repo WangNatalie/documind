@@ -1,13 +1,13 @@
 // Term Extractor - extracts important technical terms from visible text using Gemini
 import { GoogleGenAI } from '@google/genai';
-import { GEMINI_API_KEY } from './api_key';
+import { getGeminiApiKey } from './gemini-config';
 import { getTableOfContents, TableOfContentsRecord, getChunksByDoc, TOCItem } from '../db/index';
 
 // Configuration
 const GEMINI_MODEL = 'gemini-2.5-flash-lite';
 
 // Initialize Google GenAI client
-const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
+const ai = new GoogleGenAI({ apiKey: getGeminiApiKey() });
 
 export interface TermExtractionResult {
   terms: string[];
@@ -55,7 +55,7 @@ Prioritize terms that may need clarification as someone reads through this passa
       contents: prompt,
       config: {
         temperature: 0.3,
-        maxOutputTokens: 500,
+        maxOutputTokens: 1000,
       }
     });
     
@@ -123,7 +123,7 @@ Or return "None" if no relevant section exists.`;
       contents: prompt,
       config: {
         temperature: 0.2,
-        maxOutputTokens: 500,
+        maxOutputTokens: 1000,
       }
     });
 
@@ -170,7 +170,7 @@ Or return "None" if no relevant section exists.`;
 }
 
 /**
- * Find sections for all extracted terms
+ * Find sections for all extracted terms (batch version - single API call)
  */
 export async function findSectionsForTerms(
   terms: string[],
@@ -188,14 +188,91 @@ export async function findSectionsForTerms(
 
   console.log(`[SectionFinder] Found TOC with ${toc.items.length} items`);
 
-  // Find section for each term
-  const results: TermWithSection[] = [];
-  for (const term of terms) {
-    const result = await findSectionForTerm(term, toc);
-    results.push(result);
-  }
+  // Batch process all terms in a single API call
+  try {
+    const tocJson = JSON.stringify(toc.items, null, 2);
+    const termsJson = JSON.stringify(terms);
 
-  return results;
+    const prompt = `Given the following JSON array of terms and the JSON table of contents of a document, find the most relevant section (if it exists) that introduces or explains each term.
+
+Terms: ${termsJson}
+
+Table of Contents:
+${tocJson}
+
+For each term, return the matching TOC item in the exact format it was given, or null if no relevant section exists.
+
+Return your response as a JSON array where each element has:
+{
+  "term": "the term",
+  "tocItem": <the matching TOC item object or null>
+}
+
+Return ONLY the JSON array, no additional text.`;
+
+    console.log('[SectionFinder] Sending batch request to Gemini...');
+    const response = await ai.models.generateContent({
+      model: GEMINI_MODEL,
+      contents: prompt,
+      config: {
+        temperature: 0.2,
+        maxOutputTokens: 2000,
+      }
+    });
+
+    const text = response.text;
+    if (!text) {
+      throw new Error('No text in Gemini response');
+    }
+
+    console.log('[SectionFinder] Received batch response:', text.substring(0, 200) + '...');
+
+    // Parse JSON array from response (may be wrapped in markdown code blocks)
+    const trimmedText = text.trim();
+    
+    // Remove markdown code blocks if present
+    let jsonText = trimmedText;
+    if (trimmedText.startsWith('```')) {
+      const firstNewline = trimmedText.indexOf('\n');
+      const lastBackticks = trimmedText.lastIndexOf('```');
+      if (firstNewline !== -1 && lastBackticks > firstNewline) {
+        jsonText = trimmedText.substring(firstNewline + 1, lastBackticks).trim();
+      }
+    }
+    
+    // Find the JSON array by locating the opening and closing brackets
+    const startIdx = jsonText.indexOf('[');
+    const endIdx = jsonText.lastIndexOf(']');
+    
+    if (startIdx === -1 || endIdx === -1 || startIdx >= endIdx) {
+      throw new Error('No valid JSON array found in response');
+    }
+    
+    const arrayText = jsonText.substring(startIdx, endIdx + 1);
+    const results: TermWithSection[] = JSON.parse(arrayText);
+
+    console.log(`[SectionFinder] Successfully parsed ${results.length} results`);
+    
+    // Ensure all terms are present in results (fill in missing ones)
+    const resultMap = new Map(results.map(r => [r.term, r.tocItem]));
+    const completeResults: TermWithSection[] = terms.map(term => ({
+      term,
+      tocItem: resultMap.get(term) ?? null
+    }));
+
+    return completeResults;
+  } catch (error) {
+    console.error('[SectionFinder] Error in batch section finding:', error);
+    console.log('[SectionFinder] Falling back to individual term processing...');
+    
+    // Fallback to individual processing if batch fails
+    const results: TermWithSection[] = [];
+    for (const term of terms) {
+      const result = await findSectionForTerm(term, toc);
+      results.push(result);
+    }
+    return results;
+  }
 }
 
 /**
@@ -291,7 +368,7 @@ export async function summarizeTerm(
       contents: prompt,
       config: {
         temperature: 0.3,
-        maxOutputTokens: 1000,
+        maxOutputTokens: 5000,
       }
     });
 
