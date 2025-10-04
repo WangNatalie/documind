@@ -89,6 +89,20 @@ export const Chatbot: React.FC = () => {
     };
   };
 
+  // For animation: controls mounting/unmounting
+  const [showBox, setShowBox] = useState(false);
+
+  // Animate open/close
+  useEffect(() => {
+    if (open) {
+      setShowBox(true);
+    } else {
+      // Wait for animation to finish before unmounting
+      const timeout = setTimeout(() => setShowBox(false), 200);
+      return () => clearTimeout(timeout);
+    }
+  }, [open]);
+
   return (
     <>
       {/* Floating Chatbot Button */}
@@ -106,7 +120,7 @@ export const Chatbot: React.FC = () => {
           {/* Speech bubble icon */}
           <svg width="28" height="28" viewBox="0 0 24 24" fill="none">
             <path
-              d="M21 12c0 3.866-3.582 7-8 7-1.01 0-1.98-.146-2.87-.414l-4.13 1.414a1 1 0 0 1-1.28-1.28l1.414-4.13C4.146 13.98 4 13.01 4 12c0-3.866 3.582-7 8-7s8 3.134 8 7z"
+              d="M4 12c0-3.314 3.134-6 7-6s7 2.686 7 6-3.134 6-7 6c-.69 0-1.36-.08-1.98-.23l-2.52.86a.5.5 0 0 1-.64-.64l.86-2.52C4.08 13.36 4 12.69 4 12z"
               fill="#fff"
               stroke="#2563eb"
               strokeWidth="1.5"
@@ -115,10 +129,11 @@ export const Chatbot: React.FC = () => {
         </button>
       )}
 
-      {/* Chatbox */}
-      {open && (
+      {/* Animated Chatbox */}
+      {showBox && (
         <div
-          className="fixed z-50 bottom-6 right-6 bg-white dark:bg-neutral-900 rounded-xl shadow-2xl flex flex-col border border-neutral-200 dark:border-neutral-700"
+          className={`fixed z-50 bottom-6 right-6 bg-white dark:bg-neutral-900 rounded-xl shadow-2xl flex flex-col border border-neutral-200 dark:border-neutral-700
+            ${open ? 'chatbot-animate-in' : 'chatbot-animate-out'}`}
           style={{
             width: dimensions.width,
             height: dimensions.height,
@@ -128,7 +143,7 @@ export const Chatbot: React.FC = () => {
             maxHeight: CHATBOX_MAX_HEIGHT,
             transition: 'box-shadow 0.2s',
             boxShadow: '0 8px 32px rgba(0,0,0,0.22)',
-            resize: 'none', // handled manually
+            resize: 'none',
             overflow: 'hidden',
           }}
         >
