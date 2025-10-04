@@ -328,7 +328,7 @@ export const Page: React.FC<PageProps> = ({
 
   // Find and highlight first occurrence of each term in the text layer
   useEffect(() => {
-    if (!textLayerRef.current || !shouldRender || isLoading || termSummaries.length === 0) {
+    if (!textLayerRef.current || !shouldRender || isLoading || termSummaries.length === 0 || !page) {
       setTermHighlights([]);
       return;
     }
@@ -348,8 +348,14 @@ export const Page: React.FC<PageProps> = ({
         return;
       }
 
-      // Get page dimensions for positioning
-      const pageRect = textLayer.getBoundingClientRect();
+      // Get DOM dimensions of text layer
+      const textLayerRect = textLayer.getBoundingClientRect();
+      
+      // Get the CSS transform scale applied to the text layer
+      const textLayerStyle = window.getComputedStyle(textLayer);
+      const transformMatch = textLayerStyle.transform.match(/matrix\(([^,]+),[^,]+,[^,]+,([^,]+),/);
+      const scaleX = parseFloat(transformMatch?.[1] || "1");
+      const scaleY = parseFloat(transformMatch?.[2] || "1");
 
       // For each term, find its first occurrence
       for (const termSummary of termSummaries) {
@@ -397,15 +403,26 @@ export const Page: React.FC<PageProps> = ({
           const rects = range.getClientRects();
           if (rects.length > 0) {
             const rect = rects[0];
-            // Convert to page-relative coordinates
+            
+            // Convert to text-layer-relative coordinates and correct for CSS scaling
             highlights.push({
               term: termSummary,
               rect: {
-                top: rect.top - pageRect.top,
-                left: rect.left - pageRect.left,
-                width: rect.width,
-                height: rect.height,
+                top: (rect.top - textLayerRect.top) / scaleY,
+                left: (rect.left - textLayerRect.left) / scaleX,
+                width: rect.width / scaleX,
+                height: rect.height / scaleY,
               },
+            });
+            
+            console.log(`[Page ${pageNum}] Highlight for "${term}":`, {
+              domRect: rect,
+              textLayerRect: textLayerRect,
+              scales: { scaleX, scaleY },
+              correctedCoords: {
+                top: (rect.top - textLayerRect.top) / scaleY,
+                left: (rect.left - textLayerRect.left) / scaleX,
+              }
             });
           }
         } catch (err) {
@@ -418,7 +435,7 @@ export const Page: React.FC<PageProps> = ({
     };
 
     checkTextLayer();
-  }, [textLayerRef.current, shouldRender, isLoading, termSummaries, pageNum]);
+  }, [textLayerRef.current, shouldRender, isLoading, termSummaries, pageNum, page, scale]);
 
   // Get approximate dimensions for skeleton
   const viewport = page?.getViewport({ scale: scale || 1 });
@@ -728,7 +745,7 @@ export const Page: React.FC<PageProps> = ({
           <div
             key={`term-${index}`}
             data-term-highlight
-            className="absolute z-[30] bg-purple-300/40 rounded-sm cursor-pointer hover:bg-purple-400/60 transition-colors"
+            className="absolute z-[30] bg-purple-300/40 border border-purple-500/60 rounded cursor-pointer hover:bg-purple-400/60 hover:border-purple-600 transition-colors"
             style={{
               top: highlight.rect.top,
               left: highlight.rect.left,

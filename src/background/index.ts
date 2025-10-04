@@ -18,8 +18,11 @@ interface ViewerState {
 
 const viewerStates = new Map<number, ViewerState>();
 
-// Track the last visible text for each tab to avoid re-processing unchanged text
-const lastVisibleText = new Map<number, string>();
+// Track the last page that had terms extracted for each tab
+const lastExtractedPage = new Map<number, number>();
+
+// Track pages that have been processed (to avoid re-processing)
+const processedPages = new Map<number, Set<number>>(); // tabId -> Set of page numbers
 
 // Intercept PDF navigation and redirect to our viewer
 // Using onCommitted instead of onBeforeNavigate for earlier interception
@@ -79,14 +82,15 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     });
 
     // Clean up states for closed tabs
-    const activeTabs = new Set(tabs.map(t => t.id));
-    for (const [tabId] of viewerStates) {
-      if (!activeTabs.has(tabId)) {
-        viewerStates.delete(tabId);
-        lastVisibleText.delete(tabId);
-        console.log(`[trackViewerState] Removed state for closed tab ${tabId}`);
+      const activeTabs = new Set(tabs.map(t => t.id));
+      for (const [tabId] of viewerStates) {
+        if (!activeTabs.has(tabId)) {
+          viewerStates.delete(tabId);
+          lastExtractedPage.delete(tabId);
+          processedPages.delete(tabId);
+          console.log(`[trackViewerState] Removed state for closed tab ${tabId}`);
+        }
       }
-    }
 
     // Request state from each viewer tab
     for (const tab of tabs) {
@@ -162,6 +166,38 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message.type === 'REQUEST_PAGE_TERMS') {
+    // Viewer is requesting terms for a specific page (cache miss)
+    const { page, docHash } = message.payload;
+    const tabId = sender.tab?.id;
+    
+    if (tabId) {
+      console.log(`[REQUEST_PAGE_TERMS] Viewer requesting terms for page ${page}`);
+      
+      // Remove this page from processed set to allow re-processing
+      const processedSet = processedPages.get(tabId);
+      if (processedSet) {
+        processedSet.delete(page);
+      }
+      
+      // Get the viewer state to extract text
+      const state = viewerStates.get(tabId);
+      if (state && state.docHash === docHash) {
+        // If this is the current page, process it immediately
+        if (state.currentPage === page && state.visibleText) {
+          processPageTerms(tabId, page, state);
+        } else {
+          // For other pages, we'd need to request their text
+          // For now, just re-trigger state request which will process current page
+          chrome.tabs.sendMessage(tabId, { type: 'REQUEST_VIEWER_STATE' }).catch(err => {
+            console.error('Failed to request viewer state:', err);
+          });
+        }
+      }
+    }
+    return false;
+  }
+
   if (message.type === 'UPDATE_VIEWER_STATE') {
     // Update the stored state for this viewer tab
     const tabId = sender.tab?.id;
@@ -178,19 +214,74 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       };
       viewerStates.set(tabId, state);
       
-      // Extract terms from visible text only if it has changed
+      // Extract terms only when the current page changes (real page transition)
       if (state.visibleText && state.visibleText.length > 0) {
-        const previousText = lastVisibleText.get(tabId);
-        if (previousText !== state.visibleText) {
-          console.log(`[UPDATE_VIEWER_STATE] Visible text changed for tab ${tabId}, extracting terms`);
-          lastVisibleText.set(tabId, state.visibleText);
-          extractTermsFromText(state.visibleText, state.fileName, state.currentPage, state.docHash);
+        const previousPage = lastExtractedPage.get(tabId);
+        if (previousPage !== state.currentPage) {
+          console.log(`[UPDATE_VIEWER_STATE] Page changed from ${previousPage || 'none'} to ${state.currentPage} for tab ${tabId}`);
+          lastExtractedPage.set(tabId, state.currentPage);
+          
+          // Initialize processed pages set if needed
+          if (!processedPages.has(tabId)) {
+            processedPages.set(tabId, new Set());
+          }
+          
+          // Clean up processed pages cache: only keep current ±2 pages to save memory
+          const pagesToKeep = new Set<number>();
+          for (let i = Math.max(1, state.currentPage - 2); i <= Math.min(state.totalPages, state.currentPage + 2); i++) {
+            pagesToKeep.add(i);
+          }
+          
+          const processedSet = processedPages.get(tabId)!;
+          for (const page of Array.from(processedSet)) {
+            if (!pagesToKeep.has(page)) {
+              processedSet.delete(page);
+            }
+          }
+          
+          // Process current page first (priority)
+          processPageTerms(tabId, state.currentPage, state);
+          
+          // Pre-process adjacent pages (prev and next) for caching
+          if (state.currentPage > 1) {
+            processPageTerms(tabId, state.currentPage - 1, state, true);
+          }
+          if (state.currentPage < state.totalPages) {
+            processPageTerms(tabId, state.currentPage + 1, state, true);
+          }
         }
       }
     }
     return false;
   }
 });
+
+// Helper function to process terms for a specific page
+async function processPageTerms(tabId: number, pageNum: number, state: ViewerState, isAdjacentPage: boolean = false) {
+  const pageSet = processedPages.get(tabId);
+  if (!pageSet) return;
+  
+  // Skip if this page has already been processed
+  if (pageSet.has(pageNum)) {
+    console.log(`[processPageTerms] Page ${pageNum} already processed for tab ${tabId}, skipping`);
+    return;
+  }
+  
+  // Mark as processed
+  pageSet.add(pageNum);
+  
+  // For current page, use existing visible text
+  // For adjacent pages, we'd need to request their text - for now, we'll skip adjacent if no text
+  if (pageNum === state.currentPage && state.visibleText) {
+    const priority = isAdjacentPage ? 'adjacent' : 'current';
+    console.log(`[processPageTerms] Processing ${priority} page ${pageNum} for tab ${tabId}`);
+    await extractTermsFromText(state.visibleText, state.fileName, pageNum, state.docHash);
+  } else if (isAdjacentPage) {
+    // For adjacent pages, we could request text from the viewer
+    // For now, we'll just log and skip
+    console.log(`[processPageTerms] Skipping adjacent page ${pageNum} (would need to request text from viewer)`);
+  }
+}
 
 // Helper function to extract terms using offscreen document
 async function extractTermsFromText(passage: string, fileName: string, currentPage: number, docHash: string) {
