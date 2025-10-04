@@ -35,7 +35,6 @@ export async function generateDocHash(source: { type: 'url' | 'uploadId'; value:
   etag?: string;
   contentLength?: number;
   size?: number;
-  mtime?: number;
   firstBytes?: ArrayBuffer;
   lastBytes?: ArrayBuffer;
 }): Promise<string> {
@@ -51,11 +50,10 @@ export async function generateDocHash(source: { type: 'url' | 'uploadId'; value:
     ];
     data = encoder.encode(parts.join('|'));
   } else {
-    // Hash: uploadId + size + mtime + first/last 64KB
+    // Hash: uploadId + size + first/last 64KB
     const parts = [
       source.value,
       metadata?.size?.toString() || '',
-      metadata?.mtime?.toString() || '',
     ];
     let combined = encoder.encode(parts.join('|'));
 
