@@ -70,7 +70,6 @@ export const PopupApp: React.FC = () => {
       const lastBytes = arrayBuffer.slice(-64 * 1024);
       const docHash = await generateDocHash(source, {
         size: arrayBuffer.byteLength,
-        mtime: file.lastModified,
         firstBytes,
         lastBytes,
       });

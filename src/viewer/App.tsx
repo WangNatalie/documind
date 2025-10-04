@@ -90,7 +90,6 @@ export const ViewerApp: React.FC = () => {
           const lastBytes = arrayBuffer.slice(-64 * 1024);
           hash = await generateDocHash(source, {
             size: arrayBuffer.byteLength,
-            mtime: Date.now(),
             firstBytes,
             lastBytes,
           });
@@ -242,7 +241,7 @@ export const ViewerApp: React.FC = () => {
                   response.error
                 );
               }
-              
+
               // Always request embeddings after chunking (will only generate missing ones)
               return requestEmbeddings(hash);
             })
@@ -271,7 +270,7 @@ export const ViewerApp: React.FC = () => {
                   response.error
                 );
               }
-              
+
               // Always request embeddings after chunking (will only generate missing ones)
               return requestEmbeddings(hash);
             })
