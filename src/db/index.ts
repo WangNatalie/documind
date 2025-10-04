@@ -35,6 +35,11 @@ interface PDFViewerDB extends DBSchema {
     value: HighlightRecord;
     indexes: { 'by-docHash': string };
   };
+  notes: {
+    key: string;
+    value: NoteRecord;
+    indexes: { 'by-docHash': string };
+  };
 }
 
 let dbInstance: IDBPDatabase<PDFViewerDB> | null = null;
@@ -42,7 +47,7 @@ let dbInstance: IDBPDatabase<PDFViewerDB> | null = null;
 export async function getDB(): Promise<IDBPDatabase<PDFViewerDB>> {
   if (dbInstance) return dbInstance;
 
-  dbInstance = await openDB<PDFViewerDB>('pdf_viewer_v0', 2, {
+  dbInstance = await openDB<PDFViewerDB>('pdf_viewer_v0', 3, {
     upgrade(db, oldVersion) {
       // Version 1 -> create docs and pages stores
       if (oldVersion < 1) {
@@ -60,6 +65,13 @@ export async function getDB(): Promise<IDBPDatabase<PDFViewerDB>> {
           highlightsStore.createIndex('by-docHash', 'docHash');
         }
       }
+          // Version 3 -> add notes store
+          if (oldVersion < 3) {
+            if (!db.objectStoreNames.contains('notes')) {
+              const notesStore = db.createObjectStore('notes', { keyPath: 'id' });
+              notesStore.createIndex('by-docHash', 'docHash');
+            }
+          }
     },
   });
 
@@ -137,4 +149,29 @@ export async function getHighlightsByDoc(docHash: string): Promise<HighlightReco
 export async function deleteHighlight(id: string): Promise<void> {
   const db = await getDB();
   await db.delete('highlights', id);
+}
+
+// Notes operations
+export interface NoteRecord {
+  id: string;
+  docHash: string;
+  page: number;
+  rects: HighlightRect[]; // multiple rects for the entire selection (normalized or absolute)
+  text: string;
+  createdAt: number;
+}
+
+export async function putNote(n: NoteRecord): Promise<void> {
+  const db = await getDB();
+  await db.put('notes', n);
+}
+
+export async function getNotesByDoc(docHash: string): Promise<NoteRecord[]> {
+  const db = await getDB();
+  return db.getAllFromIndex('notes', 'by-docHash', docHash);
+}
+
+export async function deleteNote(id: string): Promise<void> {
+  const db = await getDB();
+  await db.delete('notes', id);
 }

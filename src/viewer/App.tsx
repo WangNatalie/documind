@@ -6,7 +6,7 @@ import { Toolbar } from './Toolbar';
 import { useRenderQueue, CanvasCache } from './useRenderQueue';
 import { parseHash, updateHash } from '../utils/hash';
 import { generateDocHash } from '../utils/hash';
-import { getDoc, putDoc, updateDocState, putHighlight, getHighlightsByDoc } from '../db';
+import { getDoc, putDoc, updateDocState, putHighlight, getHighlightsByDoc, putNote, getNotesByDoc } from '../db';
 import { readOPFSFile } from '../db/opfs';
 import ContextMenu from './ContextMenu';
 
@@ -33,6 +33,9 @@ export const ViewerApp: React.FC = () => {
   const [contextVisible, setContextVisible] = useState(false);
   const [contextPos, setContextPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [highlights, setHighlights] = useState<Array<any>>([]);
+  const [notes, setNotes] = useState<Array<any>>([]);
+  const [noteInput, setNoteInput] = useState<string>('');
+  const [noteAnchor, setNoteAnchor] = useState<{ x: number; y: number; page: number; range: Range } | null>(null);
 
   // Parse URL params
   const params = new URLSearchParams(window.location.search);
@@ -148,6 +151,15 @@ export const ViewerApp: React.FC = () => {
             console.error('Failed to load highlights', err);
           }
         })();
+        // Load notes for this document
+        (async () => {
+          try {
+            const ns = await getNotesByDoc(hash);
+            setNotes(ns || []);
+          } catch (err) {
+            console.error('Failed to load notes', err);
+          }
+        })();
 
         // Create or update doc record
         if (!existingDoc) {
@@ -199,6 +211,23 @@ export const ViewerApp: React.FC = () => {
 
   // Handle context menu actions (highlight creation, note, etc.)
   const handleContextAction = async (action: string) => {
+    if (action === 'note') {
+      // Open a small input anchored to the selection
+      const sel = window.getSelection();
+      if (!sel || sel.rangeCount === 0) return;
+      const range = sel.getRangeAt(0);
+      const rects = Array.from(range.getClientRects());
+      const first = rects[0];
+      if (!first) return;
+      const pageEl = document.elementFromPoint(first.left + 1, first.top + 1)?.closest('[data-page-num]') as HTMLElement | null;
+      if (!pageEl) return;
+      const pageNum = parseInt(pageEl.getAttribute('data-page-num') || '0', 10);
+      setNoteAnchor({ x: first.left, y: first.top - 24, page: pageNum, range });
+      setNoteInput('');
+      setContextVisible(false);
+      return;
+    }
+
     if (!action.startsWith('highlight:')) return;
     const color = action.split(':')[1];
     const sel = window.getSelection();
@@ -552,11 +581,63 @@ export const ViewerApp: React.FC = () => {
                 shouldRender={shouldRender}
                 onRender={handleRender}
                 highlights={highlights.filter((h) => h.page === pageNum)}
+                notes={notes.filter((n) => n.page === pageNum)}
               />
             );
           })}
         </div>
       </div>
+      {/* Note input floating box */}
+      {noteAnchor && (
+        <div style={{ position: 'fixed', left: noteAnchor.x, top: noteAnchor.y, zIndex: 60 }}>
+          <input
+            autoFocus
+            value={noteInput}
+            onChange={(e) => setNoteInput(e.target.value)}
+            onKeyDown={async (e) => {
+              if (e.key === 'Enter') {
+                // persist note with normalized rects from selection
+                const range = noteAnchor.range;
+                const rects = Array.from(range.getClientRects());
+                if (rects.length === 0) return;
+
+                const pageEl = document.querySelector(`[data-page-num="${noteAnchor.page}"]`) as HTMLElement;
+                if (!pageEl) return;
+                const pageBox = pageEl.getBoundingClientRect();
+
+                // Normalize all rects to page dimensions
+                const normalizedRects = rects.map(r => ({
+                  top: (r.top - pageBox.top) / pageBox.height,
+                  left: (r.left - pageBox.left) / pageBox.width,
+                  width: r.width / pageBox.width,
+                  height: r.height / pageBox.height,
+                }));
+
+                const id = `${docHash}:${noteAnchor.page}:${Date.now()}`;
+                const note = {
+                  id,
+                  docHash,
+                  page: noteAnchor.page,
+                  rects: normalizedRects,
+                  text: noteInput,
+                  createdAt: Date.now(),
+                };
+                try {
+                  await putNote(note);
+                  setNotes(prev => [...prev, note]);
+                } catch (err) {
+                  console.error('Failed to save note', err);
+                }
+                setNoteAnchor(null);
+              } else if (e.key === 'Escape') {
+                setNoteAnchor(null);
+              }
+            }}
+            placeholder="Type note and press Enter"
+            className="px-2 py-1 rounded border"
+          />
+        </div>
+      )}
       <ContextMenu visible={contextVisible} x={contextPos.x} y={contextPos.y} onSelect={(a) => handleContextAction(a)} />
     </div>
   );
