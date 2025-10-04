@@ -1,0 +1,3 @@
+Replace this with actual icon48.png (48x48 pixels)
+For development, you can generate simple PNG icons using online tools or image editors.
+Recommended colors: Blue (#3B82F6) for the background with a white document icon.

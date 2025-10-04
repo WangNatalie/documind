@@ -1,0 +1,34 @@
+{
+  "name": "documind",
+  "version": "1.0.0",
+  "description": "AI-powered PDF viewer for efficient learning + studying",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "pack": "npm run build && node scripts/pack.js",
+    "preview": "vite preview",
+    "check-icons": "node scripts/check-icons.js",
+    "prepare-icons": "node scripts/prepare-icons.js"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "pdfjs-dist": "^4.0.379",
+    "idb": "^8.0.0",
+    "zustand": "^4.5.2",
+    "nanoid": "^5.0.7"
+  },
+  "devDependencies": {
+    "@crxjs/vite-plugin": "^2.0.0-beta.23",
+    "@types/chrome": "^0.0.268",
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.1",
+    "autoprefixer": "^10.4.19",
+    "postcss": "^8.4.38",
+    "tailwindcss": "^3.4.4",
+    "typescript": "^5.5.3",
+    "vite": "^5.3.3"
+  }
+}
