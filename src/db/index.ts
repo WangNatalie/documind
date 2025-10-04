@@ -6,7 +6,8 @@ import { openDB, DBSchema, IDBPDatabase } from 'idb';
 // v3: Added highlights
 // v4: Added notes (with rects array)
 // v5: Added chunkEmbeddings
-const DB_VERSION = 5;
+// v6: Added comments object store
+const DB_VERSION = 6;
 
 export interface DocRecord {
   docHash: string;
@@ -49,27 +50,28 @@ export interface ChunkTaskRecord {
   updatedAt: number;
 }
 
-export interface HighlightRect {
+export interface NoteRect {
   top: number;
   left: number;
   width: number;
   height: number;
 }
 
-export interface HighlightRecord {
-  id: string;
-  docHash: string;
-  page: number;
-  rects: HighlightRect[];
-  color: string;
-  createdAt: number;
-}
-
 export interface NoteRecord {
   id: string;
   docHash: string;
   page: number;
-  rects: HighlightRect[];
+  rects: NoteRect[];
+  color: string;
+  text?: string; // Optional text for this note
+  createdAt: number;
+}
+
+export interface CommentRecord {
+  id: string;
+  docHash: string;
+  page: number;
+  rects: NoteRect[];
   text: string;
   createdAt: number;
 }
@@ -106,14 +108,14 @@ interface PDFViewerDB extends DBSchema {
     value: ChunkTaskRecord;
     indexes: { 'by-docHash': string; 'by-status': string };
   };
-  highlights: {
-    key: string;
-    value: HighlightRecord;
-    indexes: { 'by-docHash': string; 'by-page': [string, number] };
-  };
   notes: {
     key: string;
     value: NoteRecord;
+    indexes: { 'by-docHash': string; 'by-page': [string, number] };
+  };
+  comments: {
+    key: string;
+    value: CommentRecord;
     indexes: { 'by-docHash': string; 'by-page': [string, number] };
   };
   chunkEmbeddings: {
@@ -129,7 +131,7 @@ export async function getDB(): Promise<IDBPDatabase<PDFViewerDB>> {
   if (dbInstance) return dbInstance;
 
   dbInstance = await openDB<PDFViewerDB>('pdf_viewer_v0', DB_VERSION, {
-    async upgrade(db, oldVersion, newVersion, transaction) {
+    async upgrade(db, oldVersion, newVersion) {
       console.log(`[DB] Upgrading from v${oldVersion} to v${newVersion}`);
 
       // Version 1: Initial setup - docs and pages stores
@@ -164,42 +166,19 @@ export async function getDB(): Promise<IDBPDatabase<PDFViewerDB>> {
         }
       }
 
-      // Version 3: Add highlights
+      // Version 3: Add notes
       if (oldVersion < 3) {
-        if (!db.objectStoreNames.contains('highlights')) {
-          const highlightsStore = db.createObjectStore('highlights', { keyPath: 'id' });
-          highlightsStore.createIndex('by-docHash', 'docHash');
-          highlightsStore.createIndex('by-page', ['docHash', 'page']);
-          console.log('[DB] Created highlights store');
-        }
-      }
-
-      // Version 4: Add notes (with migration for any existing notes from rect -> rects)
-      if (oldVersion < 4) {
         if (!db.objectStoreNames.contains('notes')) {
           const notesStore = db.createObjectStore('notes', { keyPath: 'id' });
           notesStore.createIndex('by-docHash', 'docHash');
           notesStore.createIndex('by-page', ['docHash', 'page']);
           console.log('[DB] Created notes store');
-        } else {
-          // Migrate existing notes from rect to rects array
-          const notesStore = transaction.objectStore('notes');
-          const allNotes = await notesStore.getAll();
-
-          console.log(`[DB] Migrating ${allNotes.length} notes from rect to rects[]`);
-
-          for (const note of allNotes) {
-            const noteAny = note as any;
-            if (noteAny.rect && !noteAny.rects) {
-              console.log(`[DB] Migrating note ${noteAny.id}`);
-              noteAny.rects = [noteAny.rect];
-              delete noteAny.rect;
-              await notesStore.put(noteAny);
-            }
-          }
-
-          console.log('[DB] Finished migrating notes');
         }
+      }
+
+      // Version 4: Rename highlights to notes (migration handled in version 3)
+      if (oldVersion < 4) {
+        // This version was for notes migration, now handled in v3
       }
 
       // Version 5: Add chunk embeddings
@@ -209,6 +188,16 @@ export async function getDB(): Promise<IDBPDatabase<PDFViewerDB>> {
           embeddingsStore.createIndex('by-docHash', 'docHash');
           embeddingsStore.createIndex('by-chunkId', 'chunkId');
           console.log('[DB] Created chunkEmbeddings store');
+        }
+      }
+
+      // Version 6: Add comments store
+      if (oldVersion < 6) {
+        if (!db.objectStoreNames.contains('comments')) {
+          const commentsStore = db.createObjectStore('comments', { keyPath: 'id' });
+          commentsStore.createIndex('by-docHash', 'docHash');
+          commentsStore.createIndex('by-page', ['docHash', 'page']);
+          console.log('[DB] Created comments store');
         }
       }
     },
@@ -320,35 +309,6 @@ export async function getPendingChunkTasks(): Promise<ChunkTaskRecord[]> {
   return db.getAllFromIndex('chunkTasks', 'by-status', 'pending');
 }
 
-// Highlight operations
-export async function putHighlight(highlight: HighlightRecord): Promise<void> {
-  const db = await getDB();
-  await db.put('highlights', highlight);
-}
-
-export async function getHighlight(id: string): Promise<HighlightRecord | undefined> {
-  const db = await getDB();
-  return db.get('highlights', id);
-}
-
-export async function getHighlightsByDoc(docHash: string): Promise<HighlightRecord[]> {
-  const db = await getDB();
-  return db.getAllFromIndex('highlights', 'by-docHash', docHash);
-}
-
-export async function deleteHighlight(id: string): Promise<void> {
-  const db = await getDB();
-  await db.delete('highlights', id);
-}
-
-export async function deleteHighlightsByDoc(docHash: string): Promise<void> {
-  const db = await getDB();
-  const highlights = await getHighlightsByDoc(docHash);
-  const tx = db.transaction('highlights', 'readwrite');
-  await Promise.all(highlights.map(h => tx.store.delete(h.id)));
-  await tx.done;
-}
-
 // Note operations
 export async function putNote(note: NoteRecord): Promise<void> {
   const db = await getDB();
@@ -375,6 +335,35 @@ export async function deleteNotesByDoc(docHash: string): Promise<void> {
   const notes = await getNotesByDoc(docHash);
   const tx = db.transaction('notes', 'readwrite');
   await Promise.all(notes.map(n => tx.store.delete(n.id)));
+  await tx.done;
+}
+
+// Comment operations
+export async function putComment(comment: CommentRecord): Promise<void> {
+  const db = await getDB();
+  await db.put('comments', comment);
+}
+
+export async function getComment(id: string): Promise<CommentRecord | undefined> {
+  const db = await getDB();
+  return db.get('comments', id);
+}
+
+export async function getCommentsByDoc(docHash: string): Promise<CommentRecord[]> {
+  const db = await getDB();
+  return db.getAllFromIndex('comments', 'by-docHash', docHash);
+}
+
+export async function deleteComment(id: string): Promise<void> {
+  const db = await getDB();
+  await db.delete('comments', id);
+}
+
+export async function deleteCommentsByDoc(docHash: string): Promise<void> {
+  const db = await getDB();
+  const comments = await getCommentsByDoc(docHash);
+  const tx = db.transaction('comments', 'readwrite');
+  await Promise.all(comments.map(c => tx.store.delete(c.id)));
   await tx.done;
 }
 
