@@ -24,6 +24,7 @@ import { readOPFSFile } from "../db/opfs";
 import ContextMenu from "./ContextMenu";
 import { requestGeminiChunking, requestEmbeddings, requestTOC } from "../utils/chunker-client";
 import { buildTOCTree } from "../utils/toc";
+import { TOC } from "./TOC";
 
 const ZOOM_LEVELS = [25, 50, 75, 90, 100, 125, 150, 175, 200, 250, 300, 350, 400, 500];
 
@@ -41,9 +42,7 @@ export const ViewerApp: React.FC = () => {
   const [isInitialLoad, setIsInitialLoad] = useState(true);
   const [tableOfContents, setTableOfContents] = useState<TableOfContentsRecord | null>(null);
 
-  const nestedTableOfContents = buildTOCTree(tableOfContents?.items || []);
-
-  console.log('nestedTableOfContents:', nestedTableOfContents);
+  // (nestedTOCNodes computed later for use in render)
 
   const containerRef = useRef<HTMLDivElement>(null);
   const observerRef = useRef<IntersectionObserver | null>(null);
@@ -85,6 +84,7 @@ export const ViewerApp: React.FC = () => {
     color: string;
     rects: Array<{ top: number; left: number; width: number; height: number }>;
   } | null>(null);
+  const [tocOpen, setTocOpen] = useState(false);
 
   // Parse URL params
   const params = new URLSearchParams(window.location.search);
@@ -415,6 +415,18 @@ export const ViewerApp: React.FC = () => {
       console.log('[App] Table of Contents updated:', tableOfContents);
     }
   }, [tableOfContents]);
+
+  const handleToggleTOC = useCallback(() => {
+    setTocOpen((v) => !v);
+  }, []);
+
+  const handleTOCSelect = useCallback((item: any) => {
+    // scroll to page when TOC entry clicked
+    if (typeof item.page === 'number') {
+      scrollToPage(item.page);
+      setTocOpen(false);
+    }
+  }, []);
 
   // Right-click to open custom context menu
   useEffect(() => {
@@ -1261,6 +1273,7 @@ export const ViewerApp: React.FC = () => {
         currentPage={currentPage}
         totalPages={pages.length}
         zoom={zoom}
+        onToggleTOC={handleToggleTOC}
         onPrevPage={handlePrevPage}
         onNextPage={handleNextPage}
         onZoomIn={handleZoomIn}
@@ -1271,6 +1284,19 @@ export const ViewerApp: React.FC = () => {
         onDownload={handleDownload}
         onPrint={handlePrint}
       />
+
+      {/* TOC slide-out panel */}
+      {/** overlay */}
+      {tocOpen && (
+        <div
+          onClick={() => setTocOpen(false)}
+          className="fixed inset-0 bg-black/30 z-40"
+        />
+      )}
+
+      <div className={`fixed left-0 top-0 h-full z-50 transform bg-transparent transition-transform ${tocOpen ? 'translate-x-0' : '-translate-x-full'}`}>
+        <TOC items={tableOfContents ? buildTOCTree(tableOfContents.items) : []} onSelect={handleTOCSelect} />
+      </div>
 
       <div ref={containerRef} className="flex-1 overflow-auto">
         <div className="py-4 flex flex-col items-center">
