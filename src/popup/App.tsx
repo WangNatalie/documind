@@ -1,7 +1,7 @@
 import React, { useState, useRef } from 'react';
 import { nanoid } from 'nanoid';
 import { writeOPFSFile, requestPersistentStorage } from '../db/opfs';
-import { putDoc } from '../db';
+import { putDoc, getDoc } from '../db';
 import { generateDocHash } from '../utils/hash';
 
 export const PopupApp: React.FC = () => {
@@ -56,18 +56,52 @@ export const PopupApp: React.FC = () => {
       await requestPersistentStorage();
 
       // Generate upload ID
-      const uploadId = nanoid();
-
       // Read file
       const arrayBuffer = await file.arrayBuffer();
+
+      const firstBytes = arrayBuffer.slice(0, 64 * 1024);
+      const lastBytes = arrayBuffer.slice(-64 * 1024);
+
+      // Compute content-only hash first so re-uploads of the same file map to the same doc
+      const tempSource = { type: 'uploadId' as const, value: 'TEMP' };
+      const contentHash = await generateDocHash(tempSource, {
+        size: arrayBuffer.byteLength,
+        firstBytes,
+        lastBytes,
+      });
+
+      // If a doc already exists for this content, reuse its source and open viewer
+      const existing = await getDoc(contentHash).catch(() => undefined);
+
+      if (existing) {
+        // Open viewer using existing doc's source
+        if (existing.source.type === 'uploadId') {
+          const viewerUrl = chrome.runtime.getURL(
+            `viewer.html?uploadId=${existing.source.value}&name=${encodeURIComponent(existing.name)}`
+          );
+          chrome.tabs.create({ url: viewerUrl });
+          window.close();
+          return;
+        }
+
+        if (existing.source.type === 'url') {
+          const viewerUrl = chrome.runtime.getURL(
+            `viewer.html?file=${encodeURIComponent(existing.source.value)}&name=${encodeURIComponent(existing.name)}`
+          );
+          chrome.tabs.create({ url: viewerUrl });
+          window.close();
+          return;
+        }
+      }
+
+      // No existing doc — proceed with creating a new upload
+      const uploadId = nanoid();
 
       // Write to OPFS
       await writeOPFSFile(uploadId, arrayBuffer);
 
-      // Generate doc hash
+      // Generate doc hash using the actual uploadId source (generateDocHash now uses content-only for uploads)
       const source = { type: 'uploadId' as const, value: uploadId };
-      const firstBytes = arrayBuffer.slice(0, 64 * 1024);
-      const lastBytes = arrayBuffer.slice(-64 * 1024);
       const docHash = await generateDocHash(source, {
         size: arrayBuffer.byteLength,
         firstBytes,

@@ -173,14 +173,65 @@ export const ViewerApp: React.FC = () => {
           source = { type: "uploadId", value: uploadId };
           const arrayBuffer = await readOPFSFile(uploadId);
 
-          // Generate hash from file metadata
+          // Generate content-only hash from file metadata
           const firstBytes = arrayBuffer.slice(0, 64 * 1024);
           const lastBytes = arrayBuffer.slice(-64 * 1024);
-          hash = await generateDocHash(source, {
+          const newHash = await generateDocHash(source, {
             size: arrayBuffer.byteLength,
             firstBytes,
             lastBytes,
           });
+
+          // Try to find an existing doc under the new (content-only) hash
+          let existing = await getDoc(newHash);
+
+          if (!existing) {
+            // Fallback: attempt legacy uploadId-including hash for compatibility
+            try {
+              // import helper at top-level: generateLegacyUploadHash
+              // (we import it below where needed)
+              // eslint-disable-next-line @typescript-eslint/no-var-requires
+              const { generateLegacyUploadHash } = await import('../utils/hash');
+              const legacyHash = await generateLegacyUploadHash(source, {
+                size: arrayBuffer.byteLength,
+                firstBytes,
+                lastBytes,
+              });
+
+              const legacyDoc = await getDoc(legacyHash);
+              if (legacyDoc) {
+                console.log('[App] Found existing doc under legacy hash, reusing it:', legacyHash);
+                // Use legacy hash so existing notes/TOC/chunks are found
+                hash = legacyHash;
+                existing = legacyDoc;
+
+                // Optionally create a doc record under the new hash to migrate forward
+                try {
+                  await putDoc({
+                    docHash: newHash,
+                    source,
+                    name: legacyDoc.name,
+                    pageCount: legacyDoc.pageCount,
+                    lastPage: legacyDoc.lastPage,
+                    lastZoom: legacyDoc.lastZoom,
+                    createdAt: legacyDoc.createdAt,
+                    updatedAt: Date.now(),
+                  });
+                  console.log('[App] Migrated doc record to new content-only hash:', newHash);
+                } catch (mErr) {
+                  console.warn('[App] Migration to new hash failed (non-fatal):', mErr);
+                }
+              } else {
+                // No legacy record found; use newHash
+                hash = newHash;
+              }
+            } catch (err) {
+              console.warn('[App] Legacy hash fallback failed:', err);
+              hash = newHash;
+            }
+          } else {
+            hash = newHash;
+          }
 
           pdfDoc = await loadPDF({ data: arrayBuffer });
         } else if (fileUrl) {
