@@ -43,8 +43,6 @@ export const Page: React.FC<PageProps> = ({
   const [error, setError] = useState<string | null>(null);
   const renderedScaleRef = useRef<number>(0);
 
-  console.log("rendering page", pageNum);
-
   // Helper function to merge rects into contiguous lines
   const mergeRectsIntoLines = useCallback(
     (
