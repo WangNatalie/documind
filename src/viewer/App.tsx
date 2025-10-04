@@ -155,8 +155,9 @@ export const ViewerApp: React.FC = () => {
         setCurrentPage(restoredPage);
         setZoom(restoredZoom);
 
-        // Initialize visible pages with the restored page
+        // Initialize visible pages with the restored page (both ref and state)
         visiblePagesRef.current = new Set([restoredPage]);
+        setVisiblePages(new Set([restoredPage]));
 
         // Scroll to restored page after a brief delay to ensure rendering
         if (restoredPage > 1) {
@@ -621,13 +622,21 @@ export const ViewerApp: React.FC = () => {
     container.addEventListener('scroll', throttledScroll, { passive: true });
 
     // Initial call to set up visible pages
-    handleScroll();
+    // Delay if we're on initial load to allow scroll restoration to complete
+    if (isInitialLoad) {
+      // Wait for scroll restoration to complete before checking visible pages
+      setTimeout(() => {
+        handleScroll();
+      }, 150);
+    } else {
+      handleScroll();
+    }
 
     return () => {
       container.removeEventListener('scroll', throttledScroll);
       if (rafId) cancelAnimationFrame(rafId);
     };
-  }, [currentPage, pages.length]);
+  }, [currentPage, pages.length, scale, isInitialLoad]); // Added scale dependency so visibility rechecks on zoom
 
   // Handler functions
   const handlePrevPage = useCallback(() => {
