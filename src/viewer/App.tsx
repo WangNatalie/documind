@@ -85,6 +85,10 @@ export const ViewerApp: React.FC = () => {
     rects: Array<{ top: number; left: number; width: number; height: number }>;
   } | null>(null);
   const [tocOpen, setTocOpen] = useState(false);
+  const [tocPinned, setTocPinned] = useState(false);
+  // Toolbar ref so we can measure its height and avoid covering it with the TOC drawer
+  const toolbarRef = useRef<HTMLDivElement | null>(null);
+  const [toolbarHeight, setToolbarHeight] = useState(0);
 
   // Parse URL params
   const params = new URLSearchParams(window.location.search);
@@ -417,16 +421,54 @@ export const ViewerApp: React.FC = () => {
   }, [tableOfContents]);
 
   const handleToggleTOC = useCallback(() => {
-    setTocOpen((v) => !v);
+    // Treat the toolbar hamburger as the "pin" toggle: clicking it toggles pinned state
+    setTocPinned((prev) => {
+      const next = !prev;
+      if (next) setTocOpen(true); // when pinned, ensure the TOC is open
+      else setTocOpen(false); // when unpinned, close the TOC
+      return next;
+    });
   }, []);
 
   const handleTOCSelect = useCallback((item: any) => {
     // scroll to page when TOC entry clicked
     if (typeof item.page === 'number') {
       scrollToPage(item.page);
-      setTocOpen(false);
+      if (!tocPinned) setTocOpen(false);
     }
+  }, [tocPinned]);
+
+  // Measure toolbar height so the TOC drawer doesn't cover it
+  useEffect(() => {
+    const el = toolbarRef.current;
+    if (!el) return;
+
+    const update = () => setToolbarHeight(el.getBoundingClientRect().height || 0);
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [toolbarRef.current]);
+
+  // Hover behavior: auto-open when cursor hits left edge; auto-close when leaving unless pinned
+  const hoverCloseTimeout = useRef<number | null>(null);
+
+  const openFromHover = useCallback(() => {
+    if (hoverCloseTimeout.current) {
+      window.clearTimeout(hoverCloseTimeout.current);
+      hoverCloseTimeout.current = null;
+    }
+    setTocOpen(true);
   }, []);
+
+  const scheduleCloseFromHover = useCallback(() => {
+    if (tocPinned) return; // don't auto-close when pinned
+    if (hoverCloseTimeout.current) window.clearTimeout(hoverCloseTimeout.current);
+    hoverCloseTimeout.current = window.setTimeout(() => {
+      setTocOpen(false);
+      hoverCloseTimeout.current = null;
+    }, 200); // small delay to avoid flicker
+  }, [tocPinned]);
 
   // Right-click to open custom context menu
   useEffect(() => {
@@ -1270,6 +1312,7 @@ export const ViewerApp: React.FC = () => {
   return (
     <div className="h-screen flex flex-col bg-neutral-50 dark:bg-neutral-900">
       <Toolbar
+        ref={toolbarRef}
         currentPage={currentPage}
         totalPages={pages.length}
         zoom={zoom}
@@ -1285,17 +1328,32 @@ export const ViewerApp: React.FC = () => {
         onPrint={handlePrint}
       />
 
-      {/* TOC slide-out panel */}
-      {/** overlay */}
-      {tocOpen && (
-        <div
-          onClick={() => setTocOpen(false)}
-          className="fixed inset-0 bg-black/30 z-40"
-        />
-      )}
+      {/* Left-edge hover target: 12px wide invisible strip to auto-open TOC when cursor hits the edge */}
+      <div
+        onMouseEnter={() => openFromHover()}
+        onMouseLeave={() => scheduleCloseFromHover()}
+        style={{ width: 12 }}
+        className="fixed left-0 top-0 h-full z-40 bg-transparent"
+        aria-hidden
+      />
 
-      <div className={`fixed left-0 top-0 h-full z-50 transform bg-transparent transition-transform ${tocOpen ? 'translate-x-0' : '-translate-x-full'}`}>
-        <TOC items={tableOfContents ? buildTOCTree(tableOfContents.items) : []} onSelect={handleTOCSelect} />
+      {/* TOC slide-out panel. It is positioned below the toolbar and does not cover toolbar.
+          When TOC is open from hover, overlay does not block interaction (pointer-events-none).
+          If pinned, we add a small clickable close area and pointer events for overlay. */}
+      <div
+        className={`fixed left-0 top-0 z-50 transform transition-transform ${tocOpen ? 'translate-x-0' : '-translate-x-full'}`}
+        style={{
+          // offset by toolbar height so the drawer doesn't cover the toolbar
+          top: toolbarHeight,
+          height: `calc(100% - ${toolbarHeight}px)`,
+          // ensure it doesn't capture pointer events when open due to hover-only
+        }}
+        onMouseEnter={() => openFromHover()}
+        onMouseLeave={() => scheduleCloseFromHover()}
+      >
+        <div className="relative h-full">
+          <TOC items={tableOfContents ? buildTOCTree(tableOfContents.items) : []} onSelect={handleTOCSelect} />
+        </div>
       </div>
 
       <div ref={containerRef} className="flex-1 overflow-auto">

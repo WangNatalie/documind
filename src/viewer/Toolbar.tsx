@@ -16,7 +16,7 @@ interface ToolbarProps {
   onPrint?: () => void;
 }
 
-export const Toolbar: React.FC<ToolbarProps> = ({
+const ToolbarInner: React.FC<ToolbarProps & { forwardedRef?: React.Ref<HTMLDivElement> }> = ({
   onToggleTOC,
   currentPage,
   totalPages,
@@ -30,6 +30,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   onPageChange,
   onDownload,
   onPrint,
+  forwardedRef,
 }) => {
   const handlePageInput = (e: React.FormEvent<HTMLInputElement>) => {
     const value = parseInt(e.currentTarget.value, 10);
@@ -45,7 +46,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   };
 
   return (
-    <div className="sticky top-0 z-50 bg-white dark:bg-neutral-900 shadow-md border-b border-neutral-200 dark:border-neutral-700">
+    <div ref={forwardedRef} className="sticky top-0 z-50 bg-white dark:bg-neutral-900 shadow-md border-b border-neutral-200 dark:border-neutral-700">
       <div className="flex items-center justify-between px-4 py-2 gap-2">
         {/* Left: TOC toggle + Navigation */}
         <div className="flex items-center gap-2">
@@ -167,3 +168,10 @@ export const Toolbar: React.FC<ToolbarProps> = ({
     </div>
   );
 };
+
+// forward ref so parent can measure toolbar height and avoid covering it with the TOC drawer
+const Toolbar = React.forwardRef<HTMLDivElement, ToolbarProps>((props, ref) => (
+  <ToolbarInner {...props} forwardedRef={ref} />
+));
+
+export { Toolbar };
