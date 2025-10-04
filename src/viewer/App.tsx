@@ -662,32 +662,51 @@ export const ViewerApp: React.FC = () => {
     const container = containerRef.current;
     if (!container) return;
 
+    let wheelTimeout: NodeJS.Timeout | null = null;
+    let accumulatedDelta = 0;
+
     const handleWheel = (e: WheelEvent) => {
       // Only handle ctrl/cmd + wheel for zooming
       if (e.ctrlKey || e.metaKey) {
         e.preventDefault();
         e.stopPropagation();
 
-        const cursor = { x: e.clientX, y: e.clientY };
-        if (e.deltaY < 0) {
-          // zoom in around cursor
-          if (zoom === "fitWidth" || zoom === "fitPage") {
-            changeZoom("100", { cursorPoint: cursor });
-          } else {
-            const currentZoom = parseInt(zoom, 10);
-            const nextZoom = ZOOM_LEVELS.find((z) => z > currentZoom) || ZOOM_LEVELS[ZOOM_LEVELS.length - 1];
-            changeZoom(nextZoom.toString(), { cursorPoint: cursor });
-          }
-        } else if (e.deltaY > 0) {
-          // zoom out around cursor
-          if (zoom === "fitWidth" || zoom === "fitPage") {
-            changeZoom("100", { cursorPoint: cursor });
-          } else {
-            const currentZoom = parseInt(zoom, 10);
-            const prevZoom = [...ZOOM_LEVELS].reverse().find((z) => z < currentZoom) || 50;
-            changeZoom(prevZoom.toString(), { cursorPoint: cursor });
-          }
+        // Accumulate wheel delta to handle trackpad/mouse wheel differences
+        accumulatedDelta += e.deltaY;
+
+        // Clear existing timeout
+        if (wheelTimeout) {
+          clearTimeout(wheelTimeout);
         }
+
+        // Debounce zoom changes slightly to group rapid wheel events
+        wheelTimeout = setTimeout(() => {
+          const cursor = { x: e.clientX, y: e.clientY };
+
+          if (accumulatedDelta < -10) {
+            // zoom in around cursor (negative delta = scroll up)
+            if (zoom === "fitWidth" || zoom === "fitPage") {
+              changeZoom("100", { cursorPoint: cursor });
+            } else {
+              const currentZoom = parseInt(zoom, 10);
+              const nextZoom = ZOOM_LEVELS.find((z) => z > currentZoom) || ZOOM_LEVELS[ZOOM_LEVELS.length - 1];
+              changeZoom(nextZoom.toString(), { cursorPoint: cursor });
+            }
+          } else if (accumulatedDelta > 10) {
+            // zoom out around cursor (positive delta = scroll down)
+            if (zoom === "fitWidth" || zoom === "fitPage") {
+              changeZoom("100", { cursorPoint: cursor });
+            } else {
+              const currentZoom = parseInt(zoom, 10);
+              const prevZoom = [...ZOOM_LEVELS].reverse().find((z) => z < currentZoom) || 50;
+              changeZoom(prevZoom.toString(), { cursorPoint: cursor });
+            }
+          }
+
+          // Reset accumulated delta
+          accumulatedDelta = 0;
+          wheelTimeout = null;
+        }, 50); // 50ms debounce for wheel events
       }
       // If no ctrl/cmd, let the event propagate normally for regular scrolling
     };
@@ -695,10 +714,11 @@ export const ViewerApp: React.FC = () => {
     container.addEventListener("wheel", handleWheel, { passive: false });
     return () => {
       container.removeEventListener("wheel", handleWheel);
+      if (wheelTimeout) {
+        clearTimeout(wheelTimeout);
+      }
     };
-  }, [zoom, changeZoom]);
-
-  const handleRender = useCallback(
+  }, [zoom, changeZoom]);  const handleRender = useCallback(
     async (
       pageNum: number,
       canvas: HTMLCanvasElement,

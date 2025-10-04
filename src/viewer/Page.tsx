@@ -27,6 +27,8 @@ interface PageProps {
   }>;
 }
 
+const ZOOM_DEBOUNCE_MS = 75;
+
 export const Page: React.FC<PageProps> = ({
   pageNum,
   page,
@@ -207,26 +209,27 @@ export const Page: React.FC<PageProps> = ({
         clearTimeout(renderTimeoutRef.current);
       }
 
+      // Capture the current scale for the timeout closure
+      const scaleToRender = scale;
+
       // Queue a high-quality re-render after a short delay (debounced)
       renderTimeoutRef.current = setTimeout(async () => {
-        const targetScale = targetScaleRef.current;
-
-        // Skip if scale has changed again since this timeout was set
-        if (Math.abs(targetScale - scale) > 0.01) {
+        // Skip if target scale has changed since this timeout was set
+        if (Math.abs(targetScaleRef.current - scaleToRender) > 0.01) {
           return;
         }
 
         // Skip if we've already rendered at this exact scale
-        if (Math.abs(renderedScaleRef.current - targetScale) < 0.01) {
+        if (Math.abs(renderedScaleRef.current - scaleToRender) < 0.01) {
           return;
         }
 
         try {
           await onRender(pageNum, canvas, textLayerRef.current, isVisible ? 1 : 10);
 
-          // Only update renderedScaleRef if we're still at the target scale
-          if (Math.abs(targetScaleRef.current - targetScale) < 0.01) {
-            renderedScaleRef.current = targetScale;
+          // Only update renderedScaleRef if we're still at the same target scale
+          if (Math.abs(targetScaleRef.current - scaleToRender) < 0.01) {
+            renderedScaleRef.current = scaleToRender;
             canvas.style.transform = "";
             canvas.style.transformOrigin = "top left";
           }
@@ -236,7 +239,7 @@ export const Page: React.FC<PageProps> = ({
             // Don't set error state since we already have a (scaled) version showing
           }
         }
-      }, 150); // 150ms debounce - wait for rapid zoom gestures to finish
+      }, ZOOM_DEBOUNCE_MS); // debounce - wait for rapid zoom gestures to finish
     } catch (err: any) {
       console.error(`[Page ${pageNum}] Failed to CSS-scale canvas, falling back to full render:`, err);
       // Fallback: perform a full render
