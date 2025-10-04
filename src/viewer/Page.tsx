@@ -142,15 +142,12 @@ export const Page: React.FC<PageProps> = ({
       if (!shouldRender) {
         // Page moved outside render buffer, reset state
         renderedScaleRef.current = 0;
-<<<<<<< HEAD
         targetScaleRef.current = 0;
         // Clear any pending render timeouts
         if (renderTimeoutRef.current) {
           clearTimeout(renderTimeoutRef.current);
           renderTimeoutRef.current = null;
         }
-=======
->>>>>>> 83a974a (fix zooming behaviour (#21))
         // also reset any css scaling
         if (canvasRef.current) {
           canvasRef.current.style.transform = "";
@@ -166,37 +163,43 @@ export const Page: React.FC<PageProps> = ({
     if (!renderedScaleRef.current || renderedScaleRef.current === 0) {
       const doFullRender = async () => {
         try {
-<<<<<<< HEAD
-=======
-          console.log(
-            `[Page ${pageNum}] Full render starting - visible: ${isVisible}, priority: ${isVisible ? 1 : 10}`
-          );
->>>>>>> 83a974a (fix zooming behaviour (#21))
           setIsLoading(true);
           setError(null);
+    // Skip re-render if scale hasn't changed significantly (avoid flashing)
+    if (
+      renderedScaleRef.current > 0 &&
+      Math.abs(renderedScaleRef.current - scale) < 0.01
+    ) {
+      setIsLoading(false);
+      return;
+    }
 
-          const priority = isVisible ? 1 : 10;
-          await onRender(pageNum, canvas, textLayerRef.current, priority);
+    const render = async () => {
+      try {
+        console.log(
+          `[Page ${pageNum}] Starting render - visible: ${isVisible}, priority: ${isVisible ? 1 : 10}`
+        );
+        setIsLoading(true);
+        setError(null);
+
+        const priority = isVisible ? 1 : 10;
+        await onRender(
+          pageNum,
+          canvasRef.current!,
+          textLayerRef.current,
+          priority
+        );
 
           renderedScaleRef.current = scale;
           // ensure any CSS transform is reset after drawing
           canvas.style.transform = "";
           canvas.style.transformOrigin = "top left";
           setIsLoading(false);
-<<<<<<< HEAD
-=======
-          console.log(`[Page ${pageNum}] Full render complete at scale ${scale}`);
->>>>>>> 83a974a (fix zooming behaviour (#21))
         } catch (err: any) {
           if (err?.name !== "RenderingCancelledException") {
             console.error(`[Page ${pageNum}] Render error:`, err);
             setError(err.message || "Failed to render page");
             setIsLoading(false);
-<<<<<<< HEAD
-=======
-          } else {
-            console.log(`[Page ${pageNum}] Render cancelled`);
->>>>>>> 83a974a (fix zooming behaviour (#21))
           }
         }
       };
@@ -205,16 +208,10 @@ export const Page: React.FC<PageProps> = ({
       return;
     }
 
-<<<<<<< HEAD
     // If we already have a rendered canvas at a previous scale, use progressive rendering:
     // 1. Immediately CSS-scale the existing canvas (instant feedback, may be blurry)
     // 2. Debounce and trigger a background re-render at the new scale for crisp quality
     // This matches PDF.js behavior where zoom is instant but quality improves after a moment
-=======
-    // If we already have a rendered canvas at a previous scale, prefer CSS-scaling
-    // to avoid a full redraw which causes flashing. Adjust canvas CSS to keep
-    // the drawn bitmap and scale it to the new requested size.
->>>>>>> 83a974a (fix zooming behaviour (#21))
     const prevScale = renderedScaleRef.current;
     if (Math.abs(prevScale - scale) < 0.01) {
       // effectively same, no-op
@@ -226,23 +223,13 @@ export const Page: React.FC<PageProps> = ({
       // Compute new viewport at the requested scale
       const newViewport = page.getViewport({ scale });
 
-<<<<<<< HEAD
       // STEP 1: Immediately CSS-scale the existing canvas for instant visual feedback
       // This stretches the existing bitmap, which may look blurry but responds instantly
-=======
-      // Set the canvas layout size to the new viewport dimensions so the
-      // element's layout footprint matches the new page size. We avoid a
-      // transform because transforms do not affect layout (they can cause
-      // large gaps when the element's intrinsic size remains the previous
-      // value). Setting CSS width/height stretches the existing bitmap to
-      // the new layout size (no flash) and preserves correct spacing between pages.
->>>>>>> 83a974a (fix zooming behaviour (#21))
       canvas.style.width = `${newViewport.width}px`;
       canvas.style.height = `${newViewport.height}px`;
       canvas.style.transform = "";
       canvas.style.transformOrigin = "top left";
 
-<<<<<<< HEAD
       setIsLoading(false);
 
       // Update target scale and track CSS scale
@@ -301,35 +288,11 @@ export const Page: React.FC<PageProps> = ({
           console.error(`[Page ${pageNum}] Fallback render failed:`, e);
           setIsLoading(false);
         }
-=======
-      // We don't redraw here; keep renderedScaleRef at prevScale (actual bitmap scale).
-      // Update loading state: no loading spinner during CSS resizing
-      setIsLoading(false);
-      console.log(`
-        [Page ${pageNum}] CSS-resized canvas layout to ${newViewport.width}x${newViewport.height} (bitmap at scale ${prevScale}, visual scale ${scale})
-      `.trim());
-    } catch (err: any) {
-      console.error(`[Page ${pageNum}] Failed to CSS-scale canvas, falling back to full render:`, err);
-      // Fallback: perform a full render
-      const fallback = async () => {
-        try {
-          setIsLoading(true);
-          await onRender(pageNum, canvas, textLayerRef.current, isVisible ? 1 : 10);
-          renderedScaleRef.current = scale;
-          canvas.style.transform = "";
-          canvas.style.transformOrigin = "top left";
-          setIsLoading(false);
-        } catch (e: any) {
-          console.error(`[Page ${pageNum}] Fallback render failed:`, e);
-          setIsLoading(false);
-        }
->>>>>>> 83a974a (fix zooming behaviour (#21))
       };
 
       fallback();
     }
   }, [page, scale, pageNum, onRender, isVisible, shouldRender]);
-<<<<<<< HEAD
 
   // Cleanup timeout on unmount
   useEffect(() => {
@@ -339,8 +302,6 @@ export const Page: React.FC<PageProps> = ({
       }
     };
   }, []);
-=======
->>>>>>> 83a974a (fix zooming behaviour (#21))
 
   // Get approximate dimensions for skeleton
   const viewport = page?.getViewport({ scale: scale || 1 });
@@ -410,7 +371,7 @@ export const Page: React.FC<PageProps> = ({
               {mergedLines.map((line, i) => (
                 <div
                   key={`${n.id}-${i}`}
-<<<<<<< HEAD
+
                   className={`absolute rounded-md pointer-events-none z-20 ${
                     n.color === 'yellow' ? 'bg-yellow-300/20' : n.color === 'green' ? 'bg-emerald-200/20' : 'bg-sky-200/20'
 =======
@@ -420,7 +381,6 @@ export const Page: React.FC<PageProps> = ({
                       : n.color === "green"
                         ? "bg-emerald-200/30"
                         : "bg-sky-200/30"
->>>>>>> 2063b45 (notes & comments)
                   }`}
                   style={{
                     top: line.top,
@@ -458,16 +418,10 @@ export const Page: React.FC<PageProps> = ({
           const mergedLines = mergeRectsIntoLines(c.rects, width, height);
 
           return (
-<<<<<<< HEAD
-            <div key={c.id} className="group">
-              {mergedLines.map((line, i) => (
-                <div key={`${c.id}-${i}`} className="absolute z-30" style={{ top: line.top + 3, left: line.left, width: line.width, height: line.height, pointerEvents: 'auto' }}>
-=======
             <div key={c.id}>
               {/* Overline on text with edge brackets */}
               {mergedLines.map((line, i) => (
                 <React.Fragment key={`${c.id}-overline-${i}`}>
->>>>>>> 2063b45 (notes & comments)
                   {/* Horizontal overline bar */}
                   <div
                     className="absolute h-0.5 bg-yellow-500 z-30"
