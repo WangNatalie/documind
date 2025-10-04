@@ -13,8 +13,6 @@ import { requestChunking } from '../utils/chunker-client';
 const ZOOM_LEVELS = [50, 75, 90, 100, 125, 150, 175, 200, 250, 300];
 
 export const ViewerApp: React.FC = () => {
-  console.log('🚀 ViewerApp component rendering - RELOAD VERIFIED');
-
   const [pdf, setPdf] = useState<PDFDocumentProxy | null>(null);
   const [pages, setPages] = useState<(PDFPageProxy | null)[]>([]);
   const [currentPage, setCurrentPage] = useState(1);
@@ -24,6 +22,7 @@ export const ViewerApp: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [docHash, setDocHash] = useState<string>('');
+  const [isInitialLoad, setIsInitialLoad] = useState(true);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const observerRef = useRef<IntersectionObserver | null>(null);
@@ -86,7 +85,6 @@ export const ViewerApp: React.FC = () => {
 
         setDocHash(hash);
         setPdf(pdfDoc);
-        console.log('📄 PDF loaded successfully, pages:', pdfDoc.numPages);
 
         // Load all pages
         const pageCount = pdfDoc.numPages;
@@ -96,23 +94,46 @@ export const ViewerApp: React.FC = () => {
         }
         const loadedPages = await Promise.all(pagePromises);
         setPages(loadedPages);
-        console.log('📚 All pages loaded into state, count:', loadedPages.length);
 
         // Restore last state or use hash
         const existingDoc = await getDoc(hash);
         const hashState = parseHash(window.location.hash);
 
+        let restoredPage = 1;
+        let restoredZoom = 'fitPage';
+
         if (hashState.page) {
-          setCurrentPage(hashState.page);
+          restoredPage = hashState.page;
         } else if (existingDoc?.lastPage) {
-          setCurrentPage(existingDoc.lastPage);
+          restoredPage = existingDoc.lastPage;
         }
 
         if (hashState.zoom) {
-          setZoom(hashState.zoom);
+          restoredZoom = hashState.zoom;
         } else if (existingDoc?.lastZoom) {
-          setZoom(existingDoc.lastZoom);
+          restoredZoom = existingDoc.lastZoom;
         }
+
+        setCurrentPage(restoredPage);
+        setZoom(restoredZoom);
+
+        // Initialize visible pages with the restored page
+        visiblePagesRef.current = new Set([restoredPage]);
+
+        // Scroll to restored page after a brief delay to ensure rendering
+        if (restoredPage > 1) {
+          setTimeout(() => {
+            const pageEl = document.querySelector(`[data-page-num="${restoredPage}"]`);
+            if (pageEl) {
+              pageEl.scrollIntoView({ behavior: 'auto', block: 'start' });
+            }
+          }, 100);
+        }
+
+        // Mark initial load as complete
+        setTimeout(() => {
+          setIsInitialLoad(false);
+        }, 200);
 
         // Create or update doc record
         if (!existingDoc) {
@@ -121,8 +142,8 @@ export const ViewerApp: React.FC = () => {
             source,
             name: fileName,
             pageCount,
-            lastPage: hashState.page || 1,
-            lastZoom: hashState.zoom || 'fitWidth',
+            lastPage: restoredPage,
+            lastZoom: restoredZoom,
             createdAt: Date.now(),
             updatedAt: Date.now(),
           });
@@ -185,18 +206,12 @@ export const ViewerApp: React.FC = () => {
   useEffect(() => {
     if (!containerRef.current || pages.length === 0) return;
 
-    console.log('[IntersectionObserver] Setting up observer, pages:', pages.length);
-
     // Small delay to ensure page elements are in the DOM
     const timeoutId = setTimeout(() => {
       const container = containerRef.current;
-      if (!container) {
-        console.log('[IntersectionObserver] Container not available');
-        return;
-      }
+      if (!container) return;
 
       const updateCurrentPage = (pageNum: number) => {
-        console.log('[IntersectionObserver] Updating current page to:', pageNum);
         setCurrentPage(pageNum);
       };
 
@@ -237,12 +252,10 @@ export const ViewerApp: React.FC = () => {
 
       // Observe all pages
       const pageElements = container.querySelectorAll('[data-page-num]');
-      console.log(`[IntersectionObserver] Found ${pageElements.length} page elements to observe`);
       pageElements.forEach((el) => observerRef.current?.observe(el));
 
       // Trigger initial visibility check
       if (pageElements.length > 0) {
-        console.log('[IntersectionObserver] Triggering initial visibility check');
         // Small delay to ensure layout is complete
         setTimeout(() => {
           // Force re-observation to trigger initial callbacks
@@ -255,16 +268,17 @@ export const ViewerApp: React.FC = () => {
     }, 150);
 
     return () => {
-      console.log('[IntersectionObserver] Cleaning up observer');
       clearTimeout(timeoutId);
       observerRef.current?.disconnect();
     };
   }, [pages, currentPage]);
 
-  // Update hash when page/zoom changes
+  // Update hash when page/zoom changes (but not during initial load)
   useEffect(() => {
-    updateHash({ page: currentPage, zoom });
-  }, [currentPage, zoom]);
+    if (!isInitialLoad) {
+      updateHash({ page: currentPage, zoom });
+    }
+  }, [currentPage, zoom, isInitialLoad]);
 
   // Persist state to IndexedDB
   useEffect(() => {
