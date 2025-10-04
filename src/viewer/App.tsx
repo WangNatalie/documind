@@ -222,11 +222,12 @@ export const ViewerApp: React.FC = () => {
     const pageNum = parseInt(pageEl.getAttribute('data-page-num') || '0', 10);
     const pageBox = pageEl.getBoundingClientRect();
 
+    // Normalize rects to fractions of page width/height so highlights scale with zoom
     const relRects = rects.map(r => ({
-      top: r.top - pageBox.top,
-      left: r.left - pageBox.left,
-      width: r.width,
-      height: r.height,
+      top: (r.top - pageBox.top) / pageBox.height,
+      left: (r.left - pageBox.left) / pageBox.width,
+      width: r.width / pageBox.width,
+      height: r.height / pageBox.height,
     }));
 
     // Persist highlight

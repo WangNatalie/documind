@@ -141,15 +141,24 @@ export const Page: React.FC<PageProps> = ({
         {/* Highlights overlays */}
         {highlights.map(h => (
           <React.Fragment key={h.id}>
-            {h.rects.map((r, i) => (
-              <div
-                key={`${h.id}-${i}`}
-                className={`absolute rounded-md pointer-events-none z-20 ${
-                  h.color === 'yellow' ? 'bg-yellow-300/30' : h.color === 'green' ? 'bg-emerald-200/30' : 'bg-sky-200/30'
-                }`}
-                style={{ top: r.top, left: r.left, width: r.width, height: r.height }}
-              />
-            ))}
+            {h.rects.map((r, i) => {
+              // If rects are normalized (0..1), convert to pixels
+              const isNormalized = Math.abs(r.top) <= 1 && Math.abs(r.left) <= 1 && Math.abs(r.width) <= 1 && Math.abs(r.height) <= 1;
+              const top = isNormalized ? r.top * height : r.top;
+              const left = isNormalized ? r.left * width : r.left;
+              const w = isNormalized ? r.width * width : r.width;
+              const hgt = isNormalized ? r.height * height : r.height;
+
+              return (
+                <div
+                  key={`${h.id}-${i}`}
+                  className={`absolute rounded-md pointer-events-none z-20 ${
+                    h.color === 'yellow' ? 'bg-yellow-300/30' : h.color === 'green' ? 'bg-emerald-200/30' : 'bg-sky-200/30'
+                  }`}
+                  style={{ top, left, width: w, height: hgt }}
+                />
+              );
+            })}
           </React.Fragment>
         ))}
       </div>
