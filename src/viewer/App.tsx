@@ -80,6 +80,20 @@ export const ViewerApp: React.FC = () => {
     rects: Array<{ top: number; left: number; width: number; height: number }>;
   } | null>(null);
 
+  // Term summaries state
+  interface TermSummary {
+    term: string;
+    definition: string;
+    explanation1: string;
+    explanation2: string;
+    explanation3: string;
+    tocItem: { title: string; page: number; chunkId?: string } | null;
+    matchedChunkId?: string;
+  }
+  const [termSummaries, setTermSummaries] = useState<TermSummary[]>([]);
+  const [selectedTerm, setSelectedTerm] = useState<TermSummary | null>(null);
+  const [termPopupPosition, setTermPopupPosition] = useState<{ x: number; y: number } | null>(null);
+
   // Parse URL params
   const params = new URLSearchParams(window.location.search);
   const fileUrl = params.get("file");
@@ -87,9 +101,18 @@ export const ViewerApp: React.FC = () => {
   // Keep filename in state so we can update it after reading PDF metadata
   const [fileName, setFileName] = useState<string>(params.get("name") || "document.pdf");
 
-  // Listen for state requests from background
+  // Listen for state requests and term summaries from background
   useEffect(() => {
     const handleMessage = (message: any) => {
+      if (message.type === 'TERM_SUMMARIES_READY') {
+        // Received term summaries from background script
+        const { summaries } = message.payload;
+        console.log('[VIEWER] Received term summaries:', summaries);
+        console.log('[VIEWER] Setting term summaries, count:', summaries?.length || 0);
+        setTermSummaries(summaries || []);
+        return;
+      }
+
       if (message.type === 'REQUEST_VIEWER_STATE') {
         // Extract text from visible pages
         let visibleText = '';
@@ -145,6 +168,42 @@ export const ViewerApp: React.FC = () => {
       chrome.runtime.onMessage.removeListener(handleMessage);
     };
   }, [docHash, fileName, currentPage, pages.length, zoom]);
+
+  // Reset term summaries when visible pages change
+  useEffect(() => {
+    // Clear term summaries to remove highlights when view changes
+    if (termSummaries.length > 0) {
+      console.log('[VIEWER] Visible pages changed, clearing term highlights');
+      setTermSummaries([]);
+      setSelectedTerm(null);
+      setTermPopupPosition(null);
+    }
+  }, [visiblePages]);
+
+  // Close popup when clicking outside
+  useEffect(() => {
+    if (!selectedTerm) return;
+
+    const handleClickOutside = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      // Check if click is outside the popup and not on a term highlight
+      if (!target.closest('[data-term-popup]') && !target.closest('[data-term-highlight]')) {
+        console.log('[App] Clicking outside popup, closing');
+        setSelectedTerm(null);
+        setTermPopupPosition(null);
+      }
+    };
+
+    // Use timeout to avoid catching the same click that opened the popup
+    const timeoutId = setTimeout(() => {
+      document.addEventListener('click', handleClickOutside);
+    }, 100);
+
+    return () => {
+      clearTimeout(timeoutId);
+      document.removeEventListener('click', handleClickOutside);
+    };
+  }, [selectedTerm]);
 
   // Load PDF on mount
   useEffect(() => {
@@ -1340,6 +1399,12 @@ export const ViewerApp: React.FC = () => {
                 onNoteEdit={handleNoteEdit}
                 onCommentDelete={handleCommentDelete}
                 onCommentEdit={handleCommentEdit}
+                termSummaries={termSummaries}
+                onTermClick={(term, x, y) => {
+                  console.log('[App] onTermClick called:', term.term, { x, y });
+                  setSelectedTerm(term);
+                  setTermPopupPosition({ x, y });
+                }}
               />
               );
             });
@@ -1462,6 +1527,83 @@ export const ViewerApp: React.FC = () => {
         y={contextPos.y}
         onSelect={(a) => handleContextAction(a)}
       />
+
+      {/* Term summary popup */}
+      {selectedTerm && termPopupPosition && (
+        <div
+          data-term-popup
+          className="fixed z-[100] bg-white dark:bg-neutral-800 border-2 border-blue-500 rounded-lg shadow-2xl p-4 max-w-md"
+          style={{
+            left: `${termPopupPosition.x}px`,
+            top: `${termPopupPosition.y}px`,
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="flex justify-between items-start mb-3">
+            <h3 className="text-lg font-bold text-neutral-900 dark:text-neutral-100">
+              {selectedTerm.term}
+            </h3>
+            <button
+              onClick={() => {
+                setSelectedTerm(null);
+                setTermPopupPosition(null);
+              }}
+              className="text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300"
+              title="Close"
+            >
+              ✕
+            </button>
+          </div>
+
+          <div className="mb-3">
+            <p className="text-sm font-semibold text-neutral-700 dark:text-neutral-300 mb-1">
+              Definition:
+            </p>
+            <p className="text-sm text-neutral-900 dark:text-neutral-100">
+              {selectedTerm.definition}
+            </p>
+          </div>
+
+          {(selectedTerm.explanation1 || selectedTerm.explanation2 || selectedTerm.explanation3) && (
+            <div className="mb-3">
+              <p className="text-sm font-semibold text-neutral-700 dark:text-neutral-300 mb-1">
+                Key Points:
+              </p>
+              <ul className="list-disc list-inside text-sm text-neutral-900 dark:text-neutral-100 space-y-1">
+                {selectedTerm.explanation1 && <li>{selectedTerm.explanation1}</li>}
+                {selectedTerm.explanation2 && <li>{selectedTerm.explanation2}</li>}
+                {selectedTerm.explanation3 && <li>{selectedTerm.explanation3}</li>}
+              </ul>
+            </div>
+          )}
+
+          {selectedTerm.tocItem && (
+            <div className="mb-2 text-sm text-neutral-600 dark:text-neutral-400">
+              <span className="font-semibold">Section: </span>
+              {selectedTerm.tocItem.title} (Page {selectedTerm.tocItem.page})
+            </div>
+          )}
+
+          {selectedTerm.matchedChunkId && (
+            <div className="mt-3 pt-3 border-t border-neutral-200 dark:border-neutral-700">
+              <button
+                onClick={() => {
+                  // Navigate to the chunk's page if available
+                  if (selectedTerm.tocItem?.page) {
+                    scrollToPage(selectedTerm.tocItem.page);
+                  }
+                }}
+                className="px-3 py-1.5 text-sm bg-blue-500 hover:bg-blue-600 text-white rounded"
+              >
+                Go to Context
+              </button>
+              <span className="ml-2 text-xs text-neutral-500 dark:text-neutral-400">
+                Chunk: {selectedTerm.matchedChunkId.substring(0, 8)}...
+              </span>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 };

@@ -184,7 +184,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (previousText !== state.visibleText) {
           console.log(`[UPDATE_VIEWER_STATE] Visible text changed for tab ${tabId}, extracting terms`);
           lastVisibleText.set(tabId, state.visibleText);
-          extractTermsFromText(state.visibleText, tabId, state.fileName, state.currentPage, state.docHash);
+          extractTermsFromText(state.visibleText, state.fileName, state.currentPage, state.docHash);
         }
       }
     }
@@ -193,10 +193,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 // Helper function to extract terms using offscreen document
-async function extractTermsFromText(passage: string, tabId: number, fileName: string, currentPage: number, docHash: string) {
+async function extractTermsFromText(passage: string, fileName: string, currentPage: number, docHash: string) {
   try {
-    console.log(`[extractTerms] Extracting terms for tab ${tabId}, page ${currentPage}`);
-    
     // Ensure offscreen document exists
     let offscreenExists = false;
     try {
@@ -229,9 +227,8 @@ async function extractTermsFromText(passage: string, tabId: number, fileName: st
     });
 
     if (response.success && response.result) {
-      console.log(`[extractTerms] Successfully extracted terms for "${fileName}" page ${currentPage}:`);
+      console.log(`[extractTerms] Successfully extracted ${response.result.terms.length} terms for "${fileName}" page ${currentPage}:`);
       console.log(`  Terms: ${response.result.terms.join(', ')}`);
-      console.log(`  Total terms: ${response.result.terms.length}`);
       
       // Find sections for each term
       if (response.result.terms.length > 0) {
@@ -258,7 +255,10 @@ async function findSectionsForTerms(terms: string[], docHash: string, fileName: 
 
     if (response.success && response.results) {
       if (response.results.length > 0) {
-        console.log(`[findSections] Successfully found sections for "${fileName}" page ${currentPage}:`);
+        // Summary
+        const termsWithSections = response.results.filter((r: any) => r.tocItem).length;
+        const termsWithChunks = response.results.filter((r: any) => r.matchedChunkId).length;
+        console.log(`[findSections] Found sections for ${termsWithSections}/${terms.length} terms (${termsWithChunks} with chunk context)`);
       } else {
         console.log(`[findSections] No sections found for "${fileName}" page ${currentPage}`);
       }
@@ -273,11 +273,6 @@ async function findSectionsForTerms(terms: string[], docHash: string, fileName: 
         }
       }
       
-      // Summary
-      const termsWithSections = response.results.filter((r: any) => r.tocItem).length;
-      const termsWithChunks = response.results.filter((r: any) => r.matchedChunkId).length;
-      console.log(`[findSections] Found sections for ${termsWithSections}/${terms.length} terms (${termsWithChunks} with chunk context)`);
-      
       // Generate summaries for all terms
       await summarizeTerms(response.results, docHash, fileName, currentPage);
     } else {
@@ -291,8 +286,6 @@ async function findSectionsForTerms(terms: string[], docHash: string, fileName: 
 // Helper function to generate summaries for terms
 async function summarizeTerms(termsWithSections: any[], docHash: string, fileName: string, currentPage: number) {
   try {
-    console.log(`[summarize] Generating summaries for ${termsWithSections.length} terms in "${fileName}" page ${currentPage}`);
-    
     // Send message to offscreen document to generate summaries
     const response = await chrome.runtime.sendMessage({
       type: 'SUMMARIZE_TERMS',
@@ -301,7 +294,6 @@ async function summarizeTerms(termsWithSections: any[], docHash: string, fileNam
 
     if (response.success && response.summaries) {
       console.log(`[summarize] Successfully generated summaries for "${fileName}" page ${currentPage}:`);
-      console.log('═══════════════════════════════════════════════════════');
       
       // Log each term summary
       for (const summary of response.summaries) {
@@ -319,8 +311,24 @@ async function summarizeTerms(termsWithSections: any[], docHash: string, fileNam
         console.log(`   3. ${summary.explanation3}`);
       }
       
-      console.log('\n═══════════════════════════════════════════════════════');
-      console.log(`[summarize] Generated ${response.summaries.length} summaries`);
+      // Send summaries to the viewer tab for display
+      const viewerTab = Array.from(viewerStates.entries()).find(
+        ([_, state]) => state.docHash === docHash
+      );
+      
+      if (viewerTab) {
+        const [tabId] = viewerTab;
+        try {
+          await chrome.tabs.sendMessage(tabId, {
+            type: 'TERM_SUMMARIES_READY',
+            payload: { summaries: response.summaries, currentPage }
+          });
+          console.log(`[summarize] Sent ${response.summaries.length} summaries to tab ${tabId}`);
+        } catch (error) {
+          console.error(`[summarize] Failed to send summaries to tab ${tabId}:`, error);
+        }
+      }
+    
     } else {
       console.warn('[summarize] Failed to generate summaries:', response.error);
     }
