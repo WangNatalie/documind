@@ -22,7 +22,7 @@ import { readOPFSFile } from "../db/opfs";
 import ContextMenu from "./ContextMenu";
 import { requestGeminiChunking, requestEmbeddings, requestTOC } from "../utils/chunker-client";
 
-const ZOOM_LEVELS = [50, 75, 90, 100, 125, 150, 175, 200, 250, 300];
+const ZOOM_LEVELS = [50, 75, 90, 100, 125, 150, 175, 200, 250, 300, 350, 400, 500];
 
 export const ViewerApp: React.FC = () => {
   const [pdf, setPdf] = useState<PDFDocumentProxy | null>(null);
@@ -41,6 +41,7 @@ export const ViewerApp: React.FC = () => {
   const renderQueue = useRenderQueue();
   const canvasCacheRef = useRef(new CanvasCache());
   const visiblePagesRef = useRef<Set<number>>(new Set([1]));
+  const pendingZoomRef = useRef<number | null>(null);
   // Context menu state
   const [contextVisible, setContextVisible] = useState(false);
   const [contextPos, setContextPos] = useState<{ x: number; y: number }>({
@@ -556,12 +557,19 @@ export const ViewerApp: React.FC = () => {
   // changeZoom: adjusts zoom while preserving scroll position appropriately
   // options.cursorPoint -> preserve the document point under cursor
   // options.snapToTop -> keep the current top-most page top aligned after zoom
+  // Uses RAF throttling to prevent excessive updates during rapid zoom
   const changeZoom = useCallback(
     (newZoom: string, options?: { cursorPoint?: { x: number; y: number }; snapToTop?: boolean }) => {
       const container = containerRef.current;
       if (!container || pages.length === 0) {
         setZoom(newZoom);
         return;
+      }
+
+      // Cancel any pending zoom animation
+      if (pendingZoomRef.current !== null) {
+        cancelAnimationFrame(pendingZoomRef.current);
+        pendingZoomRef.current = null;
       }
 
       const oldScale = scale;
@@ -616,9 +624,9 @@ export const ViewerApp: React.FC = () => {
         }
       }
 
-      // Apply zoom and scale on the next animation frame so the browser can
-      // process the scroll change first and avoid showing the top-of-page.
-      requestAnimationFrame(() => {
+      // Apply zoom and scale using RAF to throttle rapid updates
+      pendingZoomRef.current = requestAnimationFrame(() => {
+        pendingZoomRef.current = null;
         setZoom(newZoom);
         setScale(calcScale);
       });
@@ -631,7 +639,7 @@ export const ViewerApp: React.FC = () => {
       changeZoom("100", { snapToTop: true });
     } else {
       const currentZoom = parseInt(zoom, 10);
-      const nextZoom = ZOOM_LEVELS.find((z) => z > currentZoom) || 300;
+      const nextZoom = ZOOM_LEVELS.find((z) => z > currentZoom) || ZOOM_LEVELS[ZOOM_LEVELS.length - 1];
       changeZoom(nextZoom.toString(), { snapToTop: true });
     }
   }, [zoom, changeZoom]);
@@ -669,41 +677,78 @@ export const ViewerApp: React.FC = () => {
       }
     };
 
-    const handleWheel = (e: WheelEvent) => {
-      if (e.ctrlKey || e.metaKey) {
-        e.preventDefault();
-        const cursor = { x: e.clientX, y: e.clientY };
-        if (e.deltaY < 0) {
-          // zoom in around cursor
-          if (zoom === "fitWidth" || zoom === "fitPage") {
-            changeZoom("100", { cursorPoint: cursor });
-          } else {
-            const currentZoom = parseInt(zoom, 10);
-            const nextZoom = ZOOM_LEVELS.find((z) => z > currentZoom) || 300;
-            changeZoom(nextZoom.toString(), { cursorPoint: cursor });
-          }
-        } else {
-          // zoom out around cursor
-          if (zoom === "fitWidth" || zoom === "fitPage") {
-            changeZoom("100", { cursorPoint: cursor });
-          } else {
-            const currentZoom = parseInt(zoom, 10);
-            const prevZoom = [...ZOOM_LEVELS].reverse().find((z) => z < currentZoom) || 50;
-            changeZoom(prevZoom.toString(), { cursorPoint: cursor });
-          }
-        }
-      }
-    };
-
     window.addEventListener("keydown", handleKeyDown);
-    window.addEventListener("wheel", handleWheel, { passive: false });
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
-      window.removeEventListener("wheel", handleWheel);
+      // Cancel any pending zoom animation
+      if (pendingZoomRef.current !== null) {
+        cancelAnimationFrame(pendingZoomRef.current);
+      }
     };
   }, [handlePrevPage, handleNextPage, handleZoomIn, handleZoomOut]);
 
-  const handleRender = useCallback(
+  // Ctrl+scroll zoom handler - attached to container only
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    let wheelTimeout: NodeJS.Timeout | null = null;
+    let accumulatedDelta = 0;
+
+    const handleWheel = (e: WheelEvent) => {
+      // Only handle ctrl/cmd + wheel for zooming
+      if (e.ctrlKey || e.metaKey) {
+        e.preventDefault();
+        e.stopPropagation();
+
+        // Accumulate wheel delta to handle trackpad/mouse wheel differences
+        accumulatedDelta += e.deltaY;
+
+        // Clear existing timeout
+        if (wheelTimeout) {
+          clearTimeout(wheelTimeout);
+        }
+
+        // Debounce zoom changes slightly to group rapid wheel events
+        wheelTimeout = setTimeout(() => {
+          const cursor = { x: e.clientX, y: e.clientY };
+
+          if (accumulatedDelta < -10) {
+            // zoom in around cursor (negative delta = scroll up)
+            if (zoom === "fitWidth" || zoom === "fitPage") {
+              changeZoom("100", { cursorPoint: cursor });
+            } else {
+              const currentZoom = parseInt(zoom, 10);
+              const nextZoom = ZOOM_LEVELS.find((z) => z > currentZoom) || ZOOM_LEVELS[ZOOM_LEVELS.length - 1];
+              changeZoom(nextZoom.toString(), { cursorPoint: cursor });
+            }
+          } else if (accumulatedDelta > 10) {
+            // zoom out around cursor (positive delta = scroll down)
+            if (zoom === "fitWidth" || zoom === "fitPage") {
+              changeZoom("100", { cursorPoint: cursor });
+            } else {
+              const currentZoom = parseInt(zoom, 10);
+              const prevZoom = [...ZOOM_LEVELS].reverse().find((z) => z < currentZoom) || 50;
+              changeZoom(prevZoom.toString(), { cursorPoint: cursor });
+            }
+          }
+
+          // Reset accumulated delta
+          accumulatedDelta = 0;
+          wheelTimeout = null;
+        }, 50); // 50ms debounce for wheel events
+      }
+      // If no ctrl/cmd, let the event propagate normally for regular scrolling
+    };
+
+    container.addEventListener("wheel", handleWheel, { passive: false });
+    return () => {
+      container.removeEventListener("wheel", handleWheel);
+      if (wheelTimeout) {
+        clearTimeout(wheelTimeout);
+      }
+    };
+  }, [zoom, changeZoom]);  const handleRender = useCallback(
     async (
       pageNum: number,
       canvas: HTMLCanvasElement,
