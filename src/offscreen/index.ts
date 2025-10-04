@@ -1,6 +1,8 @@
 // Offscreen document for chunking operations
 // This runs in a DOM context where IndexedDB is available
-import { processChunkingTaskInOffscreen } from './chunker-offscreen.js';
+
+import { processChunkingTaskInOffscreen } from './chunker-offscreen';
+
 
 console.log('DocuMind offscreen document loaded at', new Date().toISOString());
 
@@ -28,10 +30,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === 'PROCESS_CHUNKING_TASK') {
     const { taskId, docHash, fileUrl, uploadId } = message.payload;
     console.log(`Received PROCESS_CHUNKING_TASK message for task ${taskId}`);
-    
+
     // Start keepalive during processing
     startKeepalive();
-    
+
     processChunkingTaskInOffscreen({ taskId, docHash, fileUrl, uploadId })
       .then(() => {
         console.log(`Task ${taskId} completed successfully`);
@@ -43,18 +45,18 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         stopKeepalive();
         sendResponse({ success: false, error: error.message });
       });
-    
+
     // Return true to indicate we'll send response asynchronously
     return true;
   }
-  
+
   if (message.type === 'PROCESS_CHUNKING_TASK_GEMINI') {
     const { taskId, docHash, fileUrl, uploadId } = message.payload;
     console.log(`Received PROCESS_CHUNKING_TASK_GEMINI message for task ${taskId}`);
-    
+
     // Start keepalive during processing
     startKeepalive();
-    
+
     import('./chunker-offscreen.js').then(async (chunker) => {
       await chunker.processChunkingTaskInOffscreenWithGemini({ taskId, docHash, fileUrl, uploadId });
       console.log(`Gemini chunking task ${taskId} completed successfully`);
@@ -65,15 +67,15 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       stopKeepalive();
       sendResponse({ success: false, error: error.message });
     });
-    
+
     // Return true to indicate we'll send response asynchronously
     return true;
   }
-  
+
   if (message.type === 'VERIFY_CHUNKS_EXIST') {
     const { docHash } = message.payload;
     console.log(`Verifying chunks exist for document ${docHash}`);
-    
+
     // Import getChunksByDoc dynamically
     import('../db/index.js').then(async (db) => {
       const chunks = await db.getChunksByDoc(docHash);
@@ -84,18 +86,18 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       console.error('Error verifying chunks:', error);
       sendResponse({ exists: false });
     });
-    
+
     // Return true to indicate we'll send response asynchronously
     return true;
   }
-  
+
   if (message.type === 'GENERATE_EMBEDDINGS') {
     const { docHash } = message.payload;
     console.log(`Received GENERATE_EMBEDDINGS request for document ${docHash}`);
-    
+
     // Start keepalive during processing
     startKeepalive();
-    
+
     import('./embedder.js').then(async (embedder) => {
       const count = await embedder.generateMissingEmbeddings(docHash);
       console.log(`Generated ${count} embeddings for document ${docHash}`);
@@ -106,18 +108,18 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       stopKeepalive();
       sendResponse({ success: false, error: error.message });
     });
-    
+
     // Return true to indicate we'll send response asynchronously
     return true;
   }
-  
+
   if (message.type === 'PROCESS_TOC_TASK') {
     const { taskId, docHash, fileUrl, uploadId } = message.payload;
     console.log(`Received PROCESS_TOC_TASK message for task ${taskId}`);
-    
+
     // Start keepalive during processing
     startKeepalive();
-    
+
     import('./toc-generator.js').then(async (toc) => {
       await toc.generateTableOfContents(docHash, fileUrl, uploadId);
       console.log(`TOC task ${taskId} completed successfully`);
@@ -128,15 +130,15 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       stopKeepalive();
       sendResponse({ success: false, error: error.message });
     });
-    
+
     // Return true to indicate we'll send response asynchronously
     return true;
   }
-  
+
   if (message.type === 'VERIFY_TOC_EXISTS') {
     const { docHash } = message.payload;
     console.log(`Verifying TOC exists for document ${docHash}`);
-    
+
     // Import getTableOfContents dynamically
     import('../db/index.js').then(async (db) => {
       const toc = await db.getTableOfContents(docHash);
@@ -147,7 +149,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       console.error('Error verifying TOC:', error);
       sendResponse({ exists: false });
     });
-    
+
     // Return true to indicate we'll send response asynchronously
     return true;
   }

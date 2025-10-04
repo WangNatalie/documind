@@ -138,6 +138,7 @@ export const Page: React.FC<PageProps> = ({
     if (!page || !canvasRef.current || !shouldRender) {
       // Reset rendered scale when page is not being rendered
       if (!shouldRender) {
+        console.log(`[Page ${pageNum}] Unrendering - outside buffer`);
         // Page moved outside render buffer, reset state
         renderedScaleRef.current = 0;
         targetScaleRef.current = 0;
@@ -161,6 +162,7 @@ export const Page: React.FC<PageProps> = ({
     if (!renderedScaleRef.current || renderedScaleRef.current === 0) {
       const doFullRender = async () => {
         try {
+          console.log(`[Page ${pageNum}] First render at scale ${scale.toFixed(2)}, visible: ${isVisible}`);
           setIsLoading(true);
           setError(null);
 
