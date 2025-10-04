@@ -159,12 +159,6 @@ export const Page: React.FC<PageProps> = ({
 
     const canvas = canvasRef.current!;
 
-    // If we've never rendered this page, do a full render
-    if (!renderedScaleRef.current || renderedScaleRef.current === 0) {
-      const doFullRender = async () => {
-        try {
-          setIsLoading(true);
-          setError(null);
     // Skip re-render if scale hasn't changed significantly (avoid flashing)
     if (
       renderedScaleRef.current > 0 &&
@@ -174,21 +168,15 @@ export const Page: React.FC<PageProps> = ({
       return;
     }
 
-    const render = async () => {
-      try {
-        console.log(
-          `[Page ${pageNum}] Starting render - visible: ${isVisible}, priority: ${isVisible ? 1 : 10}`
-        );
-        setIsLoading(true);
-        setError(null);
+    // If we've never rendered this page, do a full render
+    if (!renderedScaleRef.current || renderedScaleRef.current === 0) {
+      const doFullRender = async () => {
+        try {
+          setIsLoading(true);
+          setError(null);
 
-        const priority = isVisible ? 1 : 10;
-        await onRender(
-          pageNum,
-          canvasRef.current!,
-          textLayerRef.current,
-          priority
-        );
+          const priority = isVisible ? 1 : 10;
+          await onRender(pageNum, canvas, textLayerRef.current, priority);
 
           renderedScaleRef.current = scale;
           // ensure any CSS transform is reset after drawing
@@ -372,9 +360,6 @@ export const Page: React.FC<PageProps> = ({
                 <div
                   key={`${n.id}-${i}`}
 
-                  className={`absolute rounded-md pointer-events-none z-20 ${
-                    n.color === 'yellow' ? 'bg-yellow-300/20' : n.color === 'green' ? 'bg-emerald-200/20' : 'bg-sky-200/20'
-=======
                   className={`absolute rounded-md z-20 ${
                     n.color === "yellow"
                       ? "bg-yellow-300/30"
