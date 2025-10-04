@@ -1,8 +1,9 @@
-chrome.webNavigation.onCompleted.addListener((details) => {
-    const url = details.url;
-    if (url.endsWith(".pdf")) {
-        chrome.tabs.update(details.tabId, {
-            url: chrome.runtime.getURL("viewer.html") + "?file=" + encodeURIComponent(url)
-        });
-    }
-}, {url: [{schemes: ["http","https"]}]});
+// Background service worker for MV3
+// DNR rules are declared in manifest.json
+
+// Future: Add alarm for cleanup
+// chrome.alarms.onAlarm.addListener((alarm) => {
+//   if (alarm.name === 'cleanup') {
+//     // Cleanup old OPFS files
+//   }
+// });
