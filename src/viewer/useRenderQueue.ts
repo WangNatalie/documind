@@ -1,5 +1,5 @@
-import { useRef, useCallback } from 'react';
-import type { PDFPageProxy } from 'pdfjs-dist';
+import { useRef, useCallback } from "react";
+import type { PDFPageProxy } from "pdfjs-dist";
 
 export interface RenderTask {
   pageNum: number;
@@ -27,8 +27,11 @@ export interface RenderQueue {
 
 export function useRenderQueue(): RenderQueue {
   const queueRef = useRef<RenderTask[]>([]);
-  const currentTaskRef = useRef<{ cancel: () => void } | null>(null);
+  const currentTaskRef = useRef<{ cancel: () => void; pageNum: number } | null>(
+    null
+  );
   const isRenderingRef = useRef(false);
+  const renderingPagesRef = useRef<Set<number>>(new Set());
 
   const processQueue = useCallback(async () => {
     if (isRenderingRef.current || queueRef.current.length === 0) return;
@@ -39,24 +42,65 @@ export function useRenderQueue(): RenderQueue {
     const task = queueRef.current.shift();
     if (!task) return;
 
+    // Skip if this page is already being rendered (shouldn't happen but extra safety)
+    if (renderingPagesRef.current.has(task.pageNum)) {
+      console.warn(`Page ${task.pageNum} is already being rendered, skipping`);
+      task.reject(new Error("Page already rendering"));
+      processQueue(); // Try next task
+      return;
+    }
+
     isRenderingRef.current = true;
+    renderingPagesRef.current.add(task.pageNum);
 
     try {
       const viewport = task.page.getViewport({ scale: task.scale });
-      const context = task.canvas.getContext('2d');
-      if (!context) throw new Error('Canvas context not available');
+      const context = task.canvas.getContext("2d");
+      if (!context) throw new Error("Canvas context not available");
 
       const dpr = window.devicePixelRatio || 1;
+      const newWidth = viewport.width * dpr;
+      const newHeight = viewport.height * dpr;
 
-      // Set canvas bitmap size
-      task.canvas.width = viewport.width * dpr;
-      task.canvas.height = viewport.height * dpr;
+      // Check if we need to resize the canvas
+      const needsResize = task.canvas.width !== newWidth || task.canvas.height !== newHeight;
 
-      // Set CSS size
-      task.canvas.style.width = `${viewport.width}px`;
-      task.canvas.style.height = `${viewport.height}px`;
+      if (needsResize) {
+        // For resize, we need to save the old content to avoid flash
+        // Create temporary canvas to preserve old content
+        const tempCanvas = document.createElement('canvas');
+        const tempContext = tempCanvas.getContext('2d');
+        
+        if (tempContext) {
+          // Copy old content
+          tempCanvas.width = task.canvas.width;
+          tempCanvas.height = task.canvas.height;
+          tempContext.drawImage(task.canvas, 0, 0);
 
-      // Scale context
+          // Resize main canvas (this clears it)
+          task.canvas.width = newWidth;
+          task.canvas.height = newHeight;
+          task.canvas.style.width = `${viewport.width}px`;
+          task.canvas.style.height = `${viewport.height}px`;
+
+          // Draw old content back (scaled to fill) as placeholder
+          // This prevents the flash by keeping something visible
+          context.drawImage(tempCanvas, 0, 0, tempCanvas.width, tempCanvas.height, 
+                           0, 0, newWidth, newHeight);
+        } else {
+          // Fallback if we can't create temp canvas
+          task.canvas.width = newWidth;
+          task.canvas.height = newHeight;
+          task.canvas.style.width = `${viewport.width}px`;
+          task.canvas.style.height = `${viewport.height}px`;
+        }
+      } else {
+        // Same size, just clear and re-render
+        context.clearRect(0, 0, task.canvas.width, task.canvas.height);
+      }
+
+      // Scale context for DPI
+      context.save();
       context.scale(dpr, dpr);
 
       const renderContext = {
@@ -65,15 +109,21 @@ export function useRenderQueue(): RenderQueue {
       };
 
       const renderTask = task.page.render(renderContext);
-      currentTaskRef.current = { cancel: () => renderTask.cancel() };
+      currentTaskRef.current = {
+        cancel: () => renderTask.cancel(),
+        pageNum: task.pageNum,
+      };
 
       await renderTask.promise;
+
+      // Restore context state
+      context.restore();
 
       // Render text layer for text selection
       if (task.textLayerDiv) {
         try {
           const textContent = await task.page.getTextContent();
-          task.textLayerDiv.innerHTML = ''; // Clear previous content
+          task.textLayerDiv.innerHTML = ""; // Clear previous content
 
           // Set text layer to match viewport dimensions (CSS pixels, not canvas pixels)
           task.textLayerDiv.style.width = `${viewport.width}px`;
@@ -81,11 +131,11 @@ export function useRenderQueue(): RenderQueue {
 
           // Render text items with proper viewport transformation
           textContent.items.forEach((item: any) => {
-            const textDiv = document.createElement('span');
+            const textDiv = document.createElement("span");
             textDiv.textContent = item.str;
-            textDiv.style.position = 'absolute';
-            textDiv.style.whiteSpace = 'pre';
-            textDiv.style.transformOrigin = 'left bottom';
+            textDiv.style.position = "absolute";
+            textDiv.style.whiteSpace = "pre";
+            textDiv.style.transformOrigin = "left bottom";
 
             // Transform matrix: [a, b, c, d, e, f]
             // where: x' = a*x + c*y + e, y' = b*x + d*y + f
@@ -97,8 +147,10 @@ export function useRenderQueue(): RenderQueue {
 
             // Apply viewport transformation to the text position
             // viewport.transform is [scaleX, 0, 0, -scaleY, offsetX, offsetY]
-            const x = transform[0] * tx[4] + transform[2] * tx[5] + transform[4];
-            const y = transform[1] * tx[4] + transform[3] * tx[5] + transform[5];
+            const x =
+              transform[0] * tx[4] + transform[2] * tx[5] + transform[4];
+            const y =
+              transform[1] * tx[4] + transform[3] * tx[5] + transform[5];
 
             // Calculate font size - use the vertical scale from the transform
             const fontHeight = Math.abs(tx[3]);
@@ -115,10 +167,11 @@ export function useRenderQueue(): RenderQueue {
             // Subtract fontSize to align at baseline (text renders from baseline up)
             textDiv.style.top = `${y - fontSize}px`;
             textDiv.style.fontSize = `${fontSize}px`;
-            textDiv.style.fontFamily = item.fontName || 'sans-serif';
+            textDiv.style.fontFamily = item.fontName || "sans-serif";
 
             // Handle rotation/skew
-            const hasRotation = tx[0] !== 1 || tx[1] !== 0 || tx[2] !== 0 || tx[3] !== 1;
+            const hasRotation =
+              tx[0] !== 1 || tx[1] !== 0 || tx[2] !== 0 || tx[3] !== 1;
             if (hasRotation) {
               const scaleX = Math.sqrt(tx[0] * tx[0] + tx[1] * tx[1]);
               const scaleY = Math.sqrt(tx[2] * tx[2] + tx[3] * tx[3]);
@@ -130,18 +183,22 @@ export function useRenderQueue(): RenderQueue {
             task.textLayerDiv!.appendChild(textDiv);
           });
         } catch (err) {
-          console.error('Failed to render text layer:', err);
+          console.error("Failed to render text layer:", err);
         }
       }
 
       task.resolve();
     } catch (error: any) {
-      if (error?.name !== 'RenderingCancelledException') {
-        console.error('Render error:', error);
+      if (error?.name !== "RenderingCancelledException") {
+        console.error("Render error:", error);
+        task.reject(error);
+      } else {
+        // Silently reject cancelled renders
         task.reject(error);
       }
     } finally {
       isRenderingRef.current = false;
+      renderingPagesRef.current.delete(task.pageNum);
       currentTaskRef.current = null;
       processQueue(); // Process next task
     }
@@ -157,8 +214,36 @@ export function useRenderQueue(): RenderQueue {
       priority: number
     ): Promise<void> => {
       return new Promise((resolve, reject) => {
-        // Remove existing task for same page
-        queueRef.current = queueRef.current.filter(t => t.pageNum !== pageNum);
+        // If we're currently rendering this same page, we need to cancel it and wait
+        if (renderingPagesRef.current.has(pageNum)) {
+          // This page is currently being rendered, cancel it
+          if (
+            currentTaskRef.current &&
+            currentTaskRef.current.pageNum === pageNum
+          ) {
+            try {
+              currentTaskRef.current.cancel();
+            } catch (e) {
+              // Cancellation might throw, ignore it
+            }
+          }
+          // The finally block in processQueue will clean up renderingPagesRef
+        }
+
+        // Remove existing queued tasks for same page
+        const removedTasks = queueRef.current.filter(
+          (t) => t.pageNum === pageNum
+        );
+        queueRef.current = queueRef.current.filter(
+          (t) => t.pageNum !== pageNum
+        );
+
+        // Silently reject removed tasks (this is expected during rapid zoom)
+        removedTasks.forEach((t) => {
+          const cancelError = new Error("RenderingCancelledException");
+          cancelError.name = "RenderingCancelledException";
+          t.reject(cancelError);
+        });
 
         queueRef.current.push({
           pageNum,
@@ -196,7 +281,10 @@ export function useRenderQueue(): RenderQueue {
 const MAX_RENDERED_PAGES = 10;
 
 export class CanvasCache {
-  private cache = new Map<number, { canvas: HTMLCanvasElement; lastUsed: number }>();
+  private cache = new Map<
+    number,
+    { canvas: HTMLCanvasElement; lastUsed: number }
+  >();
 
   add(pageNum: number, canvas: HTMLCanvasElement) {
     this.cache.set(pageNum, { canvas, lastUsed: Date.now() });
@@ -220,12 +308,14 @@ export class CanvasCache {
     if (this.cache.size <= MAX_RENDERED_PAGES) return;
 
     // Sort by last used, remove oldest
-    const entries = Array.from(this.cache.entries()).sort((a, b) => a[1].lastUsed - b[1].lastUsed);
+    const entries = Array.from(this.cache.entries()).sort(
+      (a, b) => a[1].lastUsed - b[1].lastUsed
+    );
     const toRemove = entries.slice(0, this.cache.size - MAX_RENDERED_PAGES);
 
     toRemove.forEach(([pageNum, entry]) => {
       // Clear canvas to free memory
-      const ctx = entry.canvas.getContext('2d');
+      const ctx = entry.canvas.getContext("2d");
       if (ctx) {
         ctx.clearRect(0, 0, entry.canvas.width, entry.canvas.height);
       }
@@ -238,7 +328,7 @@ export class CanvasCache {
 
   clear() {
     this.cache.forEach((entry) => {
-      const ctx = entry.canvas.getContext('2d');
+      const ctx = entry.canvas.getContext("2d");
       if (ctx) {
         ctx.clearRect(0, 0, entry.canvas.width, entry.canvas.height);
       }
