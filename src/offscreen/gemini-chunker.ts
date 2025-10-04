@@ -229,7 +229,6 @@ async function parseMultimodalPDF(
 
 Analyze this PDF document and split it into meaningful semantic chunks. Each chunk should:
 1. Contain related content (e.g., a complete section, paragraph, table, or image with context)
-2. Be approximately 800-1500 characters in length (can be shorter or longer for semantic coherence)
 3. Have natural boundaries (don't split in the middle of sentences)
 4. Capture the main ideas, key information, tables, charts, and images
 
@@ -238,11 +237,15 @@ For images, tables, and charts:
 - Describe the data or information they contain
 - Note their relevance to surrounding text
 
+For each chunk, identify any headers/titles it contains:
+- Include the header text and its type ["Title", "SectionHeader","Subsection"]
+
 For each chunk, provide:
 - The chunk content (text, table data, or image description)
 - A brief description summarizing what the chunk is about
-- The approximate page number where it appears (estimate based on document flow)
+- The approximate page number where the section starts 
 - The type of content: "text", "table", "image", "chart", or "mixed"
+- Any headers/titles found in the chunk (as an array of objects with "text" and "type")
 
 Return the chunks as a JSON array with this exact structure:
 [
@@ -250,10 +253,16 @@ Return the chunks as a JSON array with this exact structure:
     "content": "The full text, table data, or image description",
     "description": "Brief summary of this chunk's content",
     "page": 1,
-    "type": "text"
+    "type": "text",
+    "headers": [
+      {"text": "Chapter 1: Introduction", "type": "SectionHeader"},
+      {"text": "Background", "type": "Subsection"}
+    ]
   },
   ...
 ]
+
+If a chunk has no headers, use an empty array: "headers": []
 
 Return ONLY the JSON array, nothing else.`;
 
@@ -304,6 +313,7 @@ Return ONLY the JSON array, nothing else.`;
           model: GEMINI_CHUNKING_MODEL,
           chunk_length: chunk.content?.length || 0,
           content_type: chunk.type || 'text', // text, table, image, chart, mixed
+          headers: chunk.headers || [], // Headers/titles found in this chunk
         },
         createdAt: Date.now(),
       };
@@ -339,20 +349,31 @@ Your task is to analyze this document and split it into meaningful semantic chun
 3. Have natural boundaries (don't split in the middle of sentences)
 4. Capture the main ideas and key information
 
+For each chunk, identify any headers/titles it contains:
+- Look for section headers, chapter titles, subsection headings
+- Include the header text and its type (e.g., "SectionHeader", "Title", "PageHeader", "Subsection")
+- Headers help with navigation and understanding document structure
+
 For each chunk, provide:
 - The chunk content (the actual text)
 - A brief description summarizing what the chunk is about
 - The primary page number where the chunk appears
+- Any headers/titles found in the chunk (as an array of objects with "text" and "type")
 
 Return the chunks as a JSON array with this exact structure:
 [
   {
     "content": "The full text of the chunk",
     "description": "Brief summary of this chunk's content",
-    "page": 1
+    "page": 1,
+    "headers": [
+      {"text": "Section Title", "type": "SectionHeader"}
+    ]
   },
   ...
 ]
+
+If a chunk has no headers, use an empty array: "headers": []
 
 Document text:
 ${documentText.substring(0, 800000)}
@@ -406,6 +427,7 @@ Return ONLY the JSON array, nothing else.`;
           source: 'gemini',
           model: GEMINI_CHUNKING_MODEL,
           chunk_length: chunk.content?.length || 0,
+          headers: chunk.headers || [], // Headers/titles found in this chunk
           page_dimensions: {
             width: pageData.width,
             height: pageData.height,

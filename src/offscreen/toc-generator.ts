@@ -172,11 +172,30 @@ async function extractPDFOutline(
  */
 function extractSegmentHeaders(chunks: ChunkRecord[]): Array<{ header: string; page: number; chunkId: string; bbox?: any }> {
   const headers: Array<{ header: string; page: number; chunkId: string; bbox?: any }> = [];
+  const chunksWithHeaders = new Set<string>(); // Track which chunks have explicit headers
   
   for (const chunk of chunks) {
-    // Look for segment headers in metadata
-    const segments = chunk.metadata?.segments || [];
+    let foundHeaders = false;
     
+    // First, check for Gemini-style headers in metadata
+    const geminiHeaders = chunk.metadata?.headers || [];
+    if (Array.isArray(geminiHeaders) && geminiHeaders.length > 0) {
+      for (const header of geminiHeaders) {
+        if (header.text && header.text.trim()) {
+          headers.push({
+            header: header.text.trim(),
+            page: chunk.page || 1,
+            chunkId: chunk.id,
+            bbox: chunk.bbox, // Use chunk bbox if available
+          });
+          foundHeaders = true;
+          chunksWithHeaders.add(chunk.id);
+        }
+      }
+    }
+    
+    // Also look for segment headers in metadata (from Chunkr/other processors)
+    const segments = chunk.metadata?.segments || [];
     for (const segment of segments) {
       // Check if segment type is a header (e.g., "SectionHeader", "Title", etc.)
       if (segment.segment_type && 
@@ -193,12 +212,34 @@ function extractSegmentHeaders(chunks: ChunkRecord[]): Array<{ header: string; p
             chunkId: chunk.id,
             bbox: segment.bbox,
           });
+          foundHeaders = true;
+          chunksWithHeaders.add(chunk.id);
         }
       }
     }
+    
+    // If no headers found, create a fallback header from the first few words
+    if (!foundHeaders && chunk.content && chunk.content.trim()) {
+      const words = chunk.content.trim().split(/\s+/);
+      const firstWords = words.slice(0, 8).join(' '); // First 8 words
+      const fallbackHeader = firstWords + (words.length > 8 ? '...' : '');
+      
+      headers.push({
+        header: fallbackHeader,
+        page: chunk.page || 1,
+        chunkId: chunk.id,
+        bbox: chunk.bbox,
+      });
+    }
   }
   
-  console.log('[TOC] Extracted', headers.length, 'segment headers from chunks');
+  console.log('[TOC] Extracted', headers.length, 'headers from chunks');
+  console.log('[TOC] Header sources:', {
+    explicit: chunksWithHeaders.size,
+    fallback: headers.length - chunksWithHeaders.size,
+    gemini: headers.filter(h => chunks.find(c => c.id === h.chunkId)?.metadata?.source?.includes('gemini')).length,
+    segments: headers.filter(h => chunks.find(c => c.id === h.chunkId)?.metadata?.segments).length,
+  });
   return headers;
 }
 
@@ -259,6 +300,7 @@ Only return the JSON array, nothing else.`;
       }
     });
     
+    console.log('[TOC] Gemini response:', response);
     const text = response.text;
     if (!text) {
       throw new Error('No text in Gemini response');
