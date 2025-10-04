@@ -232,54 +232,45 @@ export const Page: React.FC<PageProps> = ({
           className="absolute top-0 left-0 text-layer z-10 text-transparent"
           style={{ width: `${width}px`, height: `${height}px` }}
         />
-        {/* Highlights overlays */}
-        {highlights.map(h => {
-          // Convert rects to pixels and merge consecutive rects on same line
-          const pixelRects = h.rects.map(r => {
-            const isNormalized = Math.abs(r.top) <= 1 && Math.abs(r.left) <= 1 && Math.abs(r.width) <= 1 && Math.abs(r.height) <= 1;
-            return {
-              top: isNormalized ? r.top * height : r.top,
-              left: isNormalized ? r.left * width : r.left,
-              width: isNormalized ? r.width * width : r.width,
-              height: isNormalized ? r.height * height : r.height,
-            };
-          });
-
-          // Group rects by line (same vertical position within tolerance)
-          const mergedLines: Array<{ top: number; left: number; width: number; height: number }> = [];
-          const lineThreshold = 2; // pixels tolerance for same line
-
-          pixelRects.forEach(rect => {
-            // Find if this rect belongs to an existing line
-            const existingLine = mergedLines.find(
-              line => Math.abs(line.top - rect.top) < lineThreshold
-            );
-
-            if (existingLine) {
-              // Merge with existing line: extend to create one contiguous block
-              const leftmost = Math.min(existingLine.left, rect.left);
-              const rightmost = Math.max(existingLine.left + existingLine.width, rect.left + rect.width);
-              existingLine.left = leftmost;
-              existingLine.width = rightmost - leftmost;
-              existingLine.height = Math.max(existingLine.height, rect.height);
-            } else {
-              // New line
-              mergedLines.push({ ...rect });
-            }
-          });
+        {/* Notes overlays - just colored highlights with hover tooltips */}
+        {notes.map((n) => {
+          const mergedLines = mergeRectsIntoLines(n.rects, width, height);
+          const hasText = n.text && n.text.trim().length > 0;
 
           return (
-            <React.Fragment key={h.id}>
+            <div key={n.id} className={hasText ? "group" : ""}>
               {mergedLines.map((line, i) => (
                 <div
-                  key={`${h.id}-${i}`}
-                  className={`absolute rounded-md pointer-events-none z-20 ${
-                    h.color === 'yellow' ? 'bg-yellow-300/20' : h.color === 'green' ? 'bg-emerald-200/20' : 'bg-sky-200/20'
+                  key={`${n.id}-${i}`}
+                  className={`absolute rounded-md z-20 ${
+                    n.color === "yellow"
+                      ? "bg-yellow-300/30"
+                      : n.color === "green"
+                        ? "bg-emerald-200/30"
+                        : "bg-sky-200/30"
                   }`}
-                  style={{ top: line.top, left: line.left, width: line.width, height: line.height }}
+                  style={{
+                    top: line.top,
+                    left: line.left,
+                    width: line.width,
+                    height: line.height,
+                    pointerEvents: hasText ? "auto" : "none",
+                  }}
                 />
               ))}
-            </React.Fragment>
+              {/* Show tooltip on hover if note has text */}
+              {hasText && (
+                <div
+                  className="invisible group-hover:visible absolute bg-white dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-600 rounded-md px-2 py-1 text-xs text-neutral-900 dark:text-neutral-100 shadow-lg whitespace-nowrap z-40"
+                  style={{
+                    top: mergedLines[0].top - 28,
+                    left: mergedLines[0].left,
+                  }}
+                >
+                  {n.text}
+                </div>
+              )}
+            </div>
           );
         })}
 
@@ -291,65 +282,53 @@ export const Page: React.FC<PageProps> = ({
             return null;
           }
 
-          // Convert rects to pixels and merge consecutive rects on same line
-          const pixelRects = n.rects.map(r => {
-            const isNormalized = Math.abs(r.top) <= 1 && Math.abs(r.left) <= 1 && Math.abs(r.width) <= 1 && Math.abs(r.height) <= 1;
-            return {
-              top: isNormalized ? r.top * height : r.top,
-              left: isNormalized ? r.left * width : r.left,
-              width: isNormalized ? r.width * width : r.width,
-              height: isNormalized ? r.height * height : r.height,
-            };
-          });
-
-          // Group rects by line - use midpoint Y position to determine line membership
-          const mergedLines: Array<{ top: number; left: number; width: number; height: number }> = [];
-          const lineThreshold = 5; // pixels - if midpoints are within this, consider same line
-
-          pixelRects.forEach(rect => {
-            const rectMidY = rect.top + rect.height / 2;
-
-            // Find if this rect belongs to an existing line based on Y midpoint
-            const existingLine = mergedLines.find(line => {
-              const lineMidY = line.top + line.height / 2;
-              return Math.abs(rectMidY - lineMidY) < lineThreshold;
-            });
-
-            if (existingLine) {
-              // Merge: extend horizontally to create one contiguous block
-              const leftmost = Math.min(existingLine.left, rect.left);
-              const rightmost = Math.max(existingLine.left + existingLine.width, rect.left + rect.width);
-              const topmost = Math.min(existingLine.top, rect.top);
-              const bottommost = Math.max(existingLine.top + existingLine.height, rect.top + rect.height);
-              existingLine.left = leftmost;
-              existingLine.width = rightmost - leftmost;
-              existingLine.top = topmost;
-              existingLine.height = bottommost - topmost;
-            } else {
-              // New line
-              mergedLines.push({ ...rect });
-            }
-          });
+          const mergedLines = mergeRectsIntoLines(c.rects, width, height);
 
           return (
-            <div key={n.id} className="group">
+            <div key={c.id}>
+              {/* Overline on text with edge brackets */}
               {mergedLines.map((line, i) => (
-                <div key={`${n.id}-${i}`} className="absolute z-30" style={{ top: line.top + 3, left: line.left, width: line.width, height: line.height, pointerEvents: 'auto' }}>
+                <React.Fragment key={`${c.id}-overline-${i}`}>
                   {/* Horizontal overline bar */}
-                  <div className="h-0.5 bg-yellow-500 w-full"></div>
+                  <div
+                    className="absolute h-0.5 bg-yellow-500 z-30"
+                    style={{
+                      top: line.top + 3,
+                      left: line.left,
+                      width: line.width,
+                    }}
+                  />
                   {/* Left edge border - extends down halfway */}
-                  <div className="absolute top-0 left-0 w-0.5 bg-yellow-500" style={{ height: `${line.height / 2}px` }}></div>
+                  <div
+                    className="absolute w-0.5 bg-yellow-500 z-30"
+                    style={{
+                      top: line.top + 3,
+                      left: line.left,
+                      height: `${line.height / 2}px`,
+                    }}
+                  />
                   {/* Right edge border - extends down halfway */}
-                  <div className="absolute top-0 right-0 w-0.5 bg-yellow-500" style={{ height: `${line.height / 2}px` }}></div>
-                </div>
+                  <div
+                    className="absolute w-0.5 bg-yellow-500 z-30"
+                    style={{
+                      top: line.top + 3,
+                      left: line.left + line.width,
+                      height: `${line.height / 2}px`,
+                    }}
+                  />
+                </React.Fragment>
               ))}
-              {/* Tooltip - show on hover over any rect in the group */}
-              <div className="hidden group-hover:block absolute bg-white dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-600 rounded-md p-2 text-sm text-neutral-900 dark:text-neutral-100 shadow-lg whitespace-nowrap z-40"
-                   style={{
-                     top: mergedLines[0].top - 32,
-                     left: mergedLines[0].left
-                   }}>
-                {n.text}
+              {/* Permanently visible side comment (Google Docs style) */}
+              <div
+                className="absolute bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-300 dark:border-yellow-700 rounded-md p-2 text-xs text-neutral-900 dark:text-neutral-100 shadow-md z-40"
+                style={{
+                  top: mergedLines[0].top,
+                  left: width + 16,
+                  width: "200px",
+                  maxWidth: "200px",
+                }}
+              >
+                <div className="break-words">{c.text}</div>
               </div>
             </div>
           );
