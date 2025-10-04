@@ -25,7 +25,13 @@ interface PageProps {
     text: string;
     page: number;
   }>;
+  onNoteDelete?: (id: string) => void;
+  onNoteEdit?: (id: string, newText: string) => void;
+  onCommentDelete?: (id: string) => void;
+  onCommentEdit?: (id: string, newText: string) => void;
 }
+
+const ZOOM_DEBOUNCE_MS = 75;
 
 export const Page: React.FC<PageProps> = ({
   pageNum,
@@ -36,14 +42,25 @@ export const Page: React.FC<PageProps> = ({
   onRender,
   notes = [],
   comments = [],
+  onNoteDelete,
+  onNoteEdit,
+  onCommentDelete,
+  onCommentEdit,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const textLayerRef = useRef<HTMLDivElement>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const renderedScaleRef = useRef<number>(0);
+  const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
+  const [editingNoteText, setEditingNoteText] = useState("");
+  const [editingCommentId, setEditingCommentId] = useState<string | null>(null);
+  const [editingCommentText, setEditingCommentText] = useState("");
+  const targetScaleRef = useRef<number>(0);
+  const renderTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const lastCSSScaleRef = useRef<number>(0);
 
-  console.log("rendering page", pageNum);
+  // Rendering page component
 
   // Helper function to merge rects into contiguous lines
   const mergeRectsIntoLines = useCallback(
@@ -123,8 +140,14 @@ export const Page: React.FC<PageProps> = ({
     if (!page || !canvasRef.current || !shouldRender) {
       // Reset rendered scale when page is not being rendered
       if (!shouldRender) {
-        console.log(`[Page ${pageNum}] Unrendering - outside buffer`);
+        // Page moved outside render buffer, reset state
         renderedScaleRef.current = 0;
+        targetScaleRef.current = 0;
+        // Clear any pending render timeouts
+        if (renderTimeoutRef.current) {
+          clearTimeout(renderTimeoutRef.current);
+          renderTimeoutRef.current = null;
+        }
         // also reset any css scaling
         if (canvasRef.current) {
           canvasRef.current.style.transform = "";
@@ -140,9 +163,6 @@ export const Page: React.FC<PageProps> = ({
     if (!renderedScaleRef.current || renderedScaleRef.current === 0) {
       const doFullRender = async () => {
         try {
-          console.log(
-            `[Page ${pageNum}] Full render starting - visible: ${isVisible}, priority: ${isVisible ? 1 : 10}`
-          );
           setIsLoading(true);
           setError(null);
 
@@ -154,14 +174,11 @@ export const Page: React.FC<PageProps> = ({
           canvas.style.transform = "";
           canvas.style.transformOrigin = "top left";
           setIsLoading(false);
-          console.log(`[Page ${pageNum}] Full render complete at scale ${scale}`);
         } catch (err: any) {
           if (err?.name !== "RenderingCancelledException") {
             console.error(`[Page ${pageNum}] Render error:`, err);
             setError(err.message || "Failed to render page");
             setIsLoading(false);
-          } else {
-            console.log(`[Page ${pageNum}] Render cancelled`);
           }
         }
       };
@@ -170,9 +187,10 @@ export const Page: React.FC<PageProps> = ({
       return;
     }
 
-    // If we already have a rendered canvas at a previous scale, prefer CSS-scaling
-    // to avoid a full redraw which causes flashing. Adjust canvas CSS to keep
-    // the drawn bitmap and scale it to the new requested size.
+    // If we already have a rendered canvas at a previous scale, use progressive rendering:
+    // 1. Immediately CSS-scale the existing canvas (instant feedback, may be blurry)
+    // 2. Debounce and trigger a background re-render at the new scale for crisp quality
+    // This matches PDF.js behavior where zoom is instant but quality improves after a moment
     const prevScale = renderedScaleRef.current;
     if (Math.abs(prevScale - scale) < 0.01) {
       // effectively same, no-op
@@ -184,23 +202,82 @@ export const Page: React.FC<PageProps> = ({
       // Compute new viewport at the requested scale
       const newViewport = page.getViewport({ scale });
 
-      // Set the canvas layout size to the new viewport dimensions so the
-      // element's layout footprint matches the new page size. We avoid a
-      // transform because transforms do not affect layout (they can cause
-      // large gaps when the element's intrinsic size remains the previous
-      // value). Setting CSS width/height stretches the existing bitmap to
-      // the new layout size (no flash) and preserves correct spacing between pages.
+      // Guard: Only CSS-scale if canvas has been rendered (has non-zero dimensions)
+      if (canvas.width === 0 || canvas.height === 0) {
+        console.log(`[Page ${pageNum}] Canvas not yet rendered (0 dimensions), skipping CSS-scale`);
+        // Force a full render instead
+        const doFullRender = async () => {
+          try {
+            setIsLoading(true);
+            setError(null);
+            const priority = isVisible ? 1 : 10;
+            await onRender(pageNum, canvas, textLayerRef.current, priority);
+            renderedScaleRef.current = scale;
+            canvas.style.transform = "";
+            canvas.style.transformOrigin = "top left";
+            setIsLoading(false);
+          } catch (err: any) {
+            if (err?.name !== "RenderingCancelledException") {
+              console.error(`[Page ${pageNum}] Render error:`, err);
+              setError(err.message || "Failed to render page");
+              setIsLoading(false);
+            }
+          }
+        };
+        doFullRender();
+        return;
+      }
+
+      // STEP 1: Immediately CSS-scale the existing canvas for instant visual feedback
+      // This stretches the existing bitmap, which may look blurry but responds instantly
       canvas.style.width = `${newViewport.width}px`;
       canvas.style.height = `${newViewport.height}px`;
       canvas.style.transform = "";
       canvas.style.transformOrigin = "top left";
 
-      // We don't redraw here; keep renderedScaleRef at prevScale (actual bitmap scale).
-      // Update loading state: no loading spinner during CSS resizing
       setIsLoading(false);
-      console.log(`
-        [Page ${pageNum}] CSS-resized canvas layout to ${newViewport.width}x${newViewport.height} (bitmap at scale ${prevScale}, visual scale ${scale})
-      `.trim());
+
+      // Update target scale and track CSS scale
+      targetScaleRef.current = scale;
+      lastCSSScaleRef.current = scale;
+
+      // STEP 2: Debounce the high-quality re-render to avoid multiple renders during rapid zooming
+      // Clear any pending render
+      if (renderTimeoutRef.current) {
+        clearTimeout(renderTimeoutRef.current);
+      }
+
+      // Capture the current scale for the timeout closure
+      const scaleToRender = scale;
+
+      // Queue a high-quality re-render after a short delay (debounced)
+      renderTimeoutRef.current = setTimeout(async () => {
+        // Skip if target scale has changed since this timeout was set
+        if (Math.abs(targetScaleRef.current - scaleToRender) > 0.01) {
+          return;
+        }
+
+        // Skip if we've already rendered at this exact scale
+        if (Math.abs(renderedScaleRef.current - scaleToRender) < 0.01) {
+          return;
+        }
+
+        try {
+          await onRender(pageNum, canvas, textLayerRef.current, isVisible ? 1 : 10);
+
+          // Only update renderedScaleRef if we're still at the same target scale
+          if (Math.abs(targetScaleRef.current - scaleToRender) < 0.01) {
+            renderedScaleRef.current = scaleToRender;
+            canvas.style.transform = "";
+            canvas.style.transformOrigin = "top left";
+          }
+        } catch (err: any) {
+          if (err?.name !== "RenderingCancelledException") {
+            console.error(`[Page ${pageNum}] Render error:`, err);
+            // Don't set error state since we already have a (scaled) version showing
+          }
+        }
+      }, ZOOM_DEBOUNCE_MS); // debounce - wait for rapid zoom gestures to finish
     } catch (err: any) {
       console.error(`[Page ${pageNum}] Failed to CSS-scale canvas, falling back to full render:`, err);
       // Fallback: perform a full render
@@ -222,6 +299,15 @@ export const Page: React.FC<PageProps> = ({
     }
   }, [page, scale, pageNum, onRender, isVisible, shouldRender]);
 
+  // Cleanup timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (renderTimeoutRef.current) {
+        clearTimeout(renderTimeoutRef.current);
+      }
+    };
+  }, []);
+
   // Get approximate dimensions for skeleton
   const viewport = page?.getViewport({ scale: scale || 1 });
   const width = viewport?.width || 800;
@@ -229,9 +315,6 @@ export const Page: React.FC<PageProps> = ({
 
   if (!shouldRender) {
     // Render placeholder for pages outside buffer
-    console.log(
-      `[Page ${pageNum}] Rendering placeholder - outside buffer zone`
-    );
     return (
       <div
         data-page-num={pageNum}
@@ -287,9 +370,10 @@ export const Page: React.FC<PageProps> = ({
         {notes.map((n) => {
           const mergedLines = mergeRectsIntoLines(n.rects, width, height);
           const hasText = n.text && n.text.trim().length > 0;
+          const isEditing = editingNoteId === n.id;
 
           return (
-            <div key={n.id} className={hasText ? "group" : ""}>
+            <div key={n.id} className="group">
               {mergedLines.map((line, i) => (
                 <div
                   key={`${n.id}-${i}`}
@@ -305,20 +389,97 @@ export const Page: React.FC<PageProps> = ({
                     left: line.left,
                     width: line.width,
                     height: line.height,
-                    pointerEvents: hasText ? "auto" : "none",
+                    pointerEvents: "auto",
                   }}
                 />
               ))}
-              {/* Show tooltip on hover if note has text */}
-              {hasText && (
+              {/* Invisible bridge to connect highlight to tooltip - prevents gap */}
+              <div
+                className="absolute z-40 pointer-events-auto"
+                style={{
+                  top: mergedLines[0].top - 40,
+                  left: mergedLines[0].left,
+                  width: Math.max(mergedLines[0].width, 200),
+                  height: 40 + mergedLines[0].height,
+                }}
+              />
+              {/* Show tooltip/edit interface on hover if note has text or when editing */}
+              {isEditing ? (
                 <div
-                  className="invisible group-hover:visible absolute bg-white dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-600 rounded-md px-2 py-1 text-xs text-neutral-900 dark:text-neutral-100 shadow-lg whitespace-nowrap z-40"
+                  className="absolute bg-white dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-600 rounded-md p-1 shadow-lg z-40 flex gap-2"
                   style={{
-                    top: mergedLines[0].top - 28,
+                    top: mergedLines[0].top - 30,
+                    left: mergedLines[0].left,
+                    minWidth: "200px",
+                  }}
+                >
+                  <input
+                    autoFocus
+                    type="text"
+                    value={editingNoteText}
+                    onChange={(e) => setEditingNoteText(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && onNoteEdit) {
+                        onNoteEdit(n.id, editingNoteText);
+                        setEditingNoteId(null);
+                      } else if (e.key === "Escape") {
+                        setEditingNoteId(null);
+                      }
+                    }}
+                    className="flex-1 px-2 py-1 text-xs bg-white dark:bg-neutral-700 border border-neutral-300 dark:border-neutral-600 rounded text-neutral-900 dark:text-neutral-100"
+                  />
+                  <button
+                    onClick={() => {
+                      if (onNoteEdit) {
+                        onNoteEdit(n.id, editingNoteText);
+                      }
+                      setEditingNoteId(null);
+                    }}
+                    className="px-2 py-1 text-xs bg-blue-500 hover:bg-blue-600 text-white rounded"
+                    title="Save"
+                  >
+                    ✓
+                  </button>
+                  <button
+                    onClick={() => setEditingNoteId(null)}
+                    className="px-2 py-1 text-xs bg-neutral-200 hover:bg-neutral-300 dark:bg-neutral-700 dark:hover:bg-neutral-600 rounded"
+                    title="Cancel"
+                  >
+                    ✕
+                  </button>
+                </div>
+              ) : (
+                <div
+                  className="invisible group-hover:visible absolute bg-white dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-600 rounded-md shadow-lg z-40 flex items-center gap-2 pointer-events-auto p-1"
+                  style={{
+                    top: mergedLines[0].top - 25,
                     left: mergedLines[0].left,
                   }}
                 >
-                  {n.text}
+                  {hasText && (
+                    <span className="p-0.5 text-xs text-neutral-900 dark:text-neutral-100 whitespace-nowrap">
+                      {n.text}
+                    </span>
+                  )}
+                  <button
+                    onClick={() => {
+                      setEditingNoteId(n.id);
+                      setEditingNoteText(n.text || "");
+                    }}
+                    className="p-0.5 text-xs bg-blue-500 hover:bg-blue-600 text-white rounded"
+                    title="Edit note"
+                  >
+                    ✎
+                  </button>
+                  {onNoteDelete && (
+                    <button
+                      onClick={() => onNoteDelete(n.id)}
+                      className="px-2 py-1 text-xs bg-red-500 hover:bg-red-600 text-white rounded mr-1"
+                      title="Delete note"
+                    >
+                      🗑
+                    </button>
+                  )}
                 </div>
               )}
             </div>
@@ -334,6 +495,7 @@ export const Page: React.FC<PageProps> = ({
           }
 
           const mergedLines = mergeRectsIntoLines(c.rects, width, height);
+          const isEditing = editingCommentId === c.id;
 
           return (
             <div key={c.id}>
@@ -379,7 +541,71 @@ export const Page: React.FC<PageProps> = ({
                   maxWidth: "200px",
                 }}
               >
-                <div className="break-words">{c.text}</div>
+                {isEditing ? (
+                  <div className="flex flex-col gap-2">
+                    <textarea
+                      autoFocus
+                      value={editingCommentText}
+                      onChange={(e) => setEditingCommentText(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && e.ctrlKey && onCommentEdit) {
+                          onCommentEdit(c.id, editingCommentText);
+                          setEditingCommentId(null);
+                        } else if (e.key === "Escape") {
+                          setEditingCommentId(null);
+                        }
+                      }}
+                      className="w-full px-2 py-1 text-xs bg-white dark:bg-neutral-700 border border-neutral-300 dark:border-neutral-600 rounded text-neutral-900 dark:text-neutral-100 resize-y"
+                      rows={5}
+                    />
+                    <div className="flex gap-1">
+                      <button
+                        onClick={() => {
+                          if (onCommentEdit) {
+                            onCommentEdit(c.id, editingCommentText);
+                          }
+                          setEditingCommentId(null);
+                        }}
+                        className="flex-1 px-2 py-1 text-xs bg-blue-500 hover:bg-blue-600 text-white rounded"
+                        title="Save (Ctrl+Enter)"
+                      >
+                        Save
+                      </button>
+                      <button
+                        onClick={() => setEditingCommentId(null)}
+                        className="flex-1 px-2 py-1 text-xs bg-neutral-200 hover:bg-neutral-300 dark:bg-neutral-700 dark:hover:bg-neutral-600 rounded"
+                        title="Cancel (Esc)"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <div className="break-words mb-2">{c.text}</div>
+                    <div className="flex gap-1 border-t border-yellow-200 dark:border-yellow-800 pt-2">
+                      <button
+                        onClick={() => {
+                          setEditingCommentId(c.id);
+                          setEditingCommentText(c.text);
+                        }}
+                        className="flex-1 px-2 py-1 text-xs bg-blue-500 hover:bg-blue-600 text-white rounded"
+                        title="Edit comment"
+                      >
+                        Edit
+                      </button>
+                      {onCommentDelete && (
+                        <button
+                          onClick={() => onCommentDelete(c.id)}
+                          className="flex-1 px-2 py-1 text-xs bg-red-500 hover:bg-red-600 text-white rounded"
+                          title="Delete comment"
+                        >
+                          Delete
+                        </button>
+                      )}
+                    </div>
+                  </>
+                )}
               </div>
             </div>
           );

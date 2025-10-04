@@ -15,18 +15,23 @@ import {
   getNotesByDoc,
   putComment,
   getCommentsByDoc,
+  deleteNote,
+  deleteComment,
+  getChunksByDoc,
+  getTableOfContents,
 } from "../db";
 import { readOPFSFile } from "../db/opfs";
 import ContextMenu from "./ContextMenu";
-import { requestChunking, requestEmbeddings } from "../utils/chunker-client";
+import { requestGeminiChunking, requestEmbeddings, requestTOC } from "../utils/chunker-client";
 import { Chatbot } from './chatbot/Chatbot';
 
-const ZOOM_LEVELS = [50, 75, 90, 100, 125, 150, 175, 200, 250, 300];
+const ZOOM_LEVELS = [25, 50, 75, 90, 100, 125, 150, 175, 200, 250, 300, 350, 400, 500];
 
 export const ViewerApp: React.FC = () => {
   const [pdf, setPdf] = useState<PDFDocumentProxy | null>(null);
   const [pages, setPages] = useState<(PDFPageProxy | null)[]>([]);
   const [currentPage, setCurrentPage] = useState(1);
+  const [visiblePages, setVisiblePages] = useState<Set<number>>(new Set([1]));
 
   const [zoom, setZoom] = useState<string>("fitPage");
   const [scale, setScale] = useState(1);
@@ -40,6 +45,7 @@ export const ViewerApp: React.FC = () => {
   const renderQueue = useRenderQueue();
   const canvasCacheRef = useRef(new CanvasCache());
   const visiblePagesRef = useRef<Set<number>>(new Set([1]));
+  const pendingZoomRef = useRef<number | null>(null);
   // Context menu state
   const [contextVisible, setContextVisible] = useState(false);
   const [contextPos, setContextPos] = useState<{ x: number; y: number }>({
@@ -91,7 +97,6 @@ export const ViewerApp: React.FC = () => {
           const lastBytes = arrayBuffer.slice(-64 * 1024);
           hash = await generateDocHash(source, {
             size: arrayBuffer.byteLength,
-            mtime: Date.now(),
             firstBytes,
             lastBytes,
           });
@@ -151,8 +156,9 @@ export const ViewerApp: React.FC = () => {
         setCurrentPage(restoredPage);
         setZoom(restoredZoom);
 
-        // Initialize visible pages with the restored page
+        // Initialize visible pages with the restored page (both ref and state)
         visiblePagesRef.current = new Set([restoredPage]);
+        setVisiblePages(new Set([restoredPage]));
 
         // Scroll to restored page after a brief delay to ensure rendering
         if (restoredPage > 1) {
@@ -228,9 +234,37 @@ export const ViewerApp: React.FC = () => {
           }
         }
 
+        // Check if we need to generate TOC (for documents that have chunks but no TOC)
+        // This handles the case where a document was processed before TOC feature was added
+        (async () => {
+          try {
+            const [chunks, toc] = await Promise.all([
+              getChunksByDoc(hash),
+              getTableOfContents(hash)
+            ]);
+
+            if (chunks.length > 0 && !toc) {
+              console.log('[App] Document has chunks but no TOC, triggering TOC generation');
+              const tocResponse = await requestTOC({
+                docHash: hash,
+                fileUrl: fileUrl || undefined,
+                uploadId: uploadId || undefined,
+              });
+
+              if (tocResponse.success) {
+                console.log('TOC generation task created:', tocResponse.taskId);
+              } else {
+                console.warn('Failed to create TOC task:', tocResponse.error);
+              }
+            }
+          } catch (err) {
+            console.error('Error checking TOC status (non-fatal):', err);
+          }
+        })();
+
         // Pass URL directly for url-based PDFs
         if (fileUrl) {
-          requestChunking({
+          requestGeminiChunking({
             docHash: hash,
             fileUrl: fileUrl,
           })
@@ -259,7 +293,7 @@ export const ViewerApp: React.FC = () => {
             });
         } else if (uploadId) {
           console.log("[App.tsx] Requesting chunking with uploadId:", uploadId);
-          requestChunking({
+          requestGeminiChunking({
             docHash: hash,
             uploadId: uploadId,
           })
@@ -430,6 +464,8 @@ export const ViewerApp: React.FC = () => {
         (entries) => {
           let mostVisiblePage = 0;
           let maxRatio = 0;
+          const nowVisible: number[] = [];
+          const nowHidden: number[] = [];
 
           entries.forEach((entry) => {
             const pageNum = parseInt(
@@ -439,6 +475,7 @@ export const ViewerApp: React.FC = () => {
 
             if (entry.isIntersecting) {
               visiblePagesRef.current.add(pageNum);
+              nowVisible.push(pageNum);
 
               // Track most visible page
               if (entry.intersectionRatio > maxRatio) {
@@ -447,11 +484,17 @@ export const ViewerApp: React.FC = () => {
               }
             } else {
               visiblePagesRef.current.delete(pageNum);
+              nowHidden.push(pageNum);
             }
           });
 
+          if (nowVisible.length > 0 || nowHidden.length > 0) {
+            console.log(`[IntersectionObserver] Visible:`, nowVisible, `Hidden:`, nowHidden, `All visible:`, Array.from(visiblePagesRef.current));
+          }
+
           // Update current page if we found a visible page with decent ratio
           if (mostVisiblePage > 0 && maxRatio >= 0.3) {
+            console.log(`[IntersectionObserver] Updating current page to ${mostVisiblePage} (ratio: ${maxRatio.toFixed(2)})`);
             updateCurrentPage(mostVisiblePage);
           }
         },
@@ -504,6 +547,98 @@ export const ViewerApp: React.FC = () => {
     return () => clearTimeout(timeoutId);
   }, [currentPage, zoom, docHash]);
 
+  // Backup scroll-based page tracking (in case IntersectionObserver doesn't fire)
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container || pages.length === 0) return;
+
+    const handleScroll = () => {
+      const containerRect = container.getBoundingClientRect();
+      const containerTop = containerRect.top;
+      const containerBottom = containerRect.bottom;
+      const containerMidY = containerRect.top + containerRect.height / 2;
+
+      // Find the page closest to the middle of the viewport
+      let closestPage = 1;
+      let minDistance = Infinity;
+
+      // Update visible pages set
+      const newVisiblePages = new Set<number>();
+
+      const pageElements = container.querySelectorAll('[data-page-num]');
+      pageElements.forEach((el) => {
+        const pageNum = parseInt(el.getAttribute('data-page-num') || '0', 10);
+        if (pageNum === 0) return;
+
+        const rect = el.getBoundingClientRect();
+
+        // Check if page is visible in viewport
+        const isVisible = rect.bottom > containerTop && rect.top < containerBottom;
+        if (isVisible) {
+          newVisiblePages.add(pageNum);
+        }
+
+        // Find closest page to center
+        const pageMidY = rect.top + rect.height / 2;
+        const distance = Math.abs(pageMidY - containerMidY);
+
+        if (distance < minDistance) {
+          minDistance = distance;
+          closestPage = pageNum;
+        }
+      });
+
+      // Update visible pages ref (for IntersectionObserver compatibility)
+      const oldVisibleArray = Array.from(visiblePagesRef.current).sort();
+      const newVisibleArray = Array.from(newVisiblePages).sort();
+      const visibleChanged = oldVisibleArray.length !== newVisibleArray.length ||
+        oldVisibleArray.some((p, i) => p !== newVisibleArray[i]);
+
+      visiblePagesRef.current = newVisiblePages;
+
+      // Update visible pages state (triggers re-render)
+      if (visibleChanged) {
+        console.log(`[Scroll] Visible pages changed:`, oldVisibleArray, '->', newVisibleArray);
+        setVisiblePages(newVisiblePages);
+      }
+
+      // Update current page if changed
+      if (closestPage !== currentPage) {
+        console.log(`[Scroll] Updating current page from ${currentPage} to ${closestPage}`);
+        setCurrentPage(closestPage);
+      }
+    };
+
+    // Use requestAnimationFrame to throttle scroll events efficiently
+    let rafId: number | null = null;
+    const throttledScroll = () => {
+      if (rafId) return; // Already scheduled
+
+      rafId = requestAnimationFrame(() => {
+        handleScroll();
+        rafId = null;
+      });
+    };
+
+    container.addEventListener('scroll', throttledScroll, { passive: true });
+
+    // Initial call to set up visible pages
+    // Delay if we're on initial load to allow scroll restoration to complete
+    if (isInitialLoad) {
+      // Wait for scroll restoration to complete before checking visible pages
+      setTimeout(() => {
+        handleScroll();
+      }, 150);
+    } else {
+      handleScroll();
+    }
+
+    return () => {
+      container.removeEventListener('scroll', throttledScroll);
+      if (rafId) cancelAnimationFrame(rafId);
+    };
+  }, [currentPage, pages.length, scale, isInitialLoad]); // Added scale dependency so visibility rechecks on zoom
+
   // Handler functions
   const handlePrevPage = useCallback(() => {
     if (currentPage > 1) {
@@ -528,12 +663,19 @@ export const ViewerApp: React.FC = () => {
   // changeZoom: adjusts zoom while preserving scroll position appropriately
   // options.cursorPoint -> preserve the document point under cursor
   // options.snapToTop -> keep the current top-most page top aligned after zoom
+  // Uses RAF throttling to prevent excessive updates during rapid zoom
   const changeZoom = useCallback(
     (newZoom: string, options?: { cursorPoint?: { x: number; y: number }; snapToTop?: boolean }) => {
       const container = containerRef.current;
       if (!container || pages.length === 0) {
         setZoom(newZoom);
         return;
+      }
+
+      // Cancel any pending zoom animation
+      if (pendingZoomRef.current !== null) {
+        cancelAnimationFrame(pendingZoomRef.current);
+        pendingZoomRef.current = null;
       }
 
       const oldScale = scale;
@@ -588,9 +730,9 @@ export const ViewerApp: React.FC = () => {
         }
       }
 
-      // Apply zoom and scale on the next animation frame so the browser can
-      // process the scroll change first and avoid showing the top-of-page.
-      requestAnimationFrame(() => {
+      // Apply zoom and scale using RAF to throttle rapid updates
+      pendingZoomRef.current = requestAnimationFrame(() => {
+        pendingZoomRef.current = null;
         setZoom(newZoom);
         setScale(calcScale);
       });
@@ -603,7 +745,7 @@ export const ViewerApp: React.FC = () => {
       changeZoom("100", { snapToTop: true });
     } else {
       const currentZoom = parseInt(zoom, 10);
-      const nextZoom = ZOOM_LEVELS.find((z) => z > currentZoom) || 300;
+      const nextZoom = ZOOM_LEVELS.find((z) => z > currentZoom) || ZOOM_LEVELS[ZOOM_LEVELS.length - 1];
       changeZoom(nextZoom.toString(), { snapToTop: true });
     }
   }, [zoom, changeZoom]);
@@ -641,39 +783,128 @@ export const ViewerApp: React.FC = () => {
       }
     };
 
-    const handleWheel = (e: WheelEvent) => {
-      if (e.ctrlKey || e.metaKey) {
-        e.preventDefault();
-        const cursor = { x: e.clientX, y: e.clientY };
-        if (e.deltaY < 0) {
-          // zoom in around cursor
-          if (zoom === "fitWidth" || zoom === "fitPage") {
-            changeZoom("100", { cursorPoint: cursor });
-          } else {
-            const currentZoom = parseInt(zoom, 10);
-            const nextZoom = ZOOM_LEVELS.find((z) => z > currentZoom) || 300;
-            changeZoom(nextZoom.toString(), { cursorPoint: cursor });
-          }
-        } else {
-          // zoom out around cursor
-          if (zoom === "fitWidth" || zoom === "fitPage") {
-            changeZoom("100", { cursorPoint: cursor });
-          } else {
-            const currentZoom = parseInt(zoom, 10);
-            const prevZoom = [...ZOOM_LEVELS].reverse().find((z) => z < currentZoom) || 50;
-            changeZoom(prevZoom.toString(), { cursorPoint: cursor });
-          }
-        }
-      }
-    };
-
     window.addEventListener("keydown", handleKeyDown);
-    window.addEventListener("wheel", handleWheel, { passive: false });
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
-      window.removeEventListener("wheel", handleWheel);
+      // Cancel any pending zoom animation
+      if (pendingZoomRef.current !== null) {
+        cancelAnimationFrame(pendingZoomRef.current);
+      }
     };
   }, [handlePrevPage, handleNextPage, handleZoomIn, handleZoomOut]);
+
+  // Note handlers
+  const handleNoteDelete = useCallback(async (id: string) => {
+    try {
+      await deleteNote(id);
+      setNotes((prev) => prev.filter((n) => n.id !== id));
+    } catch (err) {
+      console.error("Failed to delete note", err);
+    }
+  }, []);
+
+  const handleNoteEdit = useCallback(async (id: string, newText: string) => {
+    try {
+      const note = notes.find((n) => n.id === id);
+      if (!note) return;
+
+      const updatedNote = { ...note, text: newText.trim() || undefined };
+      await putNote(updatedNote);
+      setNotes((prev) =>
+        prev.map((n) => (n.id === id ? updatedNote : n))
+      );
+    } catch (err) {
+      console.error("Failed to update note", err);
+    }
+  }, [notes]);
+
+  // Comment handlers
+  const handleCommentDelete = useCallback(async (id: string) => {
+    try {
+      await deleteComment(id);
+      setComments((prev) => prev.filter((c) => c.id !== id));
+    } catch (err) {
+      console.error("Failed to delete comment", err);
+    }
+  }, []);
+
+  const handleCommentEdit = useCallback(async (id: string, newText: string) => {
+    try {
+      const comment = comments.find((c) => c.id === id);
+      if (!comment) return;
+
+      const updatedComment = { ...comment, text: newText };
+      await putComment(updatedComment);
+      setComments((prev) =>
+        prev.map((c) => (c.id === id ? updatedComment : c))
+      );
+    } catch (err) {
+      console.error("Failed to update comment", err);
+    }
+  }, [comments]);
+
+  // Ctrl+scroll zoom handler - attached to container only
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    let wheelTimeout: NodeJS.Timeout | null = null;
+    let accumulatedDelta = 0;
+
+    const handleWheel = (e: WheelEvent) => {
+      // Only handle ctrl/cmd + wheel for zooming
+      if (e.ctrlKey || e.metaKey) {
+        e.preventDefault();
+        e.stopPropagation();
+
+        // Accumulate wheel delta to handle trackpad/mouse wheel differences
+        accumulatedDelta += e.deltaY;
+
+        // Clear existing timeout
+        if (wheelTimeout) {
+          clearTimeout(wheelTimeout);
+        }
+
+        // Debounce zoom changes slightly to group rapid wheel events
+        wheelTimeout = setTimeout(() => {
+          const cursor = { x: e.clientX, y: e.clientY };
+
+          if (accumulatedDelta < -10) {
+            // zoom in around cursor (negative delta = scroll up)
+            if (zoom === "fitWidth" || zoom === "fitPage") {
+              changeZoom("100", { cursorPoint: cursor });
+            } else {
+              const currentZoom = parseInt(zoom, 10);
+              const nextZoom = ZOOM_LEVELS.find((z) => z > currentZoom) || ZOOM_LEVELS[ZOOM_LEVELS.length - 1];
+              changeZoom(nextZoom.toString(), { cursorPoint: cursor });
+            }
+          } else if (accumulatedDelta > 10) {
+            // zoom out around cursor (positive delta = scroll down)
+            if (zoom === "fitWidth" || zoom === "fitPage") {
+              changeZoom("100", { cursorPoint: cursor });
+            } else {
+              const currentZoom = parseInt(zoom, 10);
+              const prevZoom = [...ZOOM_LEVELS].reverse().find((z) => z < currentZoom) || 50;
+              changeZoom(prevZoom.toString(), { cursorPoint: cursor });
+            }
+          }
+
+          // Reset accumulated delta
+          accumulatedDelta = 0;
+          wheelTimeout = null;
+        }, 50); // 50ms debounce for wheel events
+      }
+      // If no ctrl/cmd, let the event propagate normally for regular scrolling
+    };
+
+    container.addEventListener("wheel", handleWheel, { passive: false });
+    return () => {
+      container.removeEventListener("wheel", handleWheel);
+      if (wheelTimeout) {
+        clearTimeout(wheelTimeout);
+      }
+    };
+  }, [zoom, changeZoom]);
 
   const handleRender = useCallback(
     async (
@@ -777,18 +1008,31 @@ export const ViewerApp: React.FC = () => {
 
       <div ref={containerRef} className="flex-1 overflow-auto">
         <div className="py-4 flex flex-col items-center">
-          {pages.map((page, idx) => {
-            const pageNum = idx + 1;
-            const isVisible = visiblePagesRef.current.has(pageNum);
-            // Render visible pages + 2 pages buffer above/below
-            const shouldRender =
-              isVisible ||
-              Array.from(visiblePagesRef.current).some(
-                (vp) => Math.abs(vp - pageNum) <= 4
-              );
+          {(() => {
+            const renderingPages: number[] = [];
+            const visiblePagesArray = Array.from(visiblePages);
 
-            return (
-              <Page
+            return pages.map((page, idx) => {
+              const pageNum = idx + 1;
+              const isVisible = visiblePages.has(pageNum);
+              // Render visible pages + 4 pages buffer above/below
+              const shouldRender =
+                isVisible ||
+                visiblePagesArray.some(
+                  (vp) => Math.abs(vp - pageNum) <= 4
+                );
+
+              if (shouldRender) {
+                renderingPages.push(pageNum);
+              }
+
+              // Log after first iteration
+              if (idx === pages.length - 1 && renderingPages.length > 0) {
+                console.log(`[Render] Rendering pages:`, renderingPages, `(visible: [${visiblePagesArray}])`);
+              }
+
+              return (
+                <Page
                 key={pageNum}
                 pageNum={pageNum}
                 page={page}
@@ -798,9 +1042,14 @@ export const ViewerApp: React.FC = () => {
                 onRender={handleRender}
                 notes={notes.filter((n) => n.page === pageNum)}
                 comments={comments.filter((c) => c.page === pageNum)}
+                onNoteDelete={handleNoteDelete}
+                onNoteEdit={handleNoteEdit}
+                onCommentDelete={handleCommentDelete}
+                onCommentEdit={handleCommentEdit}
               />
-            );
-          })}
+              );
+            });
+          })()}
         </div>
       </div>
       {/* Note input floating box */}
@@ -860,12 +1109,12 @@ export const ViewerApp: React.FC = () => {
             zIndex: 60,
           }}
         >
-          <input
+          <textarea
             autoFocus
             value={commentInput}
             onChange={(e) => setCommentInput(e.target.value)}
             onKeyDown={async (e) => {
-              if (e.key === "Enter") {
+              if (e.key === "Enter" && e.ctrlKey) {
                 // persist comment with normalized rects from selection
                 const range = commentAnchor.range;
                 const rects = Array.from(range.getClientRects());
@@ -907,8 +1156,9 @@ export const ViewerApp: React.FC = () => {
                 setCommentInput("");
               }
             }}
-            placeholder="Type comment and press Enter"
-            className="px-2 py-1 rounded border bg-white dark:bg-neutral-800 text-neutral-900 dark:text-neutral-100"
+            placeholder="Type comment and press Ctrl+Enter"
+            className="px-2 py-1 rounded border bg-white dark:bg-neutral-800 text-neutral-900 dark:text-neutral-100 resize-y"
+            rows={3}
           />
         </div>
       )}

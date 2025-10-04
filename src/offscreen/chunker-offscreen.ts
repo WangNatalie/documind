@@ -87,7 +87,7 @@ export async function processChunkingTaskInOffscreen(taskData: ChunkingTaskData)
         const arrayBuffer = await readOPFSFile(uploadId);
         // Create a File object (not just a Blob) for proper file upload
         const file = new File([arrayBuffer], `${uploadId}.pdf`, { type: 'application/pdf' });
-        
+
         // Upload file to Chunkr
         console.log('Uploading file to Chunkr...');
         const uploadedFile = await chunkr.files.create({
@@ -98,7 +98,7 @@ export async function processChunkingTaskInOffscreen(taskData: ChunkingTaskData)
           }),
         });
         console.log('File uploaded to Chunkr, URL: ' + uploadedFile.url);
-        
+
         // Create parse task with uploaded file URL
         task = await chunkr.tasks.parse.create({
           file: uploadedFile.url,
@@ -134,7 +134,7 @@ export async function processChunkingTaskInOffscreen(taskData: ChunkingTaskData)
       console.log(`Calling storeChunks with ${result.output.chunks.length} chunks...`);
       await storeChunks(docHash, result.output.chunks);
       console.log(`storeChunks completed successfully`);
-      
+
       // Generate embeddings for chunks (Step 2 of the workflow)
       console.log(`Starting embedding generation for document ${docHash}...`);
       try {
@@ -145,7 +145,19 @@ export async function processChunkingTaskInOffscreen(taskData: ChunkingTaskData)
         // Don't fail the whole task if embeddings fail
         console.error(`Failed to generate embeddings (non-fatal):`, embeddingError);
       }
-      
+
+
+      // Generate table of contents (Step 3 of the workflow)
+      console.log(`Starting table of contents generation for document ${docHash}...`);
+      try {
+        const { generateTableOfContents } = await import('./toc-generator.js');
+        await generateTableOfContents(docHash, fileUrl, uploadId);
+        console.log(`Successfully generated table of contents`);
+      } catch (tocError) {
+        // Don't fail the whole task if TOC generation fails
+        console.error(`Failed to generate table of contents (non-fatal):`, tocError);
+      }
+
       // Update task status to completed
       await safeDBOperation(
         () => updateChunkTask(taskId, { status: 'completed' }),
@@ -303,3 +315,103 @@ async function storeChunks(docHash: string, chunks: any[]): Promise<void> {
   console.log(`Successfully stored all ${chunks.length} chunks for document ${docHash}`);
 }
 
+
+/**
+ * Process a chunking task using Gemini AI (NEW METHOD - runs in offscreen document)
+ * This provides an alternative to Chunkr-based chunking with backwards compatibility
+ */
+export async function processChunkingTaskInOffscreenWithGemini(taskData: ChunkingTaskData): Promise<void> {
+  const { taskId, docHash, fileUrl, uploadId } = taskData;
+  console.log('[Gemini Chunking] Task data:', taskData);
+
+  try {
+    // Fail fast if API key is not configured
+    const { getGeminiApiKey } = await import('./gemini-config.js');
+    const geminiKey = getGeminiApiKey();
+    if (!geminiKey) {
+      const msg = 'Gemini API key not configured.';
+      console.error(msg);
+      await safeDBOperation(
+        () => updateChunkTask(taskId, { status: 'failed', error: msg }),
+        'updateChunkTask-missing-api-key'
+      );
+      throw new Error(msg);
+    }
+
+    if (!fileUrl && !uploadId) {
+      throw new Error('Either fileUrl or uploadId is required');
+    }
+
+    // Store task record in IndexedDB
+    await safeDBOperation(
+      () => putChunkTask({
+        taskId,
+        docHash,
+        status: 'processing',
+        fileUrl: fileUrl || uploadId,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      }),
+      'putChunkTask'
+    );
+
+    console.log(`[Gemini Chunking] Processing task ${taskId} for ${fileUrl ? `URL: ${fileUrl}` : `upload: ${uploadId}`}`);
+
+    // Import and use Gemini chunker
+    const { processWithGeminiChunking } = await import('./gemini-chunker.js');
+
+    console.log('[Gemini Chunking] Calling Gemini chunker...');
+    const chunks = await processWithGeminiChunking(docHash, fileUrl, uploadId);
+    console.log(`[Gemini Chunking] Gemini chunker completed with ${chunks.length} chunks`);
+
+    if (chunks && chunks.length > 0) {
+      // Generate embeddings for chunks (Step 2 of the workflow)
+      console.log(`[Gemini Chunking] Starting embedding generation for document ${docHash}...`);
+      try {
+        const { generateMissingEmbeddings } = await import('./embedder.js');
+        const embeddedCount = await generateMissingEmbeddings(docHash);
+        console.log(`[Gemini Chunking] Successfully embedded ${embeddedCount} chunks`);
+      } catch (embeddingError) {
+        // Don't fail the whole task if embeddings fail
+        console.error(`[Gemini Chunking] Failed to generate embeddings (non-fatal):`, embeddingError);
+      }
+
+      // Generate table of contents (Step 3 of the workflow)
+      console.log(`[Gemini Chunking] Starting table of contents generation for document ${docHash}...`);
+      try {
+        const { generateTableOfContents } = await import('./toc-generator.js');
+        await generateTableOfContents(docHash, fileUrl, uploadId);
+        console.log(`[Gemini Chunking] Successfully generated table of contents`);
+      } catch (tocError) {
+        // Don't fail the whole task if TOC generation fails
+        console.error(`[Gemini Chunking] Failed to generate table of contents (non-fatal):`, tocError);
+      }
+
+      // Update task status to completed
+      await safeDBOperation(
+        () => updateChunkTask(taskId, { status: 'completed' }),
+        'updateChunkTask-completed'
+      );
+      console.log(`[Gemini Chunking] Task ${taskId} completed successfully`);
+    } else {
+      console.warn(`[Gemini Chunking] No chunks returned from Gemini!`);
+      await safeDBOperation(
+        () => updateChunkTask(taskId, {
+          status: 'failed',
+          error: 'No chunks returned from Gemini'
+        }),
+        'updateChunkTask-failed'
+      );
+    }
+  } catch (error) {
+    console.error(`[Gemini Chunking] Error processing task ${taskId}:`, error);
+    await safeDBOperation(
+      () => updateChunkTask(taskId, {
+        status: 'failed',
+        error: error instanceof Error ? error.message : String(error),
+      }),
+      'updateChunkTask-error'
+    );
+    throw error; // Re-throw to send error back to service worker
+  }
+}
