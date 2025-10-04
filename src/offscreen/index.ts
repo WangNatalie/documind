@@ -66,5 +66,27 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     // Return true to indicate we'll send response asynchronously
     return true;
   }
+  
+  if (message.type === 'GENERATE_EMBEDDINGS') {
+    const { docHash } = message.payload;
+    console.log(`Received GENERATE_EMBEDDINGS request for document ${docHash}`);
+    
+    // Start keepalive during processing
+    startKeepalive();
+    
+    import('./embedder.js').then(async (embedder) => {
+      const count = await embedder.generateMissingEmbeddings(docHash);
+      console.log(`Generated ${count} embeddings for document ${docHash}`);
+      stopKeepalive();
+      sendResponse({ success: true, count });
+    }).catch((error: Error) => {
+      console.error('Error generating embeddings:', error);
+      stopKeepalive();
+      sendResponse({ success: false, error: error.message });
+    });
+    
+    // Return true to indicate we'll send response asynchronously
+    return true;
+  }
 });
 

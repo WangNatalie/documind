@@ -134,6 +134,18 @@ export async function processChunkingTaskInOffscreen(taskData: ChunkingTaskData)
       console.log(`Calling storeChunks with ${result.output.chunks.length} chunks...`);
       await storeChunks(docHash, result.output.chunks);
       console.log(`storeChunks completed successfully`);
+      
+      // Generate embeddings for chunks (Step 2 of the workflow)
+      console.log(`Starting embedding generation for document ${docHash}...`);
+      try {
+        const { generateMissingEmbeddings } = await import('./embedder.js');
+        const embeddedCount = await generateMissingEmbeddings(docHash);
+        console.log(`Successfully embedded ${embeddedCount} chunks`);
+      } catch (embeddingError) {
+        // Don't fail the whole task if embeddings fail
+        console.error(`Failed to generate embeddings (non-fatal):`, embeddingError);
+      }
+      
       // Update task status to completed
       await safeDBOperation(
         () => updateChunkTask(taskId, { status: 'completed' }),

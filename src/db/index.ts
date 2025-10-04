@@ -5,7 +5,8 @@ import { openDB, DBSchema, IDBPDatabase } from 'idb';
 // v2: Added chunks, chunkTasks
 // v3: Added highlights
 // v4: Added notes (with rects array)
-const DB_VERSION = 4;
+// v5: Added chunkEmbeddings
+const DB_VERSION = 5;
 
 export interface DocRecord {
   docHash: string;
@@ -73,6 +74,17 @@ export interface NoteRecord {
   createdAt: number;
 }
 
+export interface ChunkEmbeddingRecord {
+  id: string; // Same as chunkId for easy lookup
+  chunkId: string;
+  docHash: string;
+  embedding: number[]; // Vector representation
+  model: string; // e.g., "text-embedding-3-small", "text-embedding-ada-002"
+  dimensions: number; // e.g., 1536, 3072
+  source: 'content' | 'description'; // What was embedded
+  createdAt: number;
+}
+
 interface PDFViewerDB extends DBSchema {
   docs: {
     key: string;
@@ -103,6 +115,11 @@ interface PDFViewerDB extends DBSchema {
     key: string;
     value: NoteRecord;
     indexes: { 'by-docHash': string; 'by-page': [string, number] };
+  };
+  chunkEmbeddings: {
+    key: string;
+    value: ChunkEmbeddingRecord;
+    indexes: { 'by-docHash': string; 'by-chunkId': string };
   };
 }
 
@@ -182,6 +199,16 @@ export async function getDB(): Promise<IDBPDatabase<PDFViewerDB>> {
           }
 
           console.log('[DB] Finished migrating notes');
+        }
+      }
+
+      // Version 5: Add chunk embeddings
+      if (oldVersion < 5) {
+        if (!db.objectStoreNames.contains('chunkEmbeddings')) {
+          const embeddingsStore = db.createObjectStore('chunkEmbeddings', { keyPath: 'id' });
+          embeddingsStore.createIndex('by-docHash', 'docHash');
+          embeddingsStore.createIndex('by-chunkId', 'chunkId');
+          console.log('[DB] Created chunkEmbeddings store');
         }
       }
     },
@@ -349,4 +376,49 @@ export async function deleteNotesByDoc(docHash: string): Promise<void> {
   const tx = db.transaction('notes', 'readwrite');
   await Promise.all(notes.map(n => tx.store.delete(n.id)));
   await tx.done;
+}
+
+// Chunk Embedding operations
+export async function putChunkEmbedding(embedding: ChunkEmbeddingRecord): Promise<void> {
+  const db = await getDB();
+  await db.put('chunkEmbeddings', embedding);
+}
+
+export async function getChunkEmbedding(chunkId: string): Promise<ChunkEmbeddingRecord | undefined> {
+  const db = await getDB();
+  return db.get('chunkEmbeddings', chunkId);
+}
+
+export async function getChunkEmbeddingsByDoc(docHash: string): Promise<ChunkEmbeddingRecord[]> {
+  const db = await getDB();
+  return db.getAllFromIndex('chunkEmbeddings', 'by-docHash', docHash);
+}
+
+export async function deleteChunkEmbedding(chunkId: string): Promise<void> {
+  const db = await getDB();
+  await db.delete('chunkEmbeddings', chunkId);
+}
+
+export async function deleteChunkEmbeddingsByDoc(docHash: string): Promise<void> {
+  const db = await getDB();
+  const embeddings = await getChunkEmbeddingsByDoc(docHash);
+  const tx = db.transaction('chunkEmbeddings', 'readwrite');
+  await Promise.all(embeddings.map(e => tx.store.delete(e.id)));
+  await tx.done;
+}
+
+/**
+ * Check which chunks are missing embeddings
+ * Returns array of chunk IDs that need embeddings
+ */
+export async function getMissingEmbeddings(docHash: string): Promise<string[]> {
+  const chunks = await getChunksByDoc(docHash);
+  const embeddings = await getChunkEmbeddingsByDoc(docHash);
+  
+  const embeddedChunkIds = new Set(embeddings.map(e => e.chunkId));
+  const missingChunkIds = chunks
+    .filter(chunk => !embeddedChunkIds.has(chunk.id))
+    .map(chunk => chunk.id);
+  
+  return missingChunkIds;
 }

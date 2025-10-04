@@ -51,3 +51,35 @@ export async function requestChunking(
   });
 }
 
+/**
+ * Request embedding generation for a document's chunks
+ * This will only generate embeddings for chunks that don't have them yet
+ * 
+ * @param docHash - Document hash identifier
+ * @returns Promise with count of embeddings generated or error
+ * 
+ * @example
+ * ```typescript
+ * const response = await requestEmbeddings('abc123');
+ * 
+ * if (response.success) {
+ *   console.log(`Generated ${response.count} new embeddings`);
+ * } else {
+ *   console.error('Failed to generate embeddings:', response.error);
+ * }
+ * ```
+ */
+export async function requestEmbeddings(docHash: string): Promise<{ success: boolean; count?: number; error?: string }> {
+  return new Promise((resolve) => {
+    chrome.runtime.sendMessage(
+      {
+        type: 'GENERATE_EMBEDDINGS',
+        payload: { docHash },
+      },
+      (response: { success: boolean; count?: number; error?: string }) => {
+        resolve(response);
+      }
+    );
+  });
+}
+

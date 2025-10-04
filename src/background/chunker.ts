@@ -206,6 +206,7 @@ async function updateTaskStatus(taskId: string, status: 'completed' | 'failed', 
       task.error = error;
     }
     task.updatedAt = Date.now();
+    console.log(`[background/chunker] Task completed at time ${task.updatedAt} with status: ${status}.`);
     await saveTask(task);
   }
 }

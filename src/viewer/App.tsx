@@ -18,7 +18,7 @@ import {
 } from "../db";
 import { readOPFSFile } from "../db/opfs";
 import ContextMenu from "./ContextMenu";
-import { requestChunking } from "../utils/chunker-client";
+import { requestChunking, requestEmbeddings } from "../utils/chunker-client";
 
 const ZOOM_LEVELS = [50, 75, 90, 100, 125, 150, 175, 200, 250, 300];
 
@@ -234,9 +234,19 @@ export const ViewerApp: React.FC = () => {
                   response.error
                 );
               }
+              
+              // Always request embeddings after chunking (will only generate missing ones)
+              return requestEmbeddings(hash);
+            })
+            .then((embeddingResponse) => {
+              if (embeddingResponse?.success) {
+                console.log(`Embeddings generated: ${embeddingResponse.count} new embeddings`);
+              } else if (embeddingResponse?.error) {
+                console.warn("Failed to generate embeddings:", embeddingResponse.error);
+              }
             })
             .catch((err) => {
-              console.error("Error starting chunking:", err);
+              console.error("Error in chunking/embedding workflow:", err);
             });
         } else if (uploadId) {
           console.log("[App.tsx] Requesting chunking with uploadId:", uploadId);
@@ -253,9 +263,19 @@ export const ViewerApp: React.FC = () => {
                   response.error
                 );
               }
+              
+              // Always request embeddings after chunking (will only generate missing ones)
+              return requestEmbeddings(hash);
+            })
+            .then((embeddingResponse) => {
+              if (embeddingResponse?.success) {
+                console.log(`Embeddings generated: ${embeddingResponse.count} new embeddings`);
+              } else if (embeddingResponse?.error) {
+                console.warn("Failed to generate embeddings:", embeddingResponse.error);
+              }
             })
             .catch((err) => {
-              console.error("Error starting chunking:", err);
+              console.error("Error in chunking/embedding workflow:", err);
             });
         }
 
