@@ -7,7 +7,8 @@
     "storage",
     "unlimitedStorage",
     "webNavigation",
-    "tabs"
+    "tabs",
+    "offscreen"
   ],
   "host_permissions": [
     "*://*/*"
