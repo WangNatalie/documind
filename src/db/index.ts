@@ -410,20 +410,9 @@ export async function getTableOfContents(docHash: string): Promise<TableOfConten
   return db.get('tableOfContents', docHash);
 }
 
-export async function deleteTableOfContents(docHash: string): Promise<void> {
+export async function getTableOfContentsByDoc(docHash: string): Promise<TableOfContentsRecord | undefined> {
   const db = await getDB();
-  await db.delete('tableOfContents', docHash);
-}
-
-// Chunk Embeddings operations
-export async function putChunkEmbedding(embedding: ChunkEmbeddingRecord): Promise<void> {
-  const db = await getDB();
-  await db.put('chunkEmbeddings', embedding);
-}
-
-export async function getChunkEmbedding(chunkId: string): Promise<ChunkEmbeddingRecord | undefined> {
-  const db = await getDB();
-  return db.get('chunkEmbeddings', chunkId);
+  return db.get('tableOfContents', docHash);
 }
 
 /**
@@ -458,4 +447,9 @@ export async function deleteChunkEmbeddingsByDoc(docHash: string): Promise<void>
   const tx = db.transaction('chunkEmbeddings', 'readwrite');
   await Promise.all(embeddings.map(e => tx.store.delete(e.id)));
   await tx.done;
+}
+
+export async function deleteTableOfContents(docHash: string): Promise<void> {
+  const db = await getDB();
+  await db.delete('tableOfContents', docHash);
 }
