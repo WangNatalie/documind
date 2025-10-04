@@ -7,6 +7,7 @@ import {
   updateChunkTask,
   resetDB,
 } from '../db/index';
+import { readOPFSFile } from '../db/opfs';
 
 const CHUNKR_API_KEY = ''; // CHUNKR_API_KEY HERE
 const chunkr = new ChunkrAI({ apiKey: CHUNKR_API_KEY });
@@ -14,7 +15,8 @@ const chunkr = new ChunkrAI({ apiKey: CHUNKR_API_KEY });
 interface ChunkingTaskData {
   taskId: string;
   docHash: string;
-  fileUrl: string;
+  fileUrl?: string;
+  uploadId?: string;
 }
 
 /**
@@ -38,7 +40,8 @@ async function safeDBOperation<T>(operation: () => Promise<T>, operationName: st
  * Process a chunking task using Chunkr AI (runs in offscreen document)
  */
 export async function processChunkingTaskInOffscreen(taskData: ChunkingTaskData): Promise<void> {
-  const { taskId, docHash, fileUrl } = taskData;
+  const { taskId, docHash, fileUrl, uploadId } = taskData;
+  console.log('Chunking task data:', taskData);
 
   try {
     // Fail fast if API key is not configured to avoid opaque "Failed to fetch" errors
@@ -52,8 +55,8 @@ export async function processChunkingTaskInOffscreen(taskData: ChunkingTaskData)
       throw new Error(msg);
     }
 
-    if (!fileUrl) {
-      throw new Error('File URL is required');
+    if (!fileUrl && !uploadId) {
+      throw new Error('Either fileUrl or uploadId is required');
     }
 
     // Store task record in IndexedDB
@@ -62,20 +65,45 @@ export async function processChunkingTaskInOffscreen(taskData: ChunkingTaskData)
         taskId,
         docHash,
         status: 'processing',
-        fileUrl,
+        fileUrl: fileUrl || uploadId, // Use uploadId as identifier if no fileUrl
         createdAt: Date.now(),
         updatedAt: Date.now(),
       }),
       'putChunkTask'
     );
 
-    console.log(`Processing chunking task ${taskId} for file: ${fileUrl}`);
+    console.log(`Processing chunking task ${taskId} for ${fileUrl ? `URL: ${fileUrl}` : `upload: ${uploadId}`}`);
 
     // Call Chunkr AI to parse the document
     console.log(`Calling Chunkr AI to create parsing task...`);
     let task: any;
     try {
-      task = await chunkr.tasks.parse.create({ file: fileUrl });
+      if (fileUrl) {
+        // URL-based PDF: pass URL directly
+        task = await chunkr.tasks.parse.create({ file: fileUrl });
+      } else if (uploadId) {
+        // Upload-based PDF: read from OPFS, upload to Chunkr, then create parse task
+        console.log('Reading file from OPFS...');
+        const arrayBuffer = await readOPFSFile(uploadId);
+        // Create a File object (not just a Blob) for proper file upload
+        const file = new File([arrayBuffer], `${uploadId}.pdf`, { type: 'application/pdf' });
+        
+        // Upload file to Chunkr
+        console.log('Uploading file to Chunkr...');
+        const uploadedFile = await chunkr.files.create({
+          file: file,
+          file_metadata: JSON.stringify({
+            name: `${uploadId}.pdf`,
+            type: 'application/pdf',
+          }),
+        });
+        console.log('File uploaded to Chunkr, URL: ' + uploadedFile.url);
+        
+        // Create parse task with uploaded file URL
+        task = await chunkr.tasks.parse.create({
+          file: uploadedFile.url,
+        });
+      }
     } catch (err) {
       // Handle common network/fetch errors and mark task failed with clearer message
       const errMsg = err instanceof Error ? err.message : String(err);
@@ -106,6 +134,18 @@ export async function processChunkingTaskInOffscreen(taskData: ChunkingTaskData)
       console.log(`Calling storeChunks with ${result.output.chunks.length} chunks...`);
       await storeChunks(docHash, result.output.chunks);
       console.log(`storeChunks completed successfully`);
+      
+      // Generate embeddings for chunks (Step 2 of the workflow)
+      console.log(`Starting embedding generation for document ${docHash}...`);
+      try {
+        const { generateMissingEmbeddings } = await import('./embedder.js');
+        const embeddedCount = await generateMissingEmbeddings(docHash);
+        console.log(`Successfully embedded ${embeddedCount} chunks`);
+      } catch (embeddingError) {
+        // Don't fail the whole task if embeddings fail
+        console.error(`Failed to generate embeddings (non-fatal):`, embeddingError);
+      }
+      
       // Update task status to completed
       await safeDBOperation(
         () => updateChunkTask(taskId, { status: 'completed' }),

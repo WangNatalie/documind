@@ -26,13 +26,13 @@ function stopKeepalive() {
 // Handle messages from the service worker
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === 'PROCESS_CHUNKING_TASK') {
-    const { taskId, docHash, fileUrl } = message.payload;
+    const { taskId, docHash, fileUrl, uploadId } = message.payload;
     console.log(`Received PROCESS_CHUNKING_TASK message for task ${taskId}`);
     
     // Start keepalive during processing
     startKeepalive();
     
-    processChunkingTaskInOffscreen({ taskId, docHash, fileUrl })
+    processChunkingTaskInOffscreen({ taskId, docHash, fileUrl, uploadId })
       .then(() => {
         console.log(`Task ${taskId} completed successfully`);
         stopKeepalive();
@@ -61,6 +61,28 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     }).catch((error: Error) => {
       console.error('Error verifying chunks:', error);
       sendResponse({ exists: false });
+    });
+    
+    // Return true to indicate we'll send response asynchronously
+    return true;
+  }
+  
+  if (message.type === 'GENERATE_EMBEDDINGS') {
+    const { docHash } = message.payload;
+    console.log(`Received GENERATE_EMBEDDINGS request for document ${docHash}`);
+    
+    // Start keepalive during processing
+    startKeepalive();
+    
+    import('./embedder.js').then(async (embedder) => {
+      const count = await embedder.generateMissingEmbeddings(docHash);
+      console.log(`Generated ${count} embeddings for document ${docHash}`);
+      stopKeepalive();
+      sendResponse({ success: true, count });
+    }).catch((error: Error) => {
+      console.error('Error generating embeddings:', error);
+      stopKeepalive();
+      sendResponse({ success: false, error: error.message });
     });
     
     // Return true to indicate we'll send response asynchronously

@@ -7,6 +7,7 @@ interface ChunkTaskRecord {
   docHash: string;
   status: 'pending' | 'processing' | 'completed' | 'failed';
   fileUrl?: string;
+  uploadId?: string;
   error?: string;
   createdAt: number;
   updatedAt: number;
@@ -14,7 +15,8 @@ interface ChunkTaskRecord {
 
 export interface ChunkrTaskOptions {
   docHash: string;
-  fileUrl: string;
+  fileUrl?: string;
+  uploadId?: string;
 }
 
 // Chrome storage keys
@@ -91,7 +93,9 @@ async function verifyChunksExist(docHash: string): Promise<boolean> {
  * Create a new chunking task for a PDF document
  */
 export async function createChunkingTask(options: ChunkrTaskOptions): Promise<string> {
-  const { docHash, fileUrl } = options;
+  console.log('[background/chunker] createChunkingTask called with:', options);
+  const { docHash, fileUrl, uploadId } = options;
+  console.log('[background/chunker] Extracted:', { docHash, fileUrl, uploadId });
 
   // Check if task already exists for this document
   const existingTask = await getTaskByDocHash(docHash);
@@ -135,10 +139,12 @@ export async function createChunkingTask(options: ChunkrTaskOptions): Promise<st
     docHash,
     status: 'pending',
     fileUrl,
+    uploadId,
     createdAt: Date.now(),
     updatedAt: Date.now(),
   };
 
+  console.log('[background/chunker] Created task object:', task);
   await saveTask(task);
   console.log(`Created chunking task ${taskId} for document ${docHash}`);
 
@@ -166,13 +172,16 @@ async function processChunkingTask(taskId: string): Promise<void> {
     await ensureOffscreenDocument();
 
     // Send message to offscreen document with full task data
+    const payload = { 
+      taskId: task.taskId,
+      docHash: task.docHash,
+      fileUrl: task.fileUrl,
+      uploadId: task.uploadId,
+    };
+    console.log('[background/chunker] Sending to offscreen with payload:', payload);
     const response = await chrome.runtime.sendMessage({
       type: 'PROCESS_CHUNKING_TASK',
-      payload: { 
-        taskId: task.taskId,
-        docHash: task.docHash,
-        fileUrl: task.fileUrl,
-      },
+      payload: payload,
     });
 
     if (!response.success) {
@@ -197,6 +206,7 @@ async function updateTaskStatus(taskId: string, status: 'completed' | 'failed', 
       task.error = error;
     }
     task.updatedAt = Date.now();
+    console.log(`[background/chunker] Task completed at time ${task.updatedAt} with status: ${status}.`);
     await saveTask(task);
   }
 }
