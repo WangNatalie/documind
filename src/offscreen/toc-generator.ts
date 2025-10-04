@@ -439,12 +439,12 @@ export async function generateTableOfContents(
     let model: string | undefined;
 
     // If no outline, generate using AI
-    if (!tocItems || tocItems.length === 0) {
-      console.log('[TOC] No PDF outline, generating with AI...');
-      tocItems = await generateAITableOfContents(chunks);
-      source = 'ai-generated';
-      model = GEMINI_MODEL;
-    }
+    // if (!tocItems || tocItems.length === 0) {
+    console.log('[TOC] No PDF outline, generating with AI...');
+    tocItems = await generateAITableOfContents(chunks);
+    source = 'ai-generated';
+    model = GEMINI_MODEL;
+    // }
 
     // Link TOC items to chunks with bounding boxes
     tocItems = linkTOCToChunks(tocItems, chunks);
