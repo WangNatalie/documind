@@ -5,11 +5,11 @@
     "action": {
       "type": "redirect",
       "redirect": {
-        "regexSubstitution": "chrome-extension://EXTENSION_ID/viewer.html?file=\\0"
+        "regexSubstitution": "viewer.html?file=\\1"
       }
     },
     "condition": {
-      "regexFilter": "^https?://.+\\.pdf(\\?.*)?$",
+      "regexFilter": "^(https?://.+\\.pdf)(\\?.*)?$",
       "resourceTypes": ["main_frame"]
     }
   }
