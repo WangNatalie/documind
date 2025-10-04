@@ -8,6 +8,7 @@ import { parseHash, updateHash } from '../utils/hash';
 import { generateDocHash } from '../utils/hash';
 import { getDoc, putDoc, updateDocState } from '../db';
 import { readOPFSFile } from '../db/opfs';
+import ContextMenu from './ContextMenu';
 
 const ZOOM_LEVELS = [50, 75, 90, 100, 125, 150, 175, 200, 250, 300];
 
@@ -28,6 +29,9 @@ export const ViewerApp: React.FC = () => {
   const renderQueue = useRenderQueue();
   const canvasCacheRef = useRef(new CanvasCache());
   const visiblePagesRef = useRef<Set<number>>(new Set([1]));
+  // Context menu state
+  const [contextVisible, setContextVisible] = useState(false);
+  const [contextPos, setContextPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
 
   // Parse URL params
   const params = new URLSearchParams(window.location.search);
@@ -158,6 +162,29 @@ export const ViewerApp: React.FC = () => {
 
     loadDocument();
   }, [fileUrl, uploadId, fileName]);
+
+  // Right-click to open custom context menu
+  useEffect(() => {
+    const onContext = (e: MouseEvent) => {
+      // Only show when right-clicking inside viewer container
+      const container = containerRef.current;
+      if (!container) return;
+      if (!container.contains(e.target as Node)) return;
+
+      e.preventDefault();
+      setContextPos({ x: e.clientX, y: e.clientY });
+      setContextVisible(true);
+    };
+
+    const onClick = () => setContextVisible(false);
+
+    window.addEventListener('contextmenu', onContext);
+    window.addEventListener('click', onClick);
+    return () => {
+      window.removeEventListener('contextmenu', onContext);
+      window.removeEventListener('click', onClick);
+    };
+  }, []);
 
   // Calculate scale when zoom changes or container resizes
   useEffect(() => {
@@ -462,6 +489,11 @@ export const ViewerApp: React.FC = () => {
           })}
         </div>
       </div>
+      <ContextMenu visible={contextVisible} x={contextPos.x} y={contextPos.y} onSelect={(a) => {
+        // Placeholder: we will implement actions later
+        console.log('Context action:', a);
+        setContextVisible(false);
+      }} />
     </div>
   );
 };
