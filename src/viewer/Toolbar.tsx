@@ -1,5 +1,5 @@
 import React from 'react';
-import { Edit, Download, Maximize, Minimize } from 'lucide-react';
+import { Edit, Download, Maximize, Minimize, ChevronLeft, ChevronRight, ZoomIn, ZoomOut } from 'lucide-react';
 
 interface ToolbarProps {
   onToggleTOC?: () => void;
@@ -85,7 +85,7 @@ const ToolbarInner: React.FC<ToolbarProps & { forwardedRef?: React.Ref<HTMLDivEl
             className="px-3 py-1.5 bg-neutral-100 text-neutral-800 dark:bg-neutral-800 dark:text-neutral-100 hover:bg-neutral-200 dark:hover:bg-neutral-700 disabled:opacity-50 disabled:cursor-not-allowed rounded transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400"
             title="Previous page (← or PgUp)"
           >
-            ←
+            <ChevronLeft size={16} />
           </button>
 
           <div className="flex items-center gap-1">
@@ -108,7 +108,7 @@ const ToolbarInner: React.FC<ToolbarProps & { forwardedRef?: React.Ref<HTMLDivEl
             className="px-3 py-1.5 bg-neutral-100 text-neutral-800 dark:bg-neutral-800 dark:text-neutral-100 hover:bg-neutral-200 dark:hover:bg-neutral-700 disabled:opacity-50 disabled:cursor-not-allowed rounded transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400"
             title="Next page (→ or PgDn)"
           >
-            →
+            <ChevronRight size={16} />
           </button>
           </div>
         </div>
@@ -120,11 +120,11 @@ const ToolbarInner: React.FC<ToolbarProps & { forwardedRef?: React.Ref<HTMLDivEl
             className="px-3 py-1.5 bg-neutral-100 text-neutral-800 dark:bg-neutral-800 dark:text-neutral-100 hover:bg-neutral-200 dark:hover:bg-neutral-700 rounded transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400"
             title="Zoom out (Ctrl/Cmd + -)"
           >
-            −
+            <ZoomOut size={16} />
           </button>
 
           <span
-            className="min-w-[100px] text-center text-sm font-medium text-neutral-700 dark:text-neutral-300"
+            className="min-w-[50px] text-center text-sm font-medium text-neutral-700 dark:text-neutral-300"
             title={
               zoom === 'fitWidth' || zoom === 'fitPage'
                 ? `Fit Width: ${Math.round(fitWidthPercent ?? 100)}% — Fit Page: ${Math.round(fitPagePercent ?? 100)}%`
@@ -139,7 +139,7 @@ const ToolbarInner: React.FC<ToolbarProps & { forwardedRef?: React.Ref<HTMLDivEl
             className="px-3 py-1.5 bg-neutral-100 text-neutral-800 dark:bg-neutral-800 dark:text-neutral-100 hover:bg-neutral-200 dark:hover:bg-neutral-700 rounded transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400"
             title="Zoom in (Ctrl/Cmd + +)"
           >
-            +
+            <ZoomIn size={16} />
           </button>
 
           <div className="border-l border-neutral-300 dark:border-neutral-600 h-6 mx-1" />
