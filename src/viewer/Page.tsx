@@ -899,14 +899,14 @@ export const Page: React.FC<PageProps> = ({
               width: highlight.rect.width,
               height: highlight.rect.height,
               pointerEvents: "auto",
-              borderBottom: "1px dashed rgb(147, 51, 234)",
+              borderBottom: "2px dashed rgb(147, 51, 234)",
               boxSizing: "border-box",
             }}
             onMouseEnter={(e) => {
-              e.currentTarget.style.borderBottom = "1px dashed rgb(217, 180, 255)";
+              e.currentTarget.style.borderBottom = "2px dashed rgb(217, 180, 255)";
             }}
             onMouseLeave={(e) => {
-              e.currentTarget.style.borderBottom = "1px dashed rgb(147, 51, 234)";
+              e.currentTarget.style.borderBottom = "2px dashed rgb(147, 51, 234)";
             }}
             onClick={(e) => {
               e.preventDefault();

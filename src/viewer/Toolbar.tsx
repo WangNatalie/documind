@@ -1,6 +1,7 @@
 import React from 'react';
 import { Edit, Brain, Download, Maximize, Minimize, ChevronLeft, ChevronRight, ZoomIn, ZoomOut } from 'lucide-react';
-import documindLogoUrl from '../assets/documind-logo-full.svg'; // Remove ?react
+import documindLogoUrlLight from '../assets/documind-logo-full-light.svg';
+import documindLogoUrlDark from '../assets/documind-logo-full-dark.svg';
 
 interface ToolbarProps {
   onToggleTOC?: () => void;
@@ -68,6 +69,9 @@ const ToolbarInner: React.FC<ToolbarProps & { forwardedRef?: React.Ref<HTMLDivEl
     return `${zoom}%`;
   };
 
+  const isDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+  const logoUrl = isDark ? documindLogoUrlDark : documindLogoUrlLight;
+
   return (
     <div ref={forwardedRef} className="sticky top-0 z-50 bg-neutral-25 dark:bg-neutral-800 shadow-md border-b border-neutral-200 dark:border-neutral-700">
       <div className="flex items-center px-4 py-2 gap-2">
@@ -120,7 +124,7 @@ const ToolbarInner: React.FC<ToolbarProps & { forwardedRef?: React.Ref<HTMLDivEl
 
         {/* Center: Logo */}
         <div className="flex justify-center items-center flex-none">
-          <img src={documindLogoUrl} alt="Documind Logo" style={{ height: 32, width: 'auto' }} />
+          <img src={logoUrl} alt="Documind Logo" style={{ height: 32, width: 'auto' }} />
         </div>
 
         {/* Right: Zoom, Drawing, Download, etc. */}

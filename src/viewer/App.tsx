@@ -2340,7 +2340,7 @@ Key Points:
   }
 
   return (
-    <div className="h-screen flex flex-col bg-neutral-100 dark:bg-neutral-900">
+    <div className="h-screen flex flex-col bg-neutral-100 dark:bg-neutral-850">
       <Toolbar
         ref={toolbarRef}
         currentPage={currentPage}
@@ -2671,7 +2671,7 @@ Key Points:
           <div className="mt-3 pt-3 border-t border-neutral-200 dark:border-neutral-700 flex gap-2">
             <button
               onClick={() => handleSaveTermAsNote(selectedTerm)}
-              className="px-3 py-1.5 text-sm bg-green-500 hover:bg-green-600 text-white rounded"
+              className="font-semibold px-3 py-1.5 text-sm bg-primary-500 hover:bg-primary-600 text-white rounded"
               title="Save this explanation as a note"
             >
               Save as Note
@@ -2689,7 +2689,7 @@ Key Points:
                     scrollToPage(selectedTerm.tocItem.page);
                   }
                 }}
-                className="px-3 py-1.5 text-sm bg-primary-500 hover:bg-primary-600 text-white rounded"
+                className="text-semibold px-3 py-1.5 text-sm bg-primary-500 hover:bg-primary-600 text-white rounded"
               >
                 {termReturnPage !== null ? '← Return' : 'Go to Context'}
               </button>

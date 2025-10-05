@@ -1,5 +1,5 @@
 import React from "react";
-import { Eraser, Trash2 } from "lucide-react";
+import { Eraser, Trash2, Undo2, Redo2 } from "lucide-react";
 
 interface DrawingToolbarProps {
   isExpanded: boolean;
@@ -51,7 +51,7 @@ export const DrawingToolbar: React.FC<DrawingToolbarProps> = ({
           : "-translate-y-full opacity-0 pointer-events-none"
       }`}
     >
-      <div className="flex items-center justify-end gap-2 px-4 py-2 bg-neutral-100 dark:bg-neutral-800 border-b border-neutral-200 dark:border-neutral-700">
+      <div className="flex items-center justify-end gap-2 px-4 py-2 bg-neutral-100 dark:bg-neutral-825 border-b border-neutral-200 dark:border-neutral-700">
         {/* ...existing code (left-side toggle removed) ... */}
 
         {/* Color palette (always visible). Includes an Eraser swatch so eraser acts like a color option. */}
@@ -67,7 +67,7 @@ export const DrawingToolbar: React.FC<DrawingToolbarProps> = ({
                 }}
                 className={`w-7 h-7 rounded-full border-2 transition-all hover:scale-110 ${
                   !isEraserMode && selectedColor === color.value
-                    ? "border-primary-500 ring-2 ring-blue-300 dark:ring-blue-700"
+                    ? "border-primary-300"
                     : "border-neutral-300 dark:border-neutral-600"
                 }`}
                 style={{ backgroundColor: color.value }}
@@ -80,7 +80,7 @@ export const DrawingToolbar: React.FC<DrawingToolbarProps> = ({
               onClick={onToggleEraser}
               className={`w-7 h-7 rounded-full border-2 flex items-center justify-center text-sm transition-all hover:scale-110 ${
                 isEraserMode
-                  ? "border-primary-500 ring-2 ring-blue-300 dark:ring-blue-700 bg-white text-neutral-900"
+                  ? "border-primary-300 bg-white text-neutral-900"
                   : "border-neutral-300 dark:border-neutral-600 bg-white text-neutral-800"
               }`}
               title="Eraser"
@@ -96,19 +96,19 @@ export const DrawingToolbar: React.FC<DrawingToolbarProps> = ({
         <button
           onClick={onUndo}
           disabled={!canUndo}
-          className="px-3 py-1.5 bg-neutral-100 text-neutral-800 dark:bg-neutral-700 dark:text-neutral-100 hover:bg-neutral-200 dark:hover:bg-neutral-600 disabled:opacity-50 disabled:cursor-not-allowed rounded transition-colors focus:outline-none focus:ring-2 focus:ring-primary-500 dark:focus:ring-primary-400"
+          className="text-semibold px-3 py-1.5 text-neutral-800 dark:text-neutral-100 hover:bg-neutral-200 dark:hover:bg-neutral-600 disabled:opacity-50 disabled:cursor-not-allowed rounded transition-colors focus:outline-none"
           title="Undo (Ctrl+Z)"
         >
-          ↶
+          <Undo2 size={16} />
         </button>
 
         <button
           onClick={onRedo}
           disabled={!canRedo}
-          className="px-3 py-1.5 bg-neutral-100 text-neutral-800 dark:bg-neutral-700 dark:text-neutral-100 hover:bg-neutral-200 dark:hover:bg-neutral-600 disabled:opacity-50 disabled:cursor-not-allowed rounded transition-colors focus:outline-none focus:ring-2 focus:ring-primary-500 dark:focus:ring-primary-400"
+          className="text-semibold px-3 py-1.5 text-neutral-800 dark:text-neutral-100 hover:bg-neutral-200 dark:hover:bg-neutral-600 disabled:opacity-50 disabled:cursor-not-allowed rounded transition-colors focus:outline-none"
           title="Redo (Ctrl+Y)"
         >
-          ↷
+          <Redo2 size={16} />
         </button>
 
         <div className="border-l border-neutral-300 dark:border-neutral-600 h-6 mx-1" />
