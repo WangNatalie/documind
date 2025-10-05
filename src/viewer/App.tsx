@@ -38,7 +38,7 @@ import { mergeAnnotationsIntoPdf } from "../export/annotationsToPdf";
 import DocumentProperties from './DocumentProperties.tsx';
 import SaveAsModal from './SaveAsModal';
 import { getAudio } from "../utils/narrator-client";
-import { Volume2 } from "lucide-react";
+import { Volume2, BrainCircuit } from "lucide-react";
 import type { BookmarkItem } from "./TOC";
 
 const ZOOM_LEVELS = [
@@ -3101,11 +3101,48 @@ Key Points:
                     scrollToPage(selectedTerm.tocItem.page);
                   }
                 }}
-                className="font-semibold px-3 py-1.5 text-sm bg-primary-600 hover:bg-primary-600 text-white rounded"
+                className="font-normal px-3 py-1.5 text-sm bg-primary-600 hover:bg-primary-600 text-white rounded"
               >
                 {termReturnPage !== null ? '← Return' : 'Go to Context'}
               </button>
             )}
+            <button
+              onClick={() => {
+                try {
+                  const page = selectedTerm.tocItem?.page || termSourcePage || currentPage;
+                  const termTextParts: string[] = [];
+                  if (selectedTerm.definition) termTextParts.push(`Definition: ${selectedTerm.definition}`);
+                  if (selectedTerm.explanation1) termTextParts.push(`• ${selectedTerm.explanation1}`);
+                  if (selectedTerm.explanation2) termTextParts.push(`• ${selectedTerm.explanation2}`);
+                  if (selectedTerm.explanation3) termTextParts.push(`• ${selectedTerm.explanation3}`);
+                  const text = [`📖 ${selectedTerm.term}`, '', ...termTextParts].join('\n');
+
+                  const b: BookmarkItem = {
+                    id: `${docHash}:term:${page}:${Date.now()}`,
+                    page,
+                    text,
+                    createdAt: Date.now(),
+                    __type: "note",
+                    original: {
+                      id: `${docHash}:term:${page}:${Date.now()}`,
+                      docHash,
+                      page,
+                      rects: termSourceRects && termSourceRects.length > 0 ? termSourceRects : [{ top: 0.02, left: 0.02, width: 0.06, height: 0.03 }],
+                      color: 'yellow',
+                      text,
+                      createdAt: Date.now(),
+                    } as any,
+                  };
+                  handleAddContextBookmark(b);
+                } catch (e) {
+                  console.error('Failed to add term to chat context', e);
+                }
+              }}
+              className="p-2 text-purple-600 hover:bg-purple-50 dark:text-purple-300 dark:hover:bg-purple-900/20 rounded"
+              title="Add this term summary as chat context"
+            >
+              <BrainCircuit size={18} />
+            </button>
           </div>
         </div>
       )}

@@ -1016,7 +1016,7 @@ export const Page: React.FC<PageProps> = ({
               width: highlight.rect.width,
               height: highlight.rect.height,
               pointerEvents: "auto",
-              borderBottom: "3px dashed rgb(147, 51, 234)",
+              borderBottom: "2px dashed rgb(147, 51, 234)",
               boxSizing: "border-box",
             }}
             onMouseEnter={(e) => {
