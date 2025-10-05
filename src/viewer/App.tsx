@@ -2125,21 +2125,32 @@ Key Points:
             window.open(url, "_blank")?.focus();
           } catch (err) {}
         } finally {
-          // cleanup after short delay to allow print dialog to start
-          setTimeout(cleanup, 2000);
+          // Attach afterprint listener so we cleanup when printing completes in supporting browsers
+          try {
+            const win = iframe.contentWindow as Window | null;
+            if (win && typeof (win as any).addEventListener === 'function') {
+              // Use afterprint event to cleanup when the print dialog finishes
+              win.addEventListener('afterprint', cleanup, { once: true });
+            }
+          } catch (e) {
+            // ignore
+          }
+
+          // Fallback: schedule cleanup after a generous delay in case afterprint isn't supported
+          setTimeout(cleanup, 60000); // 60s
         }
       };
 
       // Attach load handler
       iframe.addEventListener("load", onLoad, { once: true });
 
-      // Safety: if load never fires, attempt print after 1s and cleanup after 5s
+      // Safety: if load never fires, attempt print after 1s. Keep a long fallback cleanup so we don't
+      // revoke the blob/iframe too early and accidentally close the print dialog.
       setTimeout(() => {
         try {
           if (iframe.contentWindow) iframe.contentWindow.print();
         } catch (e) {}
       }, 1000);
-      setTimeout(cleanup, 5000);
     } catch (err) {
       console.error("Print failed", err);
     }
