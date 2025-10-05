@@ -41,6 +41,7 @@ interface PageProps {
   onCommentEdit?: (id: string, newText: string) => void;
   termSummaries?: TermSummary[];
   onTermClick?: (term: TermSummary, x: number, y: number, rects: Array<{ top: number; left: number; width: number; height: number }>) => void;
+  highlightsVisible?: boolean;
 }
 
 const ZOOM_DEBOUNCE_MS = 75;
@@ -60,6 +61,7 @@ export const Page: React.FC<PageProps> = ({
   onCommentEdit,
   termSummaries = [],
   onTermClick,
+  highlightsVisible = true,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const textLayerRef = useRef<HTMLDivElement>(null);
@@ -814,7 +816,7 @@ export const Page: React.FC<PageProps> = ({
         })}
 
         {/* Term highlights - clickable highlights for first occurrence of each term (only visible ones) */}
-        {visibleHighlights.map((highlight, index) => (
+        {highlightsVisible && visibleHighlights.map((highlight, index) => (
           <div
             key={`term-${index}`}
             data-term-highlight

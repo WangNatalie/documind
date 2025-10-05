@@ -91,6 +91,11 @@ export const ViewerApp: React.FC = () => {
   // Toolbar ref so we can measure its height and avoid covering it with the TOC drawer
   const toolbarRef = useRef<HTMLDivElement | null>(null);
   const [toolbarHeight, setToolbarHeight] = useState(0);
+  // Highlights visibility toggle
+  const [highlightsVisible, setHighlightsVisible] = useState(false);
+  // Toast notification for highlights toggle
+  const [showHighlightsToast, setShowHighlightsToast] = useState(false);
+  const highlightsToastTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   // Term summaries state
   interface TermSummary {
@@ -113,6 +118,7 @@ export const ViewerApp: React.FC = () => {
   const [termPopupPosition, setTermPopupPosition] = useState<{ x: number; y: number } | null>(null);
   const [termSourceRects, setTermSourceRects] = useState<Array<{ top: number; left: number; width: number; height: number }>>([]);
   const [termSourcePage, setTermSourcePage] = useState<number>(1);
+  const [termReturnPage, setTermReturnPage] = useState<number | null>(null); // Track page to return to after "Go to Context"
   
   // Track last visible page for recaching logic
   const lastVisiblePageRef = useRef<number>(1);
@@ -411,6 +417,7 @@ export const ViewerApp: React.FC = () => {
         console.log('[App] Clicking outside popup, closing');
         setSelectedTerm(null);
         setTermPopupPosition(null);
+        setTermReturnPage(null);
       }
     };
 
@@ -804,6 +811,28 @@ export const ViewerApp: React.FC = () => {
       if (next) setTocOpen(true); // when pinned, ensure the TOC is open
       else setTocOpen(false); // when unpinned, close the TOC
       return next;
+    });
+  }, []);
+
+  const handleToggleHighlights = useCallback(() => {
+    setHighlightsVisible((prev) => {
+      const newValue = !prev;
+      
+      // Show toast notification
+      setShowHighlightsToast(true);
+      
+      // Clear any existing timeout
+      if (highlightsToastTimeoutRef.current) {
+        clearTimeout(highlightsToastTimeoutRef.current);
+      }
+      
+      // Hide toast after 1.5 seconds
+      highlightsToastTimeoutRef.current = setTimeout(() => {
+        setShowHighlightsToast(false);
+        highlightsToastTimeoutRef.current = null;
+      }, 1500);
+      
+      return newValue;
     });
   }, []);
 
@@ -1395,6 +1424,7 @@ Key Points:
       setTermPopupPosition(null);
       setTermSourceRects([]);
       setTermSourcePage(1);
+      setTermReturnPage(null);
       
       // Optional: show a brief success message
       // You could add a toast notification here if you have that component
@@ -1645,6 +1675,15 @@ Key Points:
     return () => { handlePrintRef.current = null; };
   }, [handlePrint]);
 
+  // Cleanup highlights toast timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (highlightsToastTimeoutRef.current) {
+        clearTimeout(highlightsToastTimeoutRef.current);
+      }
+    };
+  }, []);
+
   // Ctrl+scroll zoom handler - attached to container only
   useEffect(() => {
     const container = containerRef.current;
@@ -1812,6 +1851,8 @@ Key Points:
         onPageChange={(page) => scrollToPage(page)}
         onDownload={handleDownload}
         onPrint={handlePrint}
+        highlightsVisible={highlightsVisible}
+        onToggleHighlights={handleToggleHighlights}
       />
 
       {/* Left-edge hover target: 12px wide invisible strip to auto-open TOC when cursor hits the edge */}
@@ -1895,6 +1936,7 @@ Key Points:
                   const adjustedPos = calculatePopupPosition(x, y);
                   setTermPopupPosition(adjustedPos);
                 }}
+                highlightsVisible={highlightsVisible}
               />
               );
             });
@@ -2039,6 +2081,7 @@ Key Points:
               onClick={() => {
                 setSelectedTerm(null);
                 setTermPopupPosition(null);
+                setTermReturnPage(null);
               }}
               className="text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300"
               title="Close"
@@ -2087,17 +2130,34 @@ Key Points:
             {selectedTerm.matchedChunkId && (
               <button
                 onClick={() => {
-                  // Navigate to the chunk's page if available
-                  if (selectedTerm.tocItem?.page) {
+                  if (termReturnPage !== null) {
+                    // Return to the saved page
+                    scrollToPage(termReturnPage);
+                    setTermReturnPage(null);
+                  } else if (selectedTerm.tocItem?.page) {
+                    // Save current page and navigate to context
+                    setTermReturnPage(currentPage);
                     scrollToPage(selectedTerm.tocItem.page);
                   }
                 }}
                 className="px-3 py-1.5 text-sm bg-blue-500 hover:bg-blue-600 text-white rounded"
               >
-                Go to Context
+                {termReturnPage !== null ? '← Return' : 'Go to Context'}
               </button>
             )}
           </div>
+        </div>
+      )}
+
+      {/* Toast notification for highlights toggle */}
+      {showHighlightsToast && (
+        <div
+          className="fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 z-[200] bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900 px-6 py-3 rounded-lg shadow-2xl font-medium text-lg pointer-events-none animate-fadeIn"
+          style={{
+            animation: 'fadeIn 0.2s ease-in-out',
+          }}
+        >
+          {highlightsVisible ? 'Smart reader mode on' : 'Smart reader mode off'}
         </div>
       )}
     </div>
