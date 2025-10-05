@@ -154,8 +154,8 @@ export const PopupApp: React.FC = () => {
         className={`
           border-2 border-dashed rounded-lg p-8 text-center cursor-pointer transition-colors
           ${isDragging
-            ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20'
-            : 'border-neutral-300 dark:border-neutral-700 hover:border-blue-400 dark:hover:border-blue-600'
+            ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20'
+            : 'border-neutral-300 dark:border-neutral-700 hover:border-primary-400 dark:hover:border-primary-600'
           }
           ${isUploading ? 'opacity-50 pointer-events-none' : ''}
         `}
@@ -170,7 +170,7 @@ export const PopupApp: React.FC = () => {
 
         {isUploading ? (
           <div>
-            <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-blue-500 mx-auto mb-3"></div>
+            <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-primary-500 mx-auto mb-3"></div>
             <p className="text-neutral-600 dark:text-neutral-400">Uploading...</p>
           </div>
         ) : (
