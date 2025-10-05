@@ -139,7 +139,7 @@ const ToolbarInner: React.FC<ToolbarProps & { forwardedRef?: React.Ref<HTMLDivEl
           </button>
 
           <span
-            className="min-w-[50px] text-center text-sm font-medium text-neutral-700 dark:text-neutral-300"
+            className="min-w-[50px] text-center font-medium text-neutral-700 dark:text-neutral-200"
             title={
               zoom === 'fitWidth' || zoom === 'fitPage'
                 ? `Fit Width: ${Math.round(fitWidthPercent ?? 100)}% — Fit Page: ${Math.round(fitPagePercent ?? 100)}%`
@@ -175,21 +175,25 @@ const ToolbarInner: React.FC<ToolbarProps & { forwardedRef?: React.Ref<HTMLDivEl
             {zoom === 'fitWidth' ? <Minimize size={16} /> : <Maximize size={16} />}
           </button>
 
+          <div className="border-l border-neutral-300 dark:border-neutral-600 h-6 mx-1" />
+
           {/* Highlights Toggle */}
           <button
             onClick={onToggleHighlights}
-            className={`px-3 py-1.5 rounded transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400 ${
+            className={`px-3 py-1.5 rounded transition-colors focus:outline-none ${
               highlightsVisible
-                ? 'bg-purple-600 text-white hover:bg-purple-700'
-                : 'bg-neutral-100 text-neutral-800 dark:bg-neutral-800 dark:text-neutral-100 hover:bg-neutral-200 dark:hover:bg-neutral-700'
+                ? 'bg-primary-600 text-white'
+                : 'bg-transparent text-neutral-800 dark:bg-transparent dark:text-neutral-100 hover:bg-neutral-200 dark:hover:bg-neutral-700 active:bg-primary-600 active:text-white'
             }`}
             title={highlightsVisible ? "Hide highlights" : "Show highlights"}
           >
-            <Brain size={18} />
+            <Brain size={16} />
           </button>
           
-          {/* Drawing Tool */}
           <div className="border-l border-neutral-300 dark:border-neutral-600 h-6 mx-1" />
+
+
+          {/* Drawing Tool */}
           <button
             onClick={onToggleDrawing}
             className={`px-3 py-1.5 rounded transition-colors outline-none focus:outline-none ${
