@@ -98,16 +98,6 @@ const ToolbarInner: React.FC<ToolbarProps & { forwardedRef?: React.Ref<HTMLDivEl
           >
             ☰
           </button>
-
-          {/* Download with annotations (notes, comments, drawings) */}
-          <button
-            onClick={onDownloadWithAnnotations}
-            className={`ml-2 px-3 py-1.5 rounded transition-colors outline-none focus:outline-none bg-transparent text-neutral-800 dark:bg-transparent dark:text-neutral-100 hover:bg-neutral-200 dark:hover:bg-neutral-700 active:bg-primary-600 active:text-white`}
-            title="Download PDF with annotations"
-          >
-            <Download size={16} />
-          </button>
-
           {/* Navigation */}
           <div className="flex items-center gap-2">
           <button

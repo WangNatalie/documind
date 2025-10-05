@@ -19,6 +19,48 @@ export async function mergeAnnotationsIntoPdf(
   }
 ): Promise<Uint8Array> {
   const pdfDoc = await PDFDocument.load(pdfBytes as Uint8Array);
+  // Ensure exported PDF lists our application/producer as "DocuMind".
+  // Try high-level setters if available, then fall back to setting the Info dictionary.
+  try {
+    try {
+      // Some pdf-lib builds expose helpers like setProducer/setCreator
+      const anyDoc: any = pdfDoc as any;
+      if (typeof anyDoc.setProducer === "function")
+        anyDoc.setProducer(
+          "DocuMind (https://github.com/WangNatalie/documind)"
+        );
+      if (typeof anyDoc.setCreator === "function")
+        anyDoc.setCreator("DocuMind (https://github.com/WangNatalie/documind)");
+    } catch (e) {
+      // ignore
+    }
+
+    // Low-level fallback: attach Info dictionary with Producer and Creator keys.
+    const infoDict = pdfDoc.context.obj({
+      Producer: PDFHexString.fromText("DocuMind"),
+      Creator: PDFHexString.fromText("DocuMind"),
+    });
+    const infoRef = pdfDoc.context.register(infoDict);
+    try {
+      // Try setting Info on the document catalog (works with many pdf-lib versions)
+      try {
+        (pdfDoc as any).catalog.set(PDFName.of("Info"), infoRef);
+      } catch (e) {
+        // as a last resort, try attaching to context.trailer if it exists
+        try {
+          (pdfDoc.context as any).trailer?.set?.(PDFName.of("Info"), infoRef);
+        } catch (e2) {
+          // give up silently
+        }
+      }
+    } catch (e) {
+      // ignore
+    }
+  } catch (err) {
+    // Non-fatal — continue if metadata can't be written
+    // eslint-disable-next-line no-console
+    console.warn("Failed to set PDF producer/creator metadata", err);
+  }
   const pages = pdfDoc.getPages();
   // No inline text drawing; annotations will be provided as native PDF Text/Highlight/Ink
 
@@ -167,7 +209,8 @@ export async function mergeAnnotationsIntoPdf(
     }
     if (cur) lines.push(cur);
 
-    const textWidth = Math.max(1, ...lines.map((l) => l.length)) * avgCharWidth + 8;
+    const textWidth =
+      Math.max(1, ...lines.map((l) => l.length)) * avgCharWidth + 8;
     const lineHeight = fs * 1.2;
     const textHeight = lines.length * lineHeight + 6;
 
@@ -479,8 +522,22 @@ export async function mergeAnnotationsIntoPdf(
           undefined
         );
         if (note?.text) {
-          const rect = computeTextRect(note.text, bbox.minX, bbox.maxY + 4, page, opts.commentFontSize);
-          addTextAnnotation(page, rect.llx, rect.lly, rect.urx, rect.ury, note.text, color);
+          const rect = computeTextRect(
+            note.text,
+            bbox.minX,
+            bbox.maxY + 4,
+            page,
+            opts.commentFontSize
+          );
+          addTextAnnotation(
+            page,
+            rect.llx,
+            rect.lly,
+            rect.urx,
+            rect.ury,
+            note.text,
+            color
+          );
         }
       }
     }
@@ -545,8 +602,22 @@ export async function mergeAnnotationsIntoPdf(
       // Add one sticky Text annotation for the note contents (so it shows on hover)
       if (note.text) {
         // Place the sticky note slightly above the top-left of the bounding box
-        const rect = computeTextRect(note.text, minX, maxY + 4, page, opts.commentFontSize);
-        addTextAnnotation(page, rect.llx, rect.lly, rect.urx, rect.ury, note.text, color);
+        const rect = computeTextRect(
+          note.text,
+          minX,
+          maxY + 4,
+          page,
+          opts.commentFontSize
+        );
+        addTextAnnotation(
+          page,
+          rect.llx,
+          rect.lly,
+          rect.urx,
+          rect.ury,
+          note.text,
+          color
+        );
       }
     }
   }
@@ -568,12 +639,26 @@ export async function mergeAnnotationsIntoPdf(
 
       // Add a Text (sticky) annotation with comment contents sized to text
       const ctext = c.text || "";
-      const crect = computeTextRect(ctext, anchorX, anchorY + 12, page, opts.commentFontSize);
-      addTextAnnotation(page, crect.llx, crect.lly, crect.urx, crect.ury, ctext, {
-        r: 1,
-        g: 0.85,
-        b: 0,
-      });
+      const crect = computeTextRect(
+        ctext,
+        anchorX,
+        anchorY + 12,
+        page,
+        opts.commentFontSize
+      );
+      addTextAnnotation(
+        page,
+        crect.llx,
+        crect.lly,
+        crect.urx,
+        crect.ury,
+        ctext,
+        {
+          r: 1,
+          g: 0.85,
+          b: 0,
+        }
+      );
     }
   }
 
