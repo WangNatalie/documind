@@ -40,7 +40,7 @@ interface PageProps {
   onCommentDelete?: (id: string) => void;
   onCommentEdit?: (id: string, newText: string) => void;
   termSummaries?: TermSummary[];
-  onTermClick?: (term: TermSummary, x: number, y: number) => void;
+  onTermClick?: (term: TermSummary, x: number, y: number, rects: Array<{ top: number; left: number; width: number; height: number }>) => void;
 }
 
 const ZOOM_DEBOUNCE_MS = 75;
@@ -501,6 +501,11 @@ export const Page: React.FC<PageProps> = ({
           const hasText = n.text && n.text.trim().length > 0;
           const isEditing = editingNoteId === n.id;
 
+          // Skip rendering if note has no rectangles (e.g., page-level notes)
+          if (mergedLines.length === 0) {
+            return null;
+          }
+
           return (
             <div key={n.id} className="group">
               {mergedLines.map((line, i) => (
@@ -579,14 +584,15 @@ export const Page: React.FC<PageProps> = ({
                 </div>
               ) : (
                 <div
-                  className="invisible group-hover:visible absolute bg-white dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-600 rounded-md shadow-lg z-40 flex items-center gap-2 pointer-events-auto p-1"
+                  className="invisible group-hover:visible absolute bg-white dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-600 rounded-md shadow-lg z-40 flex items-center gap-2 pointer-events-auto p-2"
                   style={{
                     top: mergedLines[0].top - 25,
                     left: mergedLines[0].left,
+                    width: '300px',
                   }}
                 >
                   {hasText && (
-                    <span className="p-0.5 text-xs text-neutral-900 dark:text-neutral-100 whitespace-nowrap">
+                    <span className="flex-1 text-xs text-neutral-900 dark:text-neutral-100 whitespace-pre-wrap break-words">
                       {n.text}
                     </span>
                   )}
@@ -745,13 +751,21 @@ export const Page: React.FC<PageProps> = ({
           <div
             key={`term-${index}`}
             data-term-highlight
-            className="absolute z-[30] bg-purple-300/40 border border-purple-500/60 rounded cursor-pointer hover:bg-purple-400/60 hover:border-purple-600 transition-colors"
+            className="absolute z-[30] cursor-pointer transition-colors"
             style={{
               top: highlight.rect.top,
               left: highlight.rect.left,
               width: highlight.rect.width,
               height: highlight.rect.height,
               pointerEvents: "auto",
+              borderBottom: "2px dashed rgb(147, 51, 234)",
+              boxSizing: "border-box",
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.borderBottom = "2px dashed rgb(217, 180, 255)";
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.borderBottom = "2px dashed rgb(147, 51, 234)";
             }}
             onClick={(e) => {
               e.preventDefault();
@@ -783,8 +797,17 @@ export const Page: React.FC<PageProps> = ({
                 x = Math.max(10, x);
                 y = Math.max(10, y);
                 
-                console.log('[TermHighlight] Popup position:', { x, y });
-                onTermClick(highlight.term, x, y);
+                // Normalize the highlight rect to page dimensions
+                const pageBox = document.querySelector(`[data-page-num="${pageNum}"]`)?.getBoundingClientRect();
+                const normalizedRects = pageBox ? [{
+                  top: (rect.top - pageBox.top) / pageBox.height,
+                  left: (rect.left - pageBox.left) / pageBox.width,
+                  width: rect.width / pageBox.width,
+                  height: rect.height / pageBox.height,
+                }] : [];
+                
+                console.log('[TermHighlight] Popup position:', { x, y }, 'normalized rects:', normalizedRects);
+                onTermClick(highlight.term, x, y, normalizedRects);
               }
             }}
             title={`Click to see definition of "${highlight.term.term}"`}

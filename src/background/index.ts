@@ -254,6 +254,60 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
     return false;
   }
+
+  if (message.type === 'EXPLAIN_SELECTION') {
+    // Handle summarize selection from context menu
+    const { text, docHash } = message.payload;
+    console.log(`[EXPLAIN_SELECTION] Received request for text: "${text.substring(0, 50)}..."`);
+    
+    // Handle async operation properly
+    (async () => {
+      try {
+        // Ensure offscreen document exists
+        let offscreenExists = false;
+        try {
+          const existingContexts = await chrome.runtime.getContexts({
+            contextTypes: ['OFFSCREEN_DOCUMENT' as chrome.runtime.ContextType],
+            documentUrls: [chrome.runtime.getURL('offscreen.html')]
+          });
+          offscreenExists = existingContexts.length > 0;
+        } catch (err) {
+          console.log('[EXPLAIN_SELECTION] Error checking offscreen context:', err);
+        }
+
+        if (!offscreenExists) {
+          console.log('[EXPLAIN_SELECTION] Creating offscreen document...');
+          await chrome.offscreen.createDocument({
+            url: 'offscreen.html',
+            reasons: ['DOM_SCRAPING' as chrome.offscreen.Reason],
+            justification: 'Generate AI explanation for selected text'
+          });
+        }
+
+        // Send message to offscreen document to explain the selection
+        const response = await chrome.runtime.sendMessage({
+          type: 'EXPLAIN_SELECTION_TEXT',
+          payload: { text, docHash }
+        });
+
+        if (response && response.success && response.summary) {
+          console.log('[EXPLAIN_SELECTION] Successfully generated explanation');
+          sendResponse({ success: true, summary: response.summary });
+        } else {
+          console.error('[EXPLAIN_SELECTION] Failed to generate explanation:', response?.error);
+          sendResponse({ success: false, error: response?.error || 'Unknown error' });
+        }
+      } catch (error: any) {
+        console.error('[EXPLAIN_SELECTION] Error:', error);
+        sendResponse({ success: false, error: error.message || 'Unknown error' });
+      }
+    })().catch((error) => {
+      console.error('[EXPLAIN_SELECTION] Unhandled error:', error);
+      sendResponse({ success: false, error: error.message || 'Unknown error' });
+    });
+    
+    return true; // Indicate async response
+  }
 });
 
 // Helper function to process terms for a specific page

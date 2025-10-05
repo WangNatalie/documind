@@ -100,6 +100,8 @@ export const ViewerApp: React.FC = () => {
   const [termCache, setTermCache] = useState<Map<number, PageTermCache>>(new Map());
   const [selectedTerm, setSelectedTerm] = useState<TermSummary | null>(null);
   const [termPopupPosition, setTermPopupPosition] = useState<{ x: number; y: number } | null>(null);
+  const [termSourceRects, setTermSourceRects] = useState<Array<{ top: number; left: number; width: number; height: number }>>([]);
+  const [termSourcePage, setTermSourcePage] = useState<number>(1);
 
   // Parse URL params
   const params = new URLSearchParams(window.location.search);
@@ -250,6 +252,34 @@ export const ViewerApp: React.FC = () => {
       return updated ? new Map(newCache) : prev;
     });
   }, [visiblePages, docHash]);
+
+  // Helper function to calculate popup position - always snaps to right edge
+  const calculatePopupPosition = useCallback((_x: number, _y: number): { x: number; y: number } => {
+    // Estimated popup dimensions (max-w-md = 448px, approximate height)
+    const POPUP_WIDTH = 448;
+    const POPUP_HEIGHT = 300; // Approximate based on content
+    const MARGIN = 16; // Margin from viewport edge
+
+    const viewportWidth = window.innerWidth;
+    const viewportHeight = window.innerHeight;
+
+    // Always snap to right edge
+    const adjustedX = viewportWidth - POPUP_WIDTH - MARGIN;
+
+    // Center vertically in viewport
+    let adjustedY = (viewportHeight - POPUP_HEIGHT) / 2;
+
+    // Make sure it doesn't go off top or bottom
+    if (adjustedY < MARGIN) {
+      adjustedY = MARGIN;
+    } else if (adjustedY + POPUP_HEIGHT + MARGIN > viewportHeight) {
+      adjustedY = viewportHeight - POPUP_HEIGHT - MARGIN;
+    }
+
+    console.log('[calculatePopupPosition] Snapping to right edge:', { adjustedX, adjustedY }, 'Viewport:', { viewportWidth, viewportHeight });
+
+    return { x: adjustedX, y: adjustedY };
+  }, []);
 
   // Close popup when clicking outside
   useEffect(() => {
@@ -617,6 +647,78 @@ export const ViewerApp: React.FC = () => {
 
   // Handle context menu actions (note creation, comment, etc.)
   const handleContextAction = async (action: string) => {
+    if (action === "explain") {
+      // Get selected text and request summary
+      const sel = window.getSelection();
+      if (!sel || sel.rangeCount === 0) return;
+      const selectedText = sel.toString().trim();
+      if (!selectedText) return;
+
+      const range = sel.getRangeAt(0);
+      const rects = Array.from(range.getClientRects()).map((r) => ({
+        top: r.top,
+        left: r.left,
+        width: r.width,
+        height: r.height,
+      }));
+      const first = rects[0];
+      if (!first) return;
+
+      // Find which page this selection is on and get normalized coordinates
+      const pageEl = document
+        .elementFromPoint(first.left + 1, first.top + 1)
+        ?.closest("[data-page-num]") as HTMLElement | null;
+      
+      if (!pageEl) return;
+      
+      const pageNum = parseInt(pageEl.getAttribute("data-page-num") || "0", 10);
+      const pageBox = pageEl.getBoundingClientRect();
+      
+      // Normalize rects to fractions of page width/height so notes scale with zoom
+      const normalizedRects = rects.map((r) => ({
+        top: (r.top - pageBox.top) / pageBox.height,
+        left: (r.left - pageBox.left) / pageBox.width,
+        width: r.width / pageBox.width,
+        height: r.height / pageBox.height,
+      }));
+
+      console.log('[App] AI Explanation requested for text:', selectedText, 'on page:', pageNum);
+
+      try {
+        // Send message to background script to summarize the selected text
+        const response = await chrome.runtime.sendMessage({
+          type: 'EXPLAIN_SELECTION',
+          payload: { 
+            text: selectedText, 
+            docHash 
+          }
+        });
+
+        console.log('[App] Received response from background:', response);
+
+        if (response && response.success && response.summary) {
+          console.log('[App] Received explanation:', response.summary);
+          
+          // Display the summary in the term popup with adjusted position
+          setSelectedTerm(response.summary);
+          setTermSourceRects(normalizedRects);
+          setTermSourcePage(pageNum);
+          const adjustedPos = calculatePopupPosition(first.left, first.top + first.height);
+          setTermPopupPosition(adjustedPos);
+        } else {
+          console.error('[App] Failed to get explanation:', response?.error || 'No response received');
+          // Show error to user
+          alert(`Failed to generate explanation: ${response?.error || 'No response received'}`);
+        }
+      } catch (error) {
+        console.error('[App] Error requesting explanation:', error);
+        alert(`Error requesting explanation: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      }
+
+      setContextVisible(false);
+      return;
+    }
+
     if (action === "comment") {
       // Open a small input anchored to the selection
       const sel = window.getSelection();
@@ -1021,6 +1123,61 @@ export const ViewerApp: React.FC = () => {
 
   // Ref for print handler so keyboard effect can call it without ordering issues
   const handlePrintRef = useRef<(() => Promise<void>) | null>(null);
+
+  // Handler to save term summary as a note
+  const handleSaveTermAsNote = useCallback(async (termSummary: TermSummary) => {
+    try {
+      // Format the note text with term definition and key points
+      const noteText = `📖 ${termSummary.term}
+
+Definition: ${termSummary.definition}
+
+Key Points:
+• ${termSummary.explanation1}
+• ${termSummary.explanation2}
+• ${termSummary.explanation3}`;
+
+      // Use the page where the term was clicked/selected, not where the context is
+      const notePage = termSourcePage || currentPage;
+
+      // Use the rectangles where the term was found, or create a small indicator
+      const noteRects = termSourceRects.length > 0 ? termSourceRects : [{
+        top: 0.02,    // 2% from top
+        left: 0.02,   // 2% from left
+        width: 0.06,  // 6% of page width (small indicator)
+        height: 0.03, // 3% of page height
+      }];
+
+      // Create note with the rectangles from the term location
+      const noteId = `${docHash}:${notePage}:${Date.now()}`;
+      const newNote = {
+        id: noteId,
+        docHash,
+        page: notePage,
+        rects: noteRects,
+        color: 'yellow', // Default color
+        text: noteText,
+        createdAt: Date.now(),
+      };
+
+      await putNote(newNote);
+      setNotes((prev) => [...prev, newNote]);
+      
+      console.log('[App] Saved term summary as note on page', notePage, ':', termSummary.term, 'with rects:', noteRects);
+      
+      // Close the popup after saving
+      setSelectedTerm(null);
+      setTermPopupPosition(null);
+      setTermSourceRects([]);
+      setTermSourcePage(1);
+      
+      // Optional: show a brief success message
+      // You could add a toast notification here if you have that component
+    } catch (err) {
+      console.error('[App] Failed to save term as note:', err);
+      alert('Failed to save note. Please try again.');
+    }
+  }, [docHash, currentPage, termSourceRects, termSourcePage]);
 
   // Keyboard navigation and ctrl+scroll zoom
   useEffect(() => {
@@ -1471,10 +1628,13 @@ export const ViewerApp: React.FC = () => {
                 onCommentDelete={handleCommentDelete}
                 onCommentEdit={handleCommentEdit}
                 termSummaries={activeTermSummaries}
-                onTermClick={(term, x, y) => {
-                  console.log('[App] onTermClick called:', term.term, { x, y });
+                onTermClick={(term, x, y, rects) => {
+                  console.log('[App] onTermClick called:', term.term, { x, y, rects, pageNum });
                   setSelectedTerm(term);
-                  setTermPopupPosition({ x, y });
+                  setTermSourceRects(rects);
+                  setTermSourcePage(pageNum);
+                  const adjustedPos = calculatePopupPosition(x, y);
+                  setTermPopupPosition(adjustedPos);
                 }}
               />
               );
@@ -1655,8 +1815,15 @@ export const ViewerApp: React.FC = () => {
             </div>
           )}
 
-          {selectedTerm.matchedChunkId && (
-            <div className="mt-3 pt-3 border-t border-neutral-200 dark:border-neutral-700">
+          <div className="mt-3 pt-3 border-t border-neutral-200 dark:border-neutral-700 flex gap-2">
+            <button
+              onClick={() => handleSaveTermAsNote(selectedTerm)}
+              className="px-3 py-1.5 text-sm bg-green-500 hover:bg-green-600 text-white rounded"
+              title="Save this explanation as a note"
+            >
+              Save as Note
+            </button>
+            {selectedTerm.matchedChunkId && (
               <button
                 onClick={() => {
                   // Navigate to the chunk's page if available
@@ -1668,8 +1835,8 @@ export const ViewerApp: React.FC = () => {
               >
                 Go to Context
               </button>
-            </div>
-          )}
+            )}
+          </div>
         </div>
       )}
     </div>

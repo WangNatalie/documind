@@ -131,7 +131,7 @@ export async function extractTerms(passage: string): Promise<TermExtractionResul
   }
 
   try {
-    const prompt = `Extract 1-5 important technical terms, keywords, or phrases from this passage.
+    const prompt = `Extract 5-10 important technical terms, keywords, or phrases from this passage.
 ${passage}
 Prioritize terms that may need clarification as someone reads through this passage for understanding. Return only the list of terms separated by commas.`;
 
@@ -576,7 +576,8 @@ export async function summarizeTerms(
       2
     );
 
-    const prompt = `For each term in the following JSON array, write a concise definition (one sentence) and 3 key points of explanation/summary. Use the provided context from the document when available, but supplement with general knowledge if needed.
+    const prompt = `For each term in the following JSON array, write a concise definition (one sentence) and 3 key points of explanation/summary. If context is available and sufficient, only use the provided context from the document over your own knowledge.
+    If context is not sufficient to generate a definition and explanation, supplement with general knowledge.
 
 Terms with context:
 ${termsJson}
@@ -680,6 +681,116 @@ Return ONLY the JSON array, no additional text or markdown.`;
     
     console.log(`[Summarizer] Generated ${summaries.length} summaries (fallback)`);
     return summaries;
+  }
+}
+
+/**
+ * Summarize arbitrary selected text (could be a term, phrase, or sentence)
+ * Uses vector similarity to find relevant context from the document
+ */
+export async function explainSelectedText(
+  text: string,
+  docHash: string
+): Promise<TermSummary> {
+  console.log(`[ExplainSelection] Generating summary for selected text: "${text.substring(0, 50)}..."`);
+
+  try {
+    // Try to find relevant context using vector similarity
+    const similarChunk = await findMostSimilarChunk(text, docHash);
+    
+    let context = '';
+    let tocItem: TOCItem | null = null;
+    let matchedChunkId: string | undefined = undefined;
+
+    if (similarChunk && similarChunk.chunk) {
+      console.log(`[ExplainSelection] Found similar chunk with similarity ${similarChunk.similarity.toFixed(3)}`);
+      console.log(`[ExplainSelection] Chunk info:`, {
+        page: similarChunk.chunk.page,
+        sectionHeader: similarChunk.chunk.sectionHeader,
+        chunkId: similarChunk.chunkId
+      });
+      context = similarChunk.chunk.content.substring(0, 2000);
+      matchedChunkId = similarChunk.chunkId;
+      
+      // Always create a TOC item from the chunk so "Go to Context" works
+      tocItem = {
+        title: similarChunk.chunk.sectionHeader || '',
+        page: similarChunk.chunk.page,
+        chunkId: similarChunk.chunkId
+      };
+      
+      console.log(`[ExplainSelection] Created tocItem:`, tocItem);
+    } else {
+      console.log(`[ExplainSelection] No similar chunk found, using text itself as context`);
+      // If no similar chunk found, use the text itself as context
+      context = text;
+    }
+
+    // Generate summary using Gemini
+    const prompt = `Write a concise definition/explanation of the following text in one sentence, as well as a summary in 3 key points. If context is available and sufficient, only use the provided context from the document over your own knowledge.
+    If context is not sufficient to generate a definition and explanation, supplement with general knowledge.
+    
+Text to summarize: "${text}"
+
+Context from document: ${context}
+
+Return your response in json-parsable format: 
+{
+  "definition": "",
+  "explanation1": "",
+  "explanation2": "",
+  "explanation3": ""
+}`;
+
+    console.log(`[ExplainSelection] Sending request to Gemini...`);
+    const response = await ai.models.generateContent({
+      model: GEMINI_MODEL,
+      contents: prompt,
+      config: {
+        temperature: 0.3,
+        maxOutputTokens: 10000,
+      }
+    });
+
+    const responseText = response.text;
+    if (!responseText) {
+      throw new Error('No text in Gemini response');
+    }
+
+    console.log(`[ExplainSelection] Received response:`, responseText.substring(0, 200) + '...');
+
+    // Parse JSON from response
+    const trimmedResponse = responseText.trim();
+    const startIdx = trimmedResponse.indexOf('{');
+    const endIdx = trimmedResponse.lastIndexOf('}');
+    
+    if (startIdx === -1 || endIdx === -1 || startIdx >= endIdx) {
+      throw new Error('No valid JSON object found in response');
+    }
+    
+    const jsonText = trimmedResponse.substring(startIdx, endIdx + 1);
+    const parsed = JSON.parse(jsonText);
+
+    return {
+      term: text,
+      definition: parsed.definition || '',
+      explanation1: parsed.explanation1 || '',
+      explanation2: parsed.explanation2 || '',
+      explanation3: parsed.explanation3 || '',
+      tocItem,
+      matchedChunkId,
+    };
+  } catch (error) {
+    console.error(`[ExplainSelection] Error summarizing text:`, error);
+    return {
+      term: text,
+      definition: 'Error generating summary',
+      explanation1: '',
+      explanation2: '',
+      explanation3: '',
+      tocItem: null,
+      matchedChunkId: undefined,
+    };
   }
 }
 
