@@ -18,6 +18,7 @@ interface ToolbarProps {
   onFitPage: () => void;
   onPageChange: (page: number) => void;
   onDownload?: () => void;
+  onDownloadWithAnnotations?: () => void;
   onPrint?: () => void;
   highlightsVisible?: boolean;
   onToggleHighlights?: () => void;
@@ -40,6 +41,7 @@ const ToolbarInner: React.FC<ToolbarProps & { forwardedRef?: React.Ref<HTMLDivEl
   onFitPage,
   onPageChange,
   onDownload,
+  onDownloadWithAnnotations,
   onPrint,
   highlightsVisible,
   onToggleHighlights,
@@ -84,6 +86,15 @@ const ToolbarInner: React.FC<ToolbarProps & { forwardedRef?: React.Ref<HTMLDivEl
             title="Toggle table of contents"
           >
             ☰
+          </button>
+
+          {/* Download with annotations (notes, comments, drawings) */}
+          <button
+            onClick={onDownloadWithAnnotations}
+            className={`ml-2 px-3 py-1.5 rounded transition-colors outline-none focus:outline-none bg-transparent text-neutral-800 dark:bg-transparent dark:text-neutral-100 hover:bg-neutral-200 dark:hover:bg-neutral-700 active:bg-primary-600 active:text-white`}
+            title="Download PDF with annotations"
+          >
+            <Download size={16} />
           </button>
 
           {/* Navigation */}
@@ -187,7 +198,7 @@ const ToolbarInner: React.FC<ToolbarProps & { forwardedRef?: React.Ref<HTMLDivEl
           >
             <Brain size={18} />
           </button>
-          
+
           {/* Drawing Tool */}
           <div className="border-l border-neutral-300 dark:border-neutral-600 h-6 mx-1" />
           <button

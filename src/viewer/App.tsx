@@ -34,6 +34,7 @@ import { Chatbot } from './Chatbot';
 import { buildTOCTree } from "../utils/toc";
 import { TOC } from "./TOC";
 import { DrawingToolbar } from "./DrawingToolbar";
+import { mergeAnnotationsIntoPdf } from "../export/annotationsToPdf";
 import { getAudio } from "../utils/narrator-client";
 
 const ZOOM_LEVELS = [
@@ -1878,6 +1879,73 @@ Key Points:
     }
   }, [fileUrl, uploadId, pdf, fileName]);
 
+  const handleDownloadWithAnnotations = useCallback(async () => {
+    try {
+      // Obtain original PDF bytes similar to handleDownload
+      let arrayBuffer: ArrayBuffer | null = null;
+
+      if (uploadId) {
+        arrayBuffer = await readOPFSFile(uploadId);
+      } else if (fileUrl) {
+        try {
+          const resp = await fetch(fileUrl, { mode: 'cors' });
+          if (resp.ok) arrayBuffer = await resp.arrayBuffer();
+        } catch (e) {
+          // ignore - fall back to pdf.getData below
+        }
+      } else if (pdf && typeof (pdf as any).getData === 'function') {
+        arrayBuffer = await (pdf as any).getData();
+      }
+
+      if (!arrayBuffer) {
+        console.warn('No source available for annotated download');
+        return;
+      }
+
+      // Collect annotations from DB/state
+      const ns = await getNotesByDoc(docHash).catch(() => notes);
+      const cs = await getCommentsByDoc(docHash).catch(() => comments);
+      const drawings = await getDrawingsByDoc(docHash).catch(async () => {
+        // fallback to pageDrawings map
+        const arr: any[] = [];
+        for (const [pageNum, strokes] of pageDrawings.entries()) {
+          arr.push({ pageNum, strokes });
+        }
+        return arr;
+      });
+
+      // Build page render sizes using DOM page elements
+      const pageRenderSizes: Record<number, { width: number; height: number }> = {};
+      for (let p = 1; p <= pages.length; p++) {
+        const el = document.querySelector(`[data-page-num="${p}"]`) as HTMLElement | null;
+        if (el) {
+          const r = el.getBoundingClientRect();
+          pageRenderSizes[p] = { width: r.width, height: r.height };
+        }
+      }
+
+      const modified = await mergeAnnotationsIntoPdf(arrayBuffer, {
+        notes: ns || [],
+        comments: cs || [],
+        drawings: drawings || [],
+        pageRenderSizes,
+      });
+
+  const blob = new Blob([modified as any], { type: 'application/pdf' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = (fileName || 'document.pdf').replace(/\.pdf$/i, '') + '-annotated.pdf';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+
+    } catch (err) {
+      console.error('Annotated download failed', err);
+    }
+  }, [uploadId, fileUrl, pdf, fileName, docHash, notes, comments, pageDrawings, pages]);
+
   const handlePrint = useCallback(async () => {
     try {
       let blob: Blob | null = null;
@@ -2360,6 +2428,7 @@ Key Points:
         onFitPage={() => changeZoom("fitPage", { snapToTop: true })}
         onPageChange={(page) => scrollToPage(page)}
         onDownload={handleDownload}
+  onDownloadWithAnnotations={handleDownloadWithAnnotations}
         onPrint={handlePrint}
         highlightsVisible={highlightsVisible}
         onToggleHighlights={handleToggleHighlights}
