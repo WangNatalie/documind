@@ -1,5 +1,5 @@
-import React from 'react';
-import { Edit, Brain, Download, Maximize, Minimize, ChevronLeft, ChevronRight, ZoomIn, ZoomOut } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Edit, Brain, Download, DownloadCloud, Printer, Info, Maximize, Minimize, ChevronLeft, ChevronRight, ZoomIn, ZoomOut, MoreVertical } from 'lucide-react';
 import documindLogoUrlLight from '../assets/documind-logo-full-light.svg';
 import documindLogoUrlDark from '../assets/documind-logo-full-dark.svg';
 
@@ -18,7 +18,9 @@ interface ToolbarProps {
   onFitPage: () => void;
   onPageChange: (page: number) => void;
   onDownload?: () => void;
+  onDownloadWithAnnotations?: () => void;
   onPrint?: () => void;
+  onDocumentProperties?: () => void;
   highlightsVisible?: boolean;
   onToggleHighlights?: () => void;
   onToggleDrawing?: () => void;
@@ -40,13 +42,24 @@ const ToolbarInner: React.FC<ToolbarProps & { forwardedRef?: React.Ref<HTMLDivEl
   onFitPage,
   onPageChange,
   onDownload,
+  onDownloadWithAnnotations,
   onPrint,
+  onDocumentProperties,
   highlightsVisible,
   onToggleHighlights,
   onToggleDrawing,
   isDrawingMode,
   forwardedRef,
 }) => {
+  const [menuOpen, setMenuOpen] = useState(false);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setMenuOpen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
   const handlePageInput = (e: React.FormEvent<HTMLInputElement>) => {
     const value = parseInt(e.currentTarget.value, 10);
     if (value >= 1 && value <= totalPages) {
@@ -85,7 +98,6 @@ const ToolbarInner: React.FC<ToolbarProps & { forwardedRef?: React.Ref<HTMLDivEl
           >
             ☰
           </button>
-
           {/* Navigation */}
           <div className="flex items-center gap-2">
           <button
@@ -189,7 +201,8 @@ const ToolbarInner: React.FC<ToolbarProps & { forwardedRef?: React.Ref<HTMLDivEl
           >
             <Brain size={16} />
           </button>
-          
+
+          {/* Drawing Tool */}
           <div className="border-l border-neutral-300 dark:border-neutral-600 h-6 mx-1" />
 
 
@@ -206,19 +219,70 @@ const ToolbarInner: React.FC<ToolbarProps & { forwardedRef?: React.Ref<HTMLDivEl
             <Edit size={16} />
           </button>
 
-          {/* Download & Print */}
+          {/* Download & Print (menu) */}
           <div className="border-l border-neutral-300 dark:border-neutral-600 h-6 mx-1" />
-          <button
-            onClick={onDownload}
-            className={`px-3 py-1.5 rounded transition-colors outline-none focus:outline-none ${
-              // If you want download to "stay" primary when pressed, use isDownloadActive state
-              // Otherwise, just use active: styles for press
-              'bg-transparent text-neutral-800 dark:bg-transparent dark:text-neutral-100 hover:bg-neutral-200 dark:hover:bg-neutral-700 active:bg-primary-600 active:text-white'
-            }`}
-            title="Download PDF"
-          >
-            <Download size={16} />
-          </button>
+          <div className="relative">
+            <button
+              onClick={() => setMenuOpen((s) => !s)}
+              aria-haspopup="true"
+              aria-expanded={Boolean(menuOpen)}
+              className="px-3 py-1.5 rounded transition-colors outline-none focus:outline-none bg-transparent text-neutral-800 dark:bg-transparent dark:text-neutral-100 hover:bg-neutral-200 dark:hover:bg-neutral-700 active:bg-primary-600 active:text-white"
+              title="More actions"
+            >
+              <MoreVertical size={16} />
+            </button>
+
+            {menuOpen && (
+              <>
+                <div
+                  className="fixed inset-0 z-40"
+                  onClick={() => setMenuOpen(false)}
+                />
+                <div className="absolute right-0 mt-2 w-72 z-50 bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded shadow-lg text-xs">
+                  <button
+                    className="w-full text-left px-4 py-3 hover:bg-neutral-100 dark:hover:bg-neutral-700 text-neutral-800 dark:text-neutral-100 whitespace-nowrap overflow-hidden flex items-center gap-2"
+                    onClick={() => {
+                      setMenuOpen(false);
+                      onDownload && onDownload();
+                    }}
+                  >
+                    <Download size={14} />
+                    <span>Download original</span>
+                  </button>
+                  <button
+                    className="w-full text-left px-4 py-3 hover:bg-neutral-100 dark:hover:bg-neutral-700 text-neutral-800 dark:text-neutral-100 whitespace-nowrap overflow-hidden flex items-center gap-2"
+                    onClick={() => {
+                      setMenuOpen(false);
+                      onDownloadWithAnnotations && onDownloadWithAnnotations();
+                    }}
+                  >
+                    <DownloadCloud size={14} />
+                    <span>Download with annotations</span>
+                  </button>
+                  <button
+                    className="w-full text-left px-4 py-3 hover:bg-neutral-100 dark:hover:bg-neutral-700 text-neutral-800 dark:text-neutral-100 whitespace-nowrap overflow-hidden flex items-center gap-2"
+                    onClick={() => {
+                      setMenuOpen(false);
+                      onPrint && onPrint();
+                    }}
+                  >
+                    <Printer size={14} />
+                    <span>Print</span>
+                  </button>
+                  <button
+                    className="w-full text-left px-4 py-3 hover:bg-neutral-100 dark:hover:bg-neutral-700 text-neutral-800 dark:text-neutral-100 whitespace-nowrap overflow-hidden flex items-center gap-2"
+                    onClick={() => {
+                      setMenuOpen(false);
+                      onDocumentProperties && onDocumentProperties();
+                    }}
+                  >
+                    <Info size={14} />
+                    <span>Document properties</span>
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
 
           {/* Print button intentionally commented out — printing is handled via Ctrl/Cmd+P shortcut in-app */}
           {false && (

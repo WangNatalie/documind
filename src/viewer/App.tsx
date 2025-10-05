@@ -34,6 +34,8 @@ import { Chatbot } from './Chatbot';
 import { buildTOCTree } from "../utils/toc";
 import { TOC } from "./TOC";
 import { DrawingToolbar } from "./DrawingToolbar";
+import { mergeAnnotationsIntoPdf } from "../export/annotationsToPdf";
+import DocumentProperties from './DocumentProperties.tsx';
 import { getAudio } from "../utils/narrator-client";
 
 const ZOOM_LEVELS = [
@@ -1878,6 +1880,181 @@ Key Points:
     }
   }, [fileUrl, uploadId, pdf, fileName]);
 
+  // Document properties modal state
+  const [docPropsOpen, setDocPropsOpen] = useState(false);
+  const [docProps, setDocProps] = useState<any>(null);
+
+  const handleDocumentProperties = useCallback(async () => {
+    try {
+      // File size: prefer OPFS uploadId, then HEAD on fileUrl, then pdf.getData()
+      let fileSize: number | null = null;
+
+      if (uploadId) {
+        try {
+          const ab = await readOPFSFile(uploadId);
+          fileSize = (ab && ab.byteLength) || null;
+        } catch (e) {
+          console.warn('Failed to read OPFS file for size', e);
+        }
+      } else if (fileUrl) {
+        try {
+          // Try HEAD first to avoid fetching entire file
+          const head = await fetch(fileUrl, { method: 'HEAD' });
+          const cl = head.headers.get('content-length');
+          if (cl) fileSize = parseInt(cl, 10);
+          else {
+            const resp = await fetch(fileUrl);
+            if (resp.ok) {
+              const ab = await resp.arrayBuffer();
+              fileSize = ab.byteLength;
+            }
+          }
+        } catch (e) {
+          console.warn('HEAD/GET for fileUrl failed when computing size', e);
+        }
+      }
+
+      if (fileSize == null && pdf && typeof (pdf as any).getData === 'function') {
+        try {
+          const data = await (pdf as any).getData();
+          fileSize = data?.byteLength ?? data?.length ?? null;
+        } catch (e) {
+          console.warn('pdf.getData failed when computing size', e);
+        }
+      }
+
+      // PDF metadata
+      let meta: any = null;
+      try {
+        meta = await (pdf as any).getMetadata?.();
+      } catch (e) {
+        console.warn('getMetadata failed', e);
+      }
+
+      const info = meta?.info || {};
+      const metadata = meta?.metadata;
+
+      const title = info.Title || info.title || (metadata && typeof metadata.get === 'function' ? metadata.get('dc:title') : undefined);
+      const author = info.Author || info.author;
+      const subject = info.Subject || info.subject;
+      const keywords = info.Keywords || info.keywords;
+      const creationDate = info.CreationDate || info.Creation || info['CreationDate'];
+      const modDate = info.ModDate || info.ModificationDate || info['ModDate'];
+      const creator = info.Creator || info.creator;
+      const producer = info.Producer || info.producer;
+
+      // PDF version detection (best-effort)
+      const pdfInfo = (pdf as any)?.pdfInfo || (pdf as any)?._pdfInfo || {};
+      const pdfVersion = pdfInfo?.PDFFormatVersion || pdfInfo?.pdfFormatVersion || info.PDFFormatVersion || meta?.pdfFormatVersion || undefined;
+
+      // Page count & page sizes (use loaded pages state)
+      const pageCount = (pdf && (pdf as any).numPages) || pages.length;
+      const pageSizes = pages.map((p, idx) => {
+        if (!p) return null;
+        try {
+          // PDFPageProxy.view is usually [xMin, yMin, xMax, yMax]
+          const w = Math.round((p as any).view?.[2] ?? (p.getViewport({ scale: 1 }).width ?? 0));
+          const h = Math.round((p as any).view?.[3] ?? (p.getViewport({ scale: 1 }).height ?? 0));
+          return { page: idx + 1, width: w, height: h };
+        } catch (e) {
+          return { page: idx + 1, width: 0, height: 0 };
+        }
+      });
+
+      const fastWebView = Boolean((pdf as any)?.linearized || pdfInfo?.isLinearized || info?.Linearized);
+
+      const result = {
+        fileName,
+        fileSize,
+        title,
+        author,
+        subject,
+        keywords,
+        creationDate,
+        modDate,
+        creator,
+        producer,
+        pdfVersion,
+        pageCount,
+        pageSizes,
+        fastWebView,
+      };
+
+      setDocProps(result);
+      setDocPropsOpen(true);
+    } catch (err) {
+      console.error('Failed to gather document properties', err);
+      alert('Failed to read document properties');
+    }
+  }, [pdf, pages, fileUrl, uploadId, fileName]);
+
+  const handleDownloadWithAnnotations = useCallback(async () => {
+    try {
+      // Obtain original PDF bytes similar to handleDownload
+      let arrayBuffer: ArrayBuffer | null = null;
+
+      if (uploadId) {
+        arrayBuffer = await readOPFSFile(uploadId);
+      } else if (fileUrl) {
+        try {
+          const resp = await fetch(fileUrl, { mode: 'cors' });
+          if (resp.ok) arrayBuffer = await resp.arrayBuffer();
+        } catch (e) {
+          // ignore - fall back to pdf.getData below
+        }
+      } else if (pdf && typeof (pdf as any).getData === 'function') {
+        arrayBuffer = await (pdf as any).getData();
+      }
+
+      if (!arrayBuffer) {
+        console.warn('No source available for annotated download');
+        return;
+      }
+
+      // Collect annotations from DB/state
+      const ns = await getNotesByDoc(docHash).catch(() => notes);
+      const cs = await getCommentsByDoc(docHash).catch(() => comments);
+      const drawings = await getDrawingsByDoc(docHash).catch(async () => {
+        // fallback to pageDrawings map
+        const arr: any[] = [];
+        for (const [pageNum, strokes] of pageDrawings.entries()) {
+          arr.push({ pageNum, strokes });
+        }
+        return arr;
+      });
+
+      // Build page render sizes using DOM page elements
+      const pageRenderSizes: Record<number, { width: number; height: number }> = {};
+      for (let p = 1; p <= pages.length; p++) {
+        const el = document.querySelector(`[data-page-num="${p}"]`) as HTMLElement | null;
+        if (el) {
+          const r = el.getBoundingClientRect();
+          pageRenderSizes[p] = { width: r.width, height: r.height };
+        }
+      }
+
+      const modified = await mergeAnnotationsIntoPdf(arrayBuffer, {
+        notes: ns || [],
+        comments: cs || [],
+        drawings: drawings || [],
+        pageRenderSizes,
+      });
+
+  const blob = new Blob([modified as any], { type: 'application/pdf' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = (fileName || 'document.pdf').replace(/\.pdf$/i, '') + '-annotated.pdf';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+
+    } catch (err) {
+      console.error('Annotated download failed', err);
+    }
+  }, [uploadId, fileUrl, pdf, fileName, docHash, notes, comments, pageDrawings, pages]);
+
   const handlePrint = useCallback(async () => {
     try {
       let blob: Blob | null = null;
@@ -2359,8 +2536,10 @@ Key Points:
         onFitWidth={() => changeZoom("fitWidth", { snapToTop: true })}
         onFitPage={() => changeZoom("fitPage", { snapToTop: true })}
         onPageChange={(page) => scrollToPage(page)}
-        onDownload={handleDownload}
+    onDownload={handleDownload}
+  onDownloadWithAnnotations={handleDownloadWithAnnotations}
         onPrint={handlePrint}
+    onDocumentProperties={handleDocumentProperties}
         highlightsVisible={highlightsVisible}
         onToggleHighlights={handleToggleHighlights}
         isDrawingMode={isDrawingMode}
@@ -2722,6 +2901,8 @@ Key Points:
           {highlightsVisible ? 'Smart reader mode on' : 'Smart reader mode off'}
         </div>
       )}
+  {/* Document properties modal */}
+  <DocumentProperties open={docPropsOpen} onClose={() => setDocPropsOpen(false)} propsData={docProps} />
     </div>
   );
 };
