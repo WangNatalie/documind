@@ -254,22 +254,44 @@ export const Chatbot: React.FC<ChatbotProps> = ({ docHash, currentPage, onPageNa
 
       {/* Animated Chatbox */}
       {showBox && (
-        <div
-          className={`fixed z-50 bottom-6 right-6 bg-white dark:bg-neutral-900 rounded-xl shadow-2xl flex flex-col border border-neutral-200 dark:border-neutral-700
-            ${open ? 'chatbot-animate-in' : 'chatbot-animate-out'}`}
-          style={{
-            width: dimensions.width,
-            height: dimensions.height,
-            minWidth: CHATBOX_MIN_WIDTH,
-            minHeight: CHATBOX_MIN_HEIGHT,
-            maxWidth: CHATBOX_MAX_WIDTH,
-            maxHeight: CHATBOX_MAX_HEIGHT,
-            transition: 'box-shadow 0.2s',
-            boxShadow: '0 8px 32px rgba(0,0,0,0.22)',
-            resize: 'none',
-            overflow: 'hidden',
-          }}
-        >
+        <>
+          {/* Return button - positioned outside chatbot at top left */}
+          {chatbotReturnPage !== null && open && (
+            <button
+              onClick={() => {
+                if (onPageNavigate && chatbotReturnPage !== null) {
+                  onPageNavigate(chatbotReturnPage);
+                  setChatbotReturnPage(null);
+                }
+              }}
+              className="fixed z-50 bg-primary-600 hover:bg-primary-800 text-white px-3 py-2 rounded-lg shadow-lg flex items-center gap-2 text-sm font-medium transition"
+              style={{
+                bottom: `${dimensions.height-16}px`, // Beside chatbot
+                right: `${dimensions.width + 16}px`, // Align with left edge of chatbot
+              }}
+              title="Return to previous page"
+            >
+              <ArrowLeft size={16} />
+              Return to last page
+            </button>
+          )}
+          
+          <div
+            className={`fixed z-50 bottom-6 right-6 bg-white dark:bg-neutral-900 rounded-xl shadow-2xl flex flex-col border border-neutral-200 dark:border-neutral-700
+              ${open ? 'chatbot-animate-in' : 'chatbot-animate-out'}`}
+            style={{
+              width: dimensions.width,
+              height: dimensions.height,
+              minWidth: CHATBOX_MIN_WIDTH,
+              minHeight: CHATBOX_MIN_HEIGHT,
+              maxWidth: CHATBOX_MAX_WIDTH,
+              maxHeight: CHATBOX_MAX_HEIGHT,
+              transition: 'box-shadow 0.2s',
+              boxShadow: '0 8px 32px rgba(0,0,0,0.22)',
+              resize: 'none',
+              overflow: 'hidden',
+            }}
+          >
           {/* Header */}
           <div className="flex items-center justify-between px-4 py-3 border-b border-neutral-200 dark:border-neutral-700 bg-primary-600 rounded-t-xl">
             <div className="flex items-center gap-2">
@@ -332,7 +354,7 @@ export const Chatbot: React.FC<ChatbotProps> = ({ docHash, currentPage, onPageNa
                               onPageNavigate(s.page);
                             }
                           }}
-                          className="text-blue-600 dark:text-blue-400 hover:underline cursor-pointer"
+                          className="text-primary-600 dark:text-primary-400 hover:underline cursor-pointer"
                           title={`Go to page ${s.page}`}
                         >
                           Page {s.page}
@@ -447,6 +469,7 @@ export const Chatbot: React.FC<ChatbotProps> = ({ docHash, currentPage, onPageNa
             </svg>
           </div>
         </div>
+        </>
       )}
     </>
   );

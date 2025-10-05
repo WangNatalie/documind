@@ -1,7 +1,7 @@
 // Browser-friendly narrator client using ElevenLabs SDK `convert` and returning an ArrayBuffer.
 // We DO NOT call the SDK's `play()` helper because it relies on Node-only APIs.
 
-import { ELEVEN_LABS_API_KEY } from "../../_api_keys";
+import { ELEVEN_LABS_API_KEY } from "../offscreen/api_key";
 import { ElevenLabsClient } from '@elevenlabs/elevenlabs-js';
 
 const MODEL_ID = "eleven_flash_v2_5";

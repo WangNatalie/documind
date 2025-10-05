@@ -38,6 +38,7 @@ import { mergeAnnotationsIntoPdf } from "../export/annotationsToPdf";
 import DocumentProperties from './DocumentProperties.tsx';
 import SaveAsModal from './SaveAsModal';
 import { getAudio } from "../utils/narrator-client";
+import { Volume2 } from "lucide-react";
 import type { BookmarkItem } from "./TOC";
 
 const ZOOM_LEVELS = [
@@ -152,7 +153,9 @@ export const ViewerApp: React.FC = () => {
   const [termSourcePage, setTermSourcePage] = useState<number>(1);
   const [termReturnPage, setTermReturnPage] = useState<number | null>(null); // Track page to return to after "Go to Context"
   const [savedTerms, setSavedTerms] = useState<Set<string>>(new Set()); // Track terms that have been saved as notes
-
+  const [isNarratingTerm, setIsNarratingTerm] = useState(false); // Track if term is being narrated
+  const currentAudioRef = useRef<HTMLAudioElement | null>(null); // Reference to current audio element
+  
   // Track last visible page for recaching logic
   const lastVisiblePageRef = useRef<number>(1);
   const recacheTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -212,7 +215,7 @@ export const ViewerApp: React.FC = () => {
         const { summaries, currentPage: summariesPage } = message.payload;
         console.log('[VIEWER] Received term summaries:', summaries);
         console.log('[VIEWER] Caching term summaries, count:', summaries?.length || 0, 'for page:', summariesPage);
-
+        
         // Add to cache
         setTermCache(prev => {
           const newCache = new Map(prev);
@@ -303,23 +306,23 @@ export const ViewerApp: React.FC = () => {
   // When current page changes, wait 15 seconds before recaching if it becomes completely invisible
   useEffect(() => {
     if (visiblePages.size === 0) return;
-
+    
     // Find the "current" page (the first visible page in order)
     const sortedVisible = Array.from(visiblePages).sort((a, b) => a - b);
     const newCurrentPage = sortedVisible[0];
-
+    
     // Check if the previous "current" page is now completely invisible
     const previousPage = lastVisiblePageRef.current;
     const previousPageNowInvisible = !visiblePages.has(previousPage);
-
+    
     if (previousPageNowInvisible && previousPage !== newCurrentPage) {
       console.log(`[VIEWER] Previous page ${previousPage} is now invisible, scheduling recache in 15s`);
-
+      
       // Clear any existing timeout
       if (recacheTimeoutRef.current) {
         clearTimeout(recacheTimeoutRef.current);
       }
-
+      
       // Wait 15 seconds before recaching
       recacheTimeoutRef.current = setTimeout(() => {
         console.log(`[VIEWER] Recaching for new current page: ${newCurrentPage}`);
@@ -329,32 +332,32 @@ export const ViewerApp: React.FC = () => {
     } else if (newCurrentPage !== previousPage) {
       // Current page changed to a different visible page
       console.log(`[VIEWER] Current page changed from ${previousPage} to ${newCurrentPage}`);
-
+      
       // Clear any pending recache timeout
       if (recacheTimeoutRef.current) {
         clearTimeout(recacheTimeoutRef.current);
         recacheTimeoutRef.current = null;
       }
-
+      
       // Request cache for new current page (function will check what's already cached)
       requestCacheForPage(newCurrentPage);
     }
-
+    
     // Update the last visible page ref
     lastVisiblePageRef.current = newCurrentPage;
-
+    
     return () => {
       if (recacheTimeoutRef.current) {
         clearTimeout(recacheTimeoutRef.current);
       }
     };
   }, [visiblePages, docHash, pages.length]);
-
+  
   // Helper function to request cache for current ±10 pages
   const requestCacheForPage = useCallback((pageNum: number) => {
     const totalPages = pages.length;
     const CACHE_RANGE = 10; // Cache ±10 pages around current
-
+    
     const pagesToCache: number[] = [];
     for (let offset = -CACHE_RANGE; offset <= CACHE_RANGE; offset++) {
       const p = pageNum + offset;
@@ -362,32 +365,32 @@ export const ViewerApp: React.FC = () => {
         pagesToCache.push(p);
       }
     }
-
+    
     console.log(`[VIEWER] Requesting cache for pages:`, pagesToCache);
-
+    
     // Check which pages are not in cache and request them
     const missingPages = pagesToCache.filter(p => !termCache.has(p));
-
+    
     if (missingPages.length > 0) {
       console.log(`[VIEWER] Cache misses for pages:`, missingPages, '- requesting from background');
       missingPages.forEach(p => {
         // Extract text from the specific page
         const pageEl = document.querySelector(`[data-page-num="${p}"]`);
         let pageText = '';
-
+        
         if (pageEl) {
           const textLayer = pageEl.querySelector('.text-layer') || pageEl.querySelector('.textLayer');
           if (textLayer) {
             pageText = textLayer.textContent || '';
           }
         }
-
+        
         console.log(`[VIEWER] Sending request for page ${p} with text length:`, pageText.length);
-
+        
         chrome.runtime.sendMessage({
           type: 'REQUEST_PAGE_TERMS',
-          payload: {
-            page: p,
+          payload: { 
+            page: p, 
             docHash,
             pageText: pageText.trim()
           }
@@ -396,12 +399,12 @@ export const ViewerApp: React.FC = () => {
     } else {
       console.log(`[VIEWER] All required pages already in cache`);
     }
-
+    
     // Clean up cache: remove pages that are not in the ±10 range
     setTermCache(prev => {
       const newCache = new Map(prev);
       let cleaned = false;
-
+      
       for (const [cachedPage] of newCache) {
         if (!pagesToCache.includes(cachedPage)) {
           console.log(`[VIEWER] Removing page ${cachedPage} from cache (outside ±${CACHE_RANGE} range)`);
@@ -409,7 +412,7 @@ export const ViewerApp: React.FC = () => {
           cleaned = true;
         }
       }
-
+      
       return cleaned ? new Map(newCache) : prev;
     });
   }, [pages.length, termCache, docHash]);
@@ -420,19 +423,19 @@ export const ViewerApp: React.FC = () => {
     const checkHighlightVisibility = () => {
       const container = containerRef.current;
       if (!container) return;
-
+      
       const containerRect = container.getBoundingClientRect();
       const containerTop = containerRect.top;
       const containerBottom = containerRect.bottom;
-
+      
       // Update visible pages based on actual intersection
       const newVisiblePages = new Set<number>();
       const pageElements = container.querySelectorAll('[data-page-num]');
-
+      
       pageElements.forEach((el) => {
         const pageNum = parseInt(el.getAttribute('data-page-num') || '0', 10);
         if (pageNum === 0) return;
-
+        
         const rect = el.getBoundingClientRect();
         // Check if page is visible in viewport at all (any part of it)
         const isVisible = rect.bottom > containerTop && rect.top < containerBottom;
@@ -440,26 +443,26 @@ export const ViewerApp: React.FC = () => {
           newVisiblePages.add(pageNum);
         }
       });
-
+      
       // Always compare with current ref value to avoid stale closures
       const oldVisible = Array.from(visiblePagesRef.current).sort();
       const newVisible = Array.from(newVisiblePages).sort();
       const changed = oldVisible.length !== newVisible.length ||
         oldVisible.some((p, i) => p !== newVisible[i]);
-
+      
       if (changed) {
         console.log(`[Highlight Visibility] Pages changed:`, oldVisible, '->', newVisible);
         visiblePagesRef.current = newVisiblePages;
         setVisiblePages(newVisiblePages);
       }
     };
-
+    
     // Check every 0.5 seconds
     const intervalId = setInterval(checkHighlightVisibility, 500);
-
+    
     // Also check immediately
     checkHighlightVisibility();
-
+    
     return () => clearInterval(intervalId);
   }, []); // No dependencies - runs independently
 
@@ -740,7 +743,7 @@ export const ViewerApp: React.FC = () => {
           try {
             const ns = await getNotesByDoc(hash);
             setNotes(ns || []);
-
+            
             // Extract saved term names from notes using full metadata to hide their highlights
             const termNames = new Set<string>();
             (ns || []).forEach(note => {
@@ -1014,21 +1017,21 @@ export const ViewerApp: React.FC = () => {
   const handleToggleHighlights = useCallback(() => {
     setHighlightsVisible((prev) => {
       const newValue = !prev;
-
+      
       // Show toast notification
       setShowHighlightsToast(true);
-
+      
       // Clear any existing timeout
       if (highlightsToastTimeoutRef.current) {
         clearTimeout(highlightsToastTimeoutRef.current);
       }
-
+      
       // Hide toast after 1.5 seconds
       highlightsToastTimeoutRef.current = setTimeout(() => {
         setShowHighlightsToast(false);
         highlightsToastTimeoutRef.current = null;
       }, 1500);
-
+      
       return newValue;
     });
   }, []);
@@ -1746,7 +1749,7 @@ Key Points:
       setTermSourceRects([]);
       setTermSourcePage(1);
       setTermReturnPage(null);
-
+      
       // Optional: show a brief success message
       // You could add a toast notification here if you have that component
     } catch (err) {
@@ -1809,10 +1812,10 @@ Key Points:
       try {
         // Find the note before deleting to check if it's a saved term note
         const noteToDelete = notes.find((n) => n.id === id);
-
+        
         await deleteNote(id);
         setNotes((prev) => prev.filter((n) => n.id !== id));
-
+        
         // If this was a saved term note, restore its highlight using full metadata
         if (noteToDelete?.termSummary) {
           setSavedTerms((prev) => {
@@ -2964,9 +2967,69 @@ Key Points:
           onClick={(e) => e.stopPropagation()}
         >
           <div className="flex justify-between items-start mb-3">
-            <h3 className="text-lg font-bold text-neutral-900 dark:text-neutral-100">
-              {selectedTerm.term}
-            </h3>
+            <div className="flex items-center gap-2">
+              <h3 className="text-lg font-bold text-neutral-900 dark:text-neutral-100">
+                {selectedTerm.term}
+              </h3>
+              <button
+                onClick={async () => {
+                  // If currently playing, stop it
+                  if (isNarratingTerm && currentAudioRef.current) {
+                    currentAudioRef.current.pause();
+                    currentAudioRef.current.currentTime = 0;
+                    currentAudioRef.current = null;
+                    setIsNarratingTerm(false);
+                    return;
+                  }
+                  
+                  try {
+                    setIsNarratingTerm(true);
+                    
+                    // Create narration text with term definition and key points
+                    const narrationText = `${selectedTerm.term}. ${selectedTerm.definition}`;
+                    
+                    console.log('[App] Requesting narration for term:', selectedTerm.term);
+                    const audioBuffer = await getAudio(narrationText);
+                    
+                    if (audioBuffer) {
+                      console.log('[App] Playing term narration audio');
+                      const blob = new Blob([audioBuffer], { type: 'audio/mpeg' });
+                      const url = URL.createObjectURL(blob);
+                      const audioEl = new Audio(url);
+                      currentAudioRef.current = audioEl;
+                      
+                      audioEl.onended = () => {
+                        URL.revokeObjectURL(url);
+                        currentAudioRef.current = null;
+                        setIsNarratingTerm(false);
+                      };
+                      
+                      audioEl.onerror = () => {
+                        URL.revokeObjectURL(url);
+                        currentAudioRef.current = null;
+                        setIsNarratingTerm(false);
+                        console.error('[App] Audio playback error');
+                      };
+                      
+                      await audioEl.play();
+                    } else {
+                      console.error('[App] No audio buffer received for term narration');
+                      setIsNarratingTerm(false);
+                    }
+                  } catch (err) {
+                    console.error('[App] Error requesting term narration:', err);
+                    currentAudioRef.current = null;
+                    setIsNarratingTerm(false);
+                  }
+                }}
+                className={`p-1 rounded hover:bg-primary-100 dark:hover:bg-primary-700 transition ${
+                  isNarratingTerm ? 'text-primary-500 animate-pulse' : 'text-neutral-600 dark:text-neutral-400'
+                }`}
+                title={isNarratingTerm ? "Stop narration" : "Listen to term definition"}
+              >
+                <Volume2 size={18} />
+              </button>
+            </div>
             <button
               onClick={() => {
                 setSelectedTerm(null);
@@ -3020,7 +3083,7 @@ Key Points:
           <div className="mt-3 pt-3 border-t border-neutral-200 dark:border-neutral-700 flex gap-2">
             <button
               onClick={() => handleSaveTermAsNote(selectedTerm)}
-              className="font-semibold px-3 py-1.5 text-sm bg-primary-600 hover:bg-primary-600 text-white rounded"
+              className="px-3 py-1.5 text-sm bg-primary-100 hover:bg-primary-200 text-black rounded"
               title="Save this explanation as a note"
             >
               Save as Note

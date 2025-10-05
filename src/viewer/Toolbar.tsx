@@ -236,6 +236,19 @@ const ToolbarInner: React.FC<
             <Brain size={16} />
           </button>
 
+          {/* Highlights Toggle */}
+          <button
+            onClick={onToggleHighlights}
+            className={`px-3 py-1.5 rounded transition-colors focus:outline-none ${
+              highlightsVisible
+                ? 'bg-primary-600 text-white'
+                : 'bg-transparent text-neutral-800 dark:bg-transparent dark:text-neutral-100 hover:bg-neutral-200 dark:hover:bg-neutral-700'
+            }`}
+            title={highlightsVisible ? "Hide highlights" : "Show highlights"}
+          >
+            <Brain size={18} />
+          </button>
+          
           {/* Drawing Tool */}
           <div className="border-l border-neutral-300 dark:border-neutral-600 h-6 mx-1" />
 
