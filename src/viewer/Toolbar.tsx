@@ -1,10 +1,13 @@
 import React from 'react';
+import { Edit, Download, Maximize, Minimize } from 'lucide-react';
 
 interface ToolbarProps {
   onToggleTOC?: () => void;
   currentPage: number;
   totalPages: number;
   zoom: string;
+  fitWidthPercent?: number;
+  fitPagePercent?: number;
   onPrevPage: () => void;
   onNextPage: () => void;
   onZoomIn: () => void;
@@ -14,6 +17,8 @@ interface ToolbarProps {
   onPageChange: (page: number) => void;
   onDownload?: () => void;
   onPrint?: () => void;
+  onToggleDrawing?: () => void;
+  isDrawingMode?: boolean;
 }
 
 const ToolbarInner: React.FC<ToolbarProps & { forwardedRef?: React.Ref<HTMLDivElement> }> = ({
@@ -21,6 +26,8 @@ const ToolbarInner: React.FC<ToolbarProps & { forwardedRef?: React.Ref<HTMLDivEl
   currentPage,
   totalPages,
   zoom,
+  fitWidthPercent,
+  fitPagePercent,
   onPrevPage,
   onNextPage,
   onZoomIn,
@@ -30,6 +37,8 @@ const ToolbarInner: React.FC<ToolbarProps & { forwardedRef?: React.Ref<HTMLDivEl
   onPageChange,
   onDownload,
   onPrint,
+  onToggleDrawing,
+  isDrawingMode,
   forwardedRef,
 }) => {
   const handlePageInput = (e: React.FormEvent<HTMLInputElement>) => {
@@ -40,8 +49,17 @@ const ToolbarInner: React.FC<ToolbarProps & { forwardedRef?: React.Ref<HTMLDivEl
   };
 
   const getZoomLabel = () => {
-    if (zoom === 'fitWidth') return 'Fit Width';
-    if (zoom === 'fitPage') return 'Fit Page';
+    const asNumber = Number(zoom);
+    if (zoom === 'fitWidth') {
+      const fw = Math.round(fitWidthPercent ?? 100);
+      return `${fw}%`;
+    }
+
+    if (zoom === 'fitPage') {
+      const fp = Math.round(fitPagePercent ?? 100);
+      return `${fp}%`;
+    }
+    if (!Number.isNaN(asNumber)) return `${asNumber}%`;
     return `${zoom}%`;
   };
 
@@ -105,7 +123,14 @@ const ToolbarInner: React.FC<ToolbarProps & { forwardedRef?: React.Ref<HTMLDivEl
             −
           </button>
 
-          <span className="min-w-[100px] text-center text-sm font-medium text-neutral-700 dark:text-neutral-300">
+          <span
+            className="min-w-[100px] text-center text-sm font-medium text-neutral-700 dark:text-neutral-300"
+            title={
+              zoom === 'fitWidth' || zoom === 'fitPage'
+                ? `Fit Width: ${Math.round(fitWidthPercent ?? 100)}% — Fit Page: ${Math.round(fitPagePercent ?? 100)}%`
+                : undefined
+            }
+          >
             {getZoomLabel()}
           </span>
 
@@ -119,28 +144,34 @@ const ToolbarInner: React.FC<ToolbarProps & { forwardedRef?: React.Ref<HTMLDivEl
 
           <div className="border-l border-neutral-300 dark:border-neutral-600 h-6 mx-1" />
 
+          {/* Single toggle for fit mode: if currently fitWidth show Minimize (width icon) else show Maximize (page icon) */}
           <button
-            onClick={onFitWidth}
+            onClick={() => {
+              if (zoom === 'fitWidth') onFitPage();
+              else onFitWidth();
+            }}
             className={`px-3 py-1.5 rounded transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400 ${
-              zoom === 'fitWidth'
+              (zoom === 'fitWidth' || zoom === 'fitPage')
                 ? 'bg-blue-600 text-white'
                 : 'bg-neutral-100 text-neutral-800 dark:bg-neutral-800 dark:text-neutral-100 hover:bg-neutral-200 dark:hover:bg-neutral-700'
             }`}
-            title="Fit width (Ctrl/Cmd + 0)"
+            title={zoom === 'fitWidth' ? 'Switch to Fit Page' : 'Switch to Fit Width'}
           >
-            Fit Width
+            {zoom === 'fitWidth' ? <Minimize size={16} /> : <Maximize size={16} />}
           </button>
 
+          {/* Drawing Tool */}
+          <div className="border-l border-neutral-300 dark:border-neutral-600 h-6 mx-1" />
           <button
-            onClick={onFitPage}
+            onClick={onToggleDrawing}
             className={`px-3 py-1.5 rounded transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400 ${
-              zoom === 'fitPage'
-                ? 'bg-blue-600 text-white'
+              isDrawingMode
+                ? 'bg-blue-600 text-white hover:bg-blue-700'
                 : 'bg-neutral-100 text-neutral-800 dark:bg-neutral-800 dark:text-neutral-100 hover:bg-neutral-200 dark:hover:bg-neutral-700'
             }`}
-            title="Fit page"
+            title="Drawing tool"
           >
-            Fit Page
+            <Edit size={16} />
           </button>
 
           {/* Download & Print */}
@@ -150,7 +181,7 @@ const ToolbarInner: React.FC<ToolbarProps & { forwardedRef?: React.Ref<HTMLDivEl
             className="px-3 py-1.5 bg-neutral-100 text-neutral-800 dark:bg-neutral-800 dark:text-neutral-100 hover:bg-neutral-200 dark:hover:bg-neutral-700 rounded transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400"
             title="Download PDF"
           >
-            ⬇
+            <Download size={16} />
           </button>
 
           {/* Print button intentionally commented out — printing is handled via Ctrl/Cmd+P shortcut in-app */}

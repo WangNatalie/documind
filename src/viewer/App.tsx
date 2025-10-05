@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef, useCallback } from "react";
 import type { PDFDocumentProxy, PDFPageProxy } from "pdfjs-dist";
-import { loadPDF, calculateScale } from "./pdf";
+import { loadPDF, calculateScale, DPI_ADJUSTMENT } from "./pdf";
 import { Page } from "./Page";
 import { Toolbar } from "./Toolbar";
 import { useRenderQueue, CanvasCache } from "./useRenderQueue";
@@ -19,7 +19,11 @@ import {
   deleteComment,
   getTableOfContents,
   getChunksByDoc,
+  getDrawingsByDoc,
+  putDrawing,
   type TableOfContentsRecord,
+  type DrawingStroke,
+  type DrawingRecord,
 } from "../db";
 import { readOPFSFile } from "../db/opfs";
 import ContextMenu from "./ContextMenu";
@@ -27,6 +31,7 @@ import { requestGeminiChunking, requestEmbeddings, requestTOC } from "../utils/c
 import { Chatbot } from './chatbot/Chatbot';
 import { buildTOCTree } from "../utils/toc";
 import { TOC } from "./TOC";
+import { DrawingToolbar } from "./DrawingToolbar";
 
 const ZOOM_LEVELS = [50, 75, 90, 100, 125, 150, 175, 200, 250, 300, 350, 400, 500];
 
@@ -92,6 +97,14 @@ export const ViewerApp: React.FC = () => {
   const toolbarRef = useRef<HTMLDivElement | null>(null);
   const [toolbarHeight, setToolbarHeight] = useState(0);
 
+  // Drawing state - all in memory, no database
+  const [isDrawingMode, setIsDrawingMode] = useState(false);
+  const [drawingColor, setDrawingColor] = useState('#000000');
+  const [drawingStrokeWidth] = useState(2);
+  const [isEraserMode, setIsEraserMode] = useState(false);
+  const [pageDrawings, setPageDrawings] = useState<Map<number, DrawingStroke[]>>(new Map());
+  const [drawingHistory, setDrawingHistory] = useState<Map<number, DrawingStroke[][]>>(new Map());
+  const [drawingHistoryIndex, setDrawingHistoryIndex] = useState<Map<number, number>>(new Map());
   // Term summaries state
   interface TermSummary {
     term: string;
@@ -102,7 +115,7 @@ export const ViewerApp: React.FC = () => {
     tocItem: { title: string; page: number; chunkId?: string } | null;
     matchedChunkId?: string;
   }
-  
+
   // Cache term summaries for current ±1 pages with timestamps
   interface PageTermCache {
     page: number;
@@ -130,7 +143,7 @@ export const ViewerApp: React.FC = () => {
         const { summaries, currentPage: summariesPage } = message.payload;
         console.log('[VIEWER] Received term summaries:', summaries);
         console.log('[VIEWER] Caching term summaries, count:', summaries?.length || 0, 'for page:', summariesPage);
-        
+
         // Add to cache with current timestamp
         setTermCache(prev => {
           const newCache = new Map(prev);
@@ -189,7 +202,10 @@ export const ViewerApp: React.FC = () => {
             visibleText: visibleText.trim(),
           }
         }).catch((error) => {
-          console.error('Failed to send viewer state:', error);
+          // Suppress "message port closed" errors - these are normal when extension reloads
+          if (!error.message?.includes('message port closed')) {
+            console.error('Failed to send viewer state:', error);
+          }
         });
       }
     };
@@ -217,11 +233,11 @@ export const ViewerApp: React.FC = () => {
     const cleanupInterval = setInterval(() => {
       const now = Date.now();
       const TEN_SECONDS = 10000;
-      
+
       setTermCache(prev => {
         const newCache = new Map(prev);
         let cleaned = false;
-        
+
         for (const [pageNum, cache] of newCache.entries()) {
           // If page is not currently visible and hasn't been for 10 seconds, remove it
           if (!visiblePages.has(pageNum) && (now - cache.lastVisibleTime) > TEN_SECONDS) {
@@ -230,11 +246,11 @@ export const ViewerApp: React.FC = () => {
             cleaned = true;
           }
         }
-        
+
         return cleaned ? newCache : prev;
       });
     }, 2000); // Check every 2 seconds
-    
+
     return () => clearInterval(cleanupInterval);
   }, [visiblePages]);
 
@@ -245,7 +261,7 @@ export const ViewerApp: React.FC = () => {
     setTermCache(prev => {
       const newCache = new Map(prev);
       let updated = false;
-      
+
       for (const pageNum of visiblePages) {
         const cached = newCache.get(pageNum);
         if (cached) {
@@ -260,7 +276,7 @@ export const ViewerApp: React.FC = () => {
           }).catch(err => console.error('Failed to request page terms:', err));
         }
       }
-      
+
       return updated ? new Map(newCache) : prev;
     });
   }, [visiblePages, docHash]);
@@ -539,6 +555,38 @@ export const ViewerApp: React.FC = () => {
           }
         })();
 
+        // Load drawings for this document (non-fatal)
+        (async () => {
+          try {
+            const drawings = await getDrawingsByDoc(hash);
+            console.log('[App] Loaded drawings:', drawings.length);
+
+            // Convert array of DrawingRecords to Map<pageNum, strokes[]>
+            const drawingsMap = new Map<number, DrawingStroke[]>();
+            const historyMap = new Map<number, DrawingStroke[][]>();
+            const historyIndexMap = new Map<number, number>();
+
+            drawings.forEach(drawing => {
+              drawingsMap.set(drawing.pageNum, drawing.strokes);
+              // Initialize history with current state
+              historyMap.set(drawing.pageNum, [drawing.strokes]);
+              historyIndexMap.set(drawing.pageNum, 0);
+            });
+
+            setPageDrawings(drawingsMap);
+            setDrawingHistory(historyMap);
+            setDrawingHistoryIndex(historyIndexMap);
+          } catch (err) {
+            console.error("Failed to load drawings (non-fatal)", err);
+            try {
+              resetDB();
+            } catch (resetErr) {
+              console.warn('resetDB failed while loading drawings:', resetErr);
+            }
+            // Keep empty maps on error
+          }
+        })();
+
         // Create or update doc record — make DB errors non-fatal so viewer still loads
         try {
           if (!existingDoc) {
@@ -786,12 +834,12 @@ export const ViewerApp: React.FC = () => {
       const pageEl = document
         .elementFromPoint(first.left + 1, first.top + 1)
         ?.closest("[data-page-num]") as HTMLElement | null;
-      
+
       if (!pageEl) return;
-      
+
       const pageNum = parseInt(pageEl.getAttribute("data-page-num") || "0", 10);
       const pageBox = pageEl.getBoundingClientRect();
-      
+
       // Normalize rects to fractions of page width/height so notes scale with zoom
       const normalizedRects = rects.map((r) => ({
         top: (r.top - pageBox.top) / pageBox.height,
@@ -806,9 +854,9 @@ export const ViewerApp: React.FC = () => {
         // Send message to background script to summarize the selected text
         const response = await chrome.runtime.sendMessage({
           type: 'EXPLAIN_SELECTION',
-          payload: { 
-            text: selectedText, 
-            docHash 
+          payload: {
+            text: selectedText,
+            docHash
           }
         });
 
@@ -816,7 +864,7 @@ export const ViewerApp: React.FC = () => {
 
         if (response && response.success && response.summary) {
           console.log('[App] Received explanation:', response.summary);
-          
+
           // Display the summary in the term popup with adjusted position
           setSelectedTerm(response.summary);
           setTermSourceRects(normalizedRects);
@@ -1221,7 +1269,23 @@ export const ViewerApp: React.FC = () => {
 
   const handleZoomIn = useCallback(() => {
     if (zoom === "fitWidth" || zoom === "fitPage") {
-      changeZoom("100", { snapToTop: true });
+      // Compute current fit percent and choose the nearest higher numeric zoom
+      const container = containerRef.current;
+      if (!container || !pages[0]) {
+        changeZoom("100", { snapToTop: true });
+        return;
+      }
+
+      try {
+        const cw = container.clientWidth;
+        const ch = container.clientHeight - 40;
+        const s = calculateScale(pages[0], cw, ch, zoom as 'fitWidth' | 'fitPage');
+        const percent = Math.round((s / DPI_ADJUSTMENT) * 100);
+        const nextZoom = ZOOM_LEVELS.find((z) => z > percent) || ZOOM_LEVELS[ZOOM_LEVELS.length - 1];
+        changeZoom(nextZoom.toString(), { snapToTop: true });
+      } catch (e) {
+        changeZoom("100", { snapToTop: true });
+      }
     } else {
       const currentZoom = parseInt(zoom, 10);
       const nextZoom = ZOOM_LEVELS.find((z) => z > currentZoom) || ZOOM_LEVELS[ZOOM_LEVELS.length - 1];
@@ -1231,7 +1295,24 @@ export const ViewerApp: React.FC = () => {
 
   const handleZoomOut = useCallback(() => {
     if (zoom === "fitWidth" || zoom === "fitPage") {
-      changeZoom("100", { snapToTop: true });
+      // Compute current fit percent and choose the nearest lower numeric zoom
+      const container = containerRef.current;
+      if (!container || !pages[0]) {
+        changeZoom("100", { snapToTop: true });
+        return;
+      }
+
+      try {
+        const cw = container.clientWidth;
+        const ch = container.clientHeight - 40;
+        const s = calculateScale(pages[0], cw, ch, zoom as 'fitWidth' | 'fitPage');
+        const percent = Math.round((s / DPI_ADJUSTMENT) * 100);
+        const reversed = [...ZOOM_LEVELS].reverse();
+        const prevZoom = reversed.find((z) => z < percent) || ZOOM_LEVELS[0];
+        changeZoom(prevZoom.toString(), { snapToTop: true });
+      } catch (e) {
+        changeZoom("100", { snapToTop: true });
+      }
     } else {
       const currentZoom = parseInt(zoom, 10);
       const prevZoom = [...ZOOM_LEVELS].reverse().find((z) => z < currentZoom) || 50;
@@ -1280,15 +1361,15 @@ Key Points:
 
       await putNote(newNote);
       setNotes((prev) => [...prev, newNote]);
-      
+
       console.log('[App] Saved term summary as note on page', notePage, ':', termSummary.term, 'with rects:', noteRects);
-      
+
       // Close the popup after saving
       setSelectedTerm(null);
       setTermPopupPosition(null);
       setTermSourceRects([]);
       setTermSourcePage(1);
-      
+
       // Optional: show a brief success message
       // You could add a toast notification here if you have that component
     } catch (err) {
@@ -1538,6 +1619,192 @@ Key Points:
     return () => { handlePrintRef.current = null; };
   }, [handlePrint]);
 
+  // Drawing handlers
+  const handleToggleDrawing = useCallback(() => {
+    setIsDrawingMode(prev => !prev);
+  }, []);
+
+  const handleColorSelect = useCallback((color: string) => {
+    setDrawingColor(color);
+  }, []);
+
+  const handleToggleEraser = useCallback(() => {
+    setIsEraserMode(prev => !prev);
+  }, []);
+
+  const handleDrawingStrokesChange = useCallback((pageNum: number, strokes: DrawingStroke[]) => {
+    setPageDrawings(prev => {
+      const updated = new Map(prev);
+      updated.set(pageNum, strokes);
+      return updated;
+    });
+
+    // Save to history for undo/redo
+    setDrawingHistory(prev => {
+      const updated = new Map(prev);
+      const pageHistory = updated.get(pageNum) || [];
+      const currentIndex = drawingHistoryIndex.get(pageNum) ?? -1;
+
+      // Trim any future history if we're not at the end
+      const trimmedHistory = pageHistory.slice(0, currentIndex + 1);
+      trimmedHistory.push(strokes);
+
+      updated.set(pageNum, trimmedHistory);
+      return updated;
+    });
+
+    setDrawingHistoryIndex(prev => {
+      const updated = new Map(prev);
+      const currentIndex = prev.get(pageNum) ?? -1;
+      updated.set(pageNum, currentIndex + 1);
+      return updated;
+    });
+
+    // Save to IndexedDB (non-blocking, error handling)
+    (async () => {
+      try {
+        const id = `${docHash}:${pageNum}`;
+        const now = Date.now();
+        const drawingRecord: DrawingRecord = {
+          id,
+          docHash,
+          pageNum,
+          strokes,
+          createdAt: now,
+          updatedAt: now,
+        };
+        await putDrawing(drawingRecord);
+        console.log(`[Drawing] Saved page ${pageNum} with ${strokes.length} strokes`);
+      } catch (err) {
+        console.error(`[Drawing] Failed to save page ${pageNum}:`, err);
+        // Non-fatal: drawing is still in memory
+      }
+    })();
+  }, [drawingHistoryIndex, docHash]);
+
+  const handleDrawingUndo = useCallback((pageNum: number) => {
+    const currentIndex = drawingHistoryIndex.get(pageNum) ?? -1;
+    if (currentIndex <= 0) return;
+
+    const newIndex = currentIndex - 1;
+    setDrawingHistoryIndex(prev => {
+      const updated = new Map(prev);
+      updated.set(pageNum, newIndex);
+      return updated;
+    });
+
+    const history = drawingHistory.get(pageNum) || [];
+    const previousStrokes = history[newIndex] || [];
+    setPageDrawings(prev => {
+      const updated = new Map(prev);
+      updated.set(pageNum, previousStrokes);
+      return updated;
+    });
+  }, [drawingHistory, drawingHistoryIndex]);
+
+  const handleDrawingRedo = useCallback((pageNum: number) => {
+    const history = drawingHistory.get(pageNum) || [];
+    const currentIndex = drawingHistoryIndex.get(pageNum) ?? -1;
+    if (currentIndex >= history.length - 1) return;
+
+    const newIndex = currentIndex + 1;
+    setDrawingHistoryIndex(prev => {
+      const updated = new Map(prev);
+      updated.set(pageNum, newIndex);
+      return updated;
+    });
+
+    const nextStrokes = history[newIndex] || [];
+    setPageDrawings(prev => {
+      const updated = new Map(prev);
+      updated.set(pageNum, nextStrokes);
+      return updated;
+    });
+  }, [drawingHistory, drawingHistoryIndex]);
+
+  const handleDrawingClear = useCallback((pageNum: number) => {
+    handleDrawingStrokesChange(pageNum, []);
+  }, [handleDrawingStrokesChange]);
+
+  // Keyboard navigation and shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const isMod = e.ctrlKey || e.metaKey;
+
+      // Intercept Ctrl/Cmd+P to use in-app printing flow
+      if (isMod && (e.key === 'p' || e.key === 'P')) {
+        e.preventDefault();
+        // call print handler via ref (may be set after effect declared)
+        (async () => {
+          try {
+            const fn = handlePrintRef.current;
+            if (fn) await fn();
+            else console.warn('Print handler not ready');
+          } catch (err) {
+            console.error('Error running in-app print', err);
+          }
+        })();
+        return;
+      }
+
+      // Drawing mode shortcuts
+      if (isDrawingMode) {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          setIsDrawingMode(false);
+          return;
+        }
+
+        // Toggle eraser with 'E' key
+        if (e.key === "e" || e.key === "E") {
+          e.preventDefault();
+          setIsEraserMode(prev => !prev);
+          return;
+        }
+
+        // Undo: Ctrl+Z (or Cmd+Z on Mac)
+        if (isMod && e.key === "z" && !e.shiftKey) {
+          e.preventDefault();
+          handleDrawingUndo(currentPage);
+          return;
+        }
+
+        // Redo: Ctrl+Y or Ctrl+Shift+Z (or Cmd+Y / Cmd+Shift+Z on Mac)
+        if (isMod && (e.key === "y" || (e.key === "z" && e.shiftKey))) {
+          e.preventDefault();
+          handleDrawingRedo(currentPage);
+          return;
+        }
+      }
+
+      if (e.key === "ArrowLeft" || e.key === "PageUp") {
+        e.preventDefault();
+        handlePrevPage();
+      } else if (e.key === "ArrowRight" || e.key === "PageDown") {
+        e.preventDefault();
+        handleNextPage();
+      } else if (isMod && e.key === "+") {
+        e.preventDefault();
+        handleZoomIn();
+      } else if (isMod && e.key === "-") {
+        e.preventDefault();
+        handleZoomOut();
+      } else if (isMod && e.key === "0") {
+        e.preventDefault();
+        setZoom("fitWidth");
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      // Cancel any pending zoom animation
+      if (pendingZoomRef.current !== null) {
+        cancelAnimationFrame(pendingZoomRef.current);
+      }
+    };
+  }, [handlePrevPage, handleNextPage, handleZoomIn, handleZoomOut, isDrawingMode, handleDrawingUndo, handleDrawingRedo, currentPage]);
+
   // Ctrl+scroll zoom handler - attached to container only
   useEffect(() => {
     const container = containerRef.current;
@@ -1687,6 +1954,23 @@ Key Points:
   if (!pdf || pages.length === 0) {
     return null;
   }
+  // compute fit percentages to display numeric labels when in fit mode
+  const containerForFit = containerRef.current;
+  let fitWidthPercent = 100;
+  let fitPagePercent = 100;
+  if (containerForFit && pages[0]) {
+    try {
+      const cw = containerForFit.clientWidth;
+      const ch = containerForFit.clientHeight - 40;
+      const sWidth = calculateScale(pages[0], cw, ch, 'fitWidth');
+      const sPage = calculateScale(pages[0], cw, ch, 'fitPage');
+      // convert internal scale to user-facing percentage (account for DPI adjustment)
+      fitWidthPercent = Math.round((sWidth / DPI_ADJUSTMENT) * 100);
+      fitPagePercent = Math.round((sPage / DPI_ADJUSTMENT) * 100);
+    } catch (e) {
+      // ignore
+    }
+  }
 
   return (
     <div className="h-screen flex flex-col bg-neutral-50 dark:bg-neutral-900">
@@ -1695,6 +1979,8 @@ Key Points:
         currentPage={currentPage}
         totalPages={pages.length}
         zoom={zoom}
+        fitWidthPercent={fitWidthPercent}
+        fitPagePercent={fitPagePercent}
         onToggleTOC={handleToggleTOC}
         onPrevPage={handlePrevPage}
         onNextPage={handleNextPage}
@@ -1705,6 +1991,22 @@ Key Points:
         onPageChange={(page) => scrollToPage(page)}
         onDownload={handleDownload}
         onPrint={handlePrint}
+        isDrawingMode={isDrawingMode}
+        onToggleDrawing={handleToggleDrawing}
+      />
+      {/* Drawing toolbar (fixed overlay) - rendered always so it doesn't shift layout */}
+      <DrawingToolbar
+        isExpanded={isDrawingMode}
+        selectedColor={drawingColor}
+        onColorSelect={handleColorSelect}
+        onUndo={() => handleDrawingUndo(currentPage)}
+        onRedo={() => handleDrawingRedo(currentPage)}
+        onClear={() => handleDrawingClear(currentPage)}
+        canUndo={(drawingHistoryIndex.get(currentPage) ?? -1) > 0}
+        canRedo={(drawingHistoryIndex.get(currentPage) ?? -1) < ((drawingHistory.get(currentPage) || []).length - 1)}
+        isEraserMode={isEraserMode}
+        onToggleEraser={handleToggleEraser}
+        toolbarTop={toolbarHeight}
       />
 
       {/* Left-edge hover target: 12px wide invisible strip to auto-open TOC when cursor hits the edge */}
@@ -1775,6 +2077,12 @@ Key Points:
                 onNoteEdit={handleNoteEdit}
                 onCommentDelete={handleCommentDelete}
                 onCommentEdit={handleCommentEdit}
+                isDrawingMode={isDrawingMode}
+                drawingColor={drawingColor}
+                drawingStrokeWidth={drawingStrokeWidth}
+                drawingStrokes={pageDrawings.get(pageNum) || []}
+                onDrawingStrokesChange={(strokes) => handleDrawingStrokesChange(pageNum, strokes)}
+                isEraserMode={isEraserMode}
                 termSummaries={activeTermSummaries}
                 onTermClick={(term, x, y, rects) => {
                   console.log('[App] onTermClick called:', term.term, { x, y, rects, pageNum });
@@ -1907,8 +2215,8 @@ Key Points:
         onSelect={(a) => handleContextAction(a)}
       />
 
-      <Chatbot docHash={docHash} /> 
-      
+      <Chatbot docHash={docHash} />
+
       {/* Term summary popup */}
       {selectedTerm && termPopupPosition && (
         <div

@@ -34,6 +34,8 @@ export async function getPageViewport(
   return page.getViewport({ scale, rotation });
 }
 
+export const DPI_ADJUSTMENT = 2.1;
+
 export function calculateScale(
   page: PDFPageProxy,
   containerWidth: number,

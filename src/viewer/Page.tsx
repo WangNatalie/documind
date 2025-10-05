@@ -1,5 +1,7 @@
 import React, { useEffect, useRef, useState, useCallback } from "react";
 import type { PDFPageProxy } from "pdfjs-dist";
+import { DrawingCanvas } from "./DrawingCanvas";
+import type { DrawingStroke } from "../db";
 
 interface TermSummary {
   term: string;
@@ -39,6 +41,13 @@ interface PageProps {
   onNoteEdit?: (id: string, newText: string) => void;
   onCommentDelete?: (id: string) => void;
   onCommentEdit?: (id: string, newText: string) => void;
+  // Drawing props
+  isDrawingMode?: boolean;
+  drawingColor?: string;
+  drawingStrokeWidth?: number;
+  drawingStrokes?: DrawingStroke[];
+  onDrawingStrokesChange?: (strokes: DrawingStroke[]) => void;
+  isEraserMode?: boolean;
   termSummaries?: TermSummary[];
   onTermClick?: (term: TermSummary, x: number, y: number, rects: Array<{ top: number; left: number; width: number; height: number }>) => void;
 }
@@ -58,6 +67,12 @@ export const Page: React.FC<PageProps> = ({
   onNoteEdit,
   onCommentDelete,
   onCommentEdit,
+  isDrawingMode = false,
+  drawingColor = '#000000',
+  drawingStrokeWidth = 2,
+  drawingStrokes = [],
+  onDrawingStrokesChange,
+  isEraserMode = false,
   termSummaries = [],
   onTermClick,
 }) => {
@@ -350,7 +365,7 @@ export const Page: React.FC<PageProps> = ({
 
       // Get DOM dimensions of text layer
       const textLayerRect = textLayer.getBoundingClientRect();
-      
+
       // Get the CSS transform scale applied to the text layer
       const textLayerStyle = window.getComputedStyle(textLayer);
       const transformMatch = textLayerStyle.transform.match(/matrix\(([^,]+),[^,]+,[^,]+,([^,]+),/);
@@ -362,7 +377,7 @@ export const Page: React.FC<PageProps> = ({
         const term = termSummary.term;
         const lowerText = textContent.toLowerCase();
         const lowerTerm = term.toLowerCase();
-        
+
         const index = lowerText.indexOf(lowerTerm);
         if (index === -1) continue; // Term not found on this page
 
@@ -403,7 +418,7 @@ export const Page: React.FC<PageProps> = ({
           const rects = range.getClientRects();
           if (rects.length > 0) {
             const rect = rects[0];
-            
+
             // Convert to text-layer-relative coordinates and correct for CSS scaling
             highlights.push({
               term: termSummary,
@@ -414,7 +429,7 @@ export const Page: React.FC<PageProps> = ({
                 height: rect.height / scaleY,
               },
             });
-            
+
             console.log(`[Page ${pageNum}] Highlight for "${term}":`, {
               domRect: rect,
               textLayerRect: textLayerRect,
@@ -489,6 +504,19 @@ export const Page: React.FC<PageProps> = ({
           ref={canvasRef}
           className={`block ${isLoading || error ? "invisible" : "visible"}`}
         />
+        {/* Drawing layer - appears above PDF canvas, always visible but only interactive when drawing mode is active */}
+        {onDrawingStrokesChange && (
+          <DrawingCanvas
+            width={width}
+            height={height}
+            enabled={isDrawingMode}
+            color={drawingColor}
+            strokeWidth={drawingStrokeWidth}
+            existingStrokes={drawingStrokes}
+            onStrokesChange={onDrawingStrokesChange}
+            isEraserMode={isEraserMode}
+          />
+        )}
         {/* Text layer for text selection (hidden visually but present for selection) */}
         <div
           ref={textLayerRef}
@@ -770,33 +798,33 @@ export const Page: React.FC<PageProps> = ({
             onClick={(e) => {
               e.preventDefault();
               e.stopPropagation();
-              
+
               if (onTermClick) {
                 // Position popup near the highlight
                 const rect = e.currentTarget.getBoundingClientRect();
                 console.log('[TermHighlight] Clicked term:', highlight.term.term, 'at position:', rect);
-                
+
                 // Calculate position to keep popup on screen
                 const popupWidth = 400; // approximate max-w-md
                 const popupHeight = 300; // approximate height
-                
+
                 let x = rect.left;
                 let y = rect.bottom + 5;
-                
+
                 // Adjust if popup would go off right edge
                 if (x + popupWidth > window.innerWidth) {
                   x = window.innerWidth - popupWidth - 20;
                 }
-                
+
                 // Adjust if popup would go off bottom edge
                 if (y + popupHeight > window.innerHeight) {
                   y = rect.top - popupHeight - 5;
                 }
-                
+
                 // Ensure minimum margins
                 x = Math.max(10, x);
                 y = Math.max(10, y);
-                
+
                 // Normalize the highlight rect to page dimensions
                 const pageBox = document.querySelector(`[data-page-num="${pageNum}"]`)?.getBoundingClientRect();
                 const normalizedRects = pageBox ? [{
@@ -805,7 +833,7 @@ export const Page: React.FC<PageProps> = ({
                   width: rect.width / pageBox.width,
                   height: rect.height / pageBox.height,
                 }] : [];
-                
+
                 console.log('[TermHighlight] Popup position:', { x, y }, 'normalized rects:', normalizedRects);
                 onTermClick(highlight.term, x, y, normalizedRects);
               }
