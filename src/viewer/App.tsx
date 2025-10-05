@@ -2585,7 +2585,7 @@ Key Points:
               }
             }}
             placeholder="Type comment and press Ctrl+Enter"
-            className="px-2 py-1 rounded border bg-white dark:bg-neutral-800 text-neutral-900 dark:text-neutral-100 resize-y"
+            className="text-xs px-2 py-1 rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-900 dark:text-neutral-100 resize-y focus:outline-none focus:ring-0"
             rows={3}
           />
         </div>
@@ -2671,7 +2671,7 @@ Key Points:
           <div className="mt-3 pt-3 border-t border-neutral-200 dark:border-neutral-700 flex gap-2">
             <button
               onClick={() => handleSaveTermAsNote(selectedTerm)}
-              className="font-semibold px-3 py-1.5 text-sm bg-primary-500 hover:bg-primary-600 text-white rounded"
+              className="font-semibold px-3 py-1.5 text-sm bg-primary-600 hover:bg-primary-600 text-white rounded"
               title="Save this explanation as a note"
             >
               Save as Note
@@ -2689,7 +2689,7 @@ Key Points:
                     scrollToPage(selectedTerm.tocItem.page);
                   }
                 }}
-                className="text-semibold px-3 py-1.5 text-sm bg-primary-500 hover:bg-primary-600 text-white rounded"
+                className="font-semibold px-3 py-1.5 text-sm bg-primary-600 hover:bg-primary-600 text-white rounded"
               >
                 {termReturnPage !== null ? '← Return' : 'Go to Context'}
               </button>
