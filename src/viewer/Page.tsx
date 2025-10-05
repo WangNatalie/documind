@@ -77,6 +77,10 @@ export const Page: React.FC<PageProps> = ({
     term: TermSummary;
     rect: { top: number; left: number; width: number; height: number };
   }>>([]);
+  const [visibleHighlights, setVisibleHighlights] = useState<Array<{
+    term: TermSummary;
+    rect: { top: number; left: number; width: number; height: number };
+  }>>([]);
 
   // Rendering page component
 
@@ -327,9 +331,16 @@ export const Page: React.FC<PageProps> = ({
   }, []);
 
   // Find and highlight first occurrence of each term in the text layer
+  // Process highlights whenever we have summaries, even if not currently in render buffer
+  // This ensures cached summaries for adjacent pages create highlights in advance
   useEffect(() => {
-    if (!textLayerRef.current || !shouldRender || isLoading || termSummaries.length === 0 || !page) {
+    if (!textLayerRef.current || isLoading || termSummaries.length === 0 || !page) {
       setTermHighlights([]);
+      return;
+    }
+    
+    // If page isn't rendered yet, we can't process highlights
+    if (!shouldRender) {
       return;
     }
 
@@ -436,6 +447,62 @@ export const Page: React.FC<PageProps> = ({
 
     checkTextLayer();
   }, [textLayerRef.current, shouldRender, isLoading, termSummaries, pageNum, page, scale]);
+
+  // Check individual highlight visibility every 1 second
+  useEffect(() => {
+    if (!textLayerRef.current || termHighlights.length === 0) {
+      setVisibleHighlights([]);
+      return;
+    }
+
+    const checkHighlightVisibility = () => {
+      const textLayer = textLayerRef.current;
+      if (!textLayer) {
+        setVisibleHighlights([]);
+        return;
+      }
+
+      const textLayerRect = textLayer.getBoundingClientRect();
+      
+      // Get viewport bounds
+      const viewportTop = 0;
+      const viewportBottom = window.innerHeight;
+      const viewportLeft = 0;
+      const viewportRight = window.innerWidth;
+
+      const visible = termHighlights.filter(highlight => {
+        // Calculate absolute position of highlight
+        const highlightTop = textLayerRect.top + highlight.rect.top;
+        const highlightBottom = highlightTop + highlight.rect.height;
+        const highlightLeft = textLayerRect.left + highlight.rect.left;
+        const highlightRight = highlightLeft + highlight.rect.width;
+
+        // Check if highlight is in viewport
+        const inViewport = 
+          highlightBottom > viewportTop &&
+          highlightTop < viewportBottom &&
+          highlightRight > viewportLeft &&
+          highlightLeft < viewportRight;
+
+        return inViewport;
+      });
+
+      // Only update if changed to avoid unnecessary re-renders
+      setVisibleHighlights(prev => {
+        if (prev.length !== visible.length) return visible;
+        const changed = prev.some((p, i) => p.term.term !== visible[i]?.term.term);
+        return changed ? visible : prev;
+      });
+    };
+
+    // Check immediately
+    checkHighlightVisibility();
+
+    // Check every 0.5 seconds
+    const intervalId = setInterval(checkHighlightVisibility, 1000);
+
+    return () => clearInterval(intervalId);
+  }, [termHighlights]);
 
   // Get approximate dimensions for skeleton
   const viewport = page?.getViewport({ scale: scale || 1 });
@@ -746,8 +813,8 @@ export const Page: React.FC<PageProps> = ({
           );
         })}
 
-        {/* Term highlights - clickable highlights for first occurrence of each term */}
-        {termHighlights.map((highlight, index) => (
+        {/* Term highlights - clickable highlights for first occurrence of each term (only visible ones) */}
+        {visibleHighlights.map((highlight, index) => (
           <div
             key={`term-${index}`}
             data-term-highlight

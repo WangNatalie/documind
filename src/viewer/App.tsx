@@ -103,17 +103,20 @@ export const ViewerApp: React.FC = () => {
     matchedChunkId?: string;
   }
   
-  // Cache term summaries for current ±1 pages with timestamps
+  // Cache term summaries for current, prev, and next pages
   interface PageTermCache {
     page: number;
     summaries: TermSummary[];
-    lastVisibleTime: number;
   }
   const [termCache, setTermCache] = useState<Map<number, PageTermCache>>(new Map());
   const [selectedTerm, setSelectedTerm] = useState<TermSummary | null>(null);
   const [termPopupPosition, setTermPopupPosition] = useState<{ x: number; y: number } | null>(null);
   const [termSourceRects, setTermSourceRects] = useState<Array<{ top: number; left: number; width: number; height: number }>>([]);
   const [termSourcePage, setTermSourcePage] = useState<number>(1);
+  
+  // Track last visible page for recaching logic
+  const lastVisiblePageRef = useRef<number>(1);
+  const recacheTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   // Parse URL params
   const params = new URLSearchParams(window.location.search);
@@ -131,13 +134,12 @@ export const ViewerApp: React.FC = () => {
         console.log('[VIEWER] Received term summaries:', summaries);
         console.log('[VIEWER] Caching term summaries, count:', summaries?.length || 0, 'for page:', summariesPage);
         
-        // Add to cache with current timestamp
+        // Add to cache
         setTermCache(prev => {
           const newCache = new Map(prev);
           newCache.set(summariesPage, {
             page: summariesPage,
             summaries: summaries || [],
-            lastVisibleTime: Date.now(),
           });
           return newCache;
         });
@@ -200,70 +202,175 @@ export const ViewerApp: React.FC = () => {
     };
   }, [docHash, fileName, currentPage, pages.length, zoom]);
 
-  // Get active term summaries from cache for currently visible pages
-  const activeTermSummaries = React.useMemo(() => {
-    const allSummaries: TermSummary[] = [];
-    for (const pageNum of visiblePages) {
-      const cached = termCache.get(pageNum);
-      if (cached) {
-        allSummaries.push(...cached.summaries);
+  // Helper to get summaries for a specific page from cache
+  const getSummariesForPage = useCallback((pageNum: number): TermSummary[] => {
+    const cached = termCache.get(pageNum);
+    return cached?.summaries || [];
+  }, [termCache]);
+
+  // Cache management: maintain current ±10 pages in cache (21 pages total)
+  // When current page changes, wait 15 seconds before recaching if it becomes completely invisible
+  useEffect(() => {
+    if (visiblePages.size === 0) return;
+    
+    // Find the "current" page (the first visible page in order)
+    const sortedVisible = Array.from(visiblePages).sort((a, b) => a - b);
+    const newCurrentPage = sortedVisible[0];
+    
+    // Check if the previous "current" page is now completely invisible
+    const previousPage = lastVisiblePageRef.current;
+    const previousPageNowInvisible = !visiblePages.has(previousPage);
+    
+    if (previousPageNowInvisible && previousPage !== newCurrentPage) {
+      console.log(`[VIEWER] Previous page ${previousPage} is now invisible, scheduling recache in 15s`);
+      
+      // Clear any existing timeout
+      if (recacheTimeoutRef.current) {
+        clearTimeout(recacheTimeoutRef.current);
+      }
+      
+      // Wait 15 seconds before recaching
+      recacheTimeoutRef.current = setTimeout(() => {
+        console.log(`[VIEWER] Recaching for new current page: ${newCurrentPage}`);
+        requestCacheForPage(newCurrentPage);
+        recacheTimeoutRef.current = null;
+      }, 15000);
+    } else if (newCurrentPage !== previousPage) {
+      // Current page changed to a different visible page
+      console.log(`[VIEWER] Current page changed from ${previousPage} to ${newCurrentPage}`);
+      
+      // Clear any pending recache timeout
+      if (recacheTimeoutRef.current) {
+        clearTimeout(recacheTimeoutRef.current);
+        recacheTimeoutRef.current = null;
+      }
+      
+      // Request cache for new current page (function will check what's already cached)
+      requestCacheForPage(newCurrentPage);
+    }
+    
+    // Update the last visible page ref
+    lastVisiblePageRef.current = newCurrentPage;
+    
+    return () => {
+      if (recacheTimeoutRef.current) {
+        clearTimeout(recacheTimeoutRef.current);
+      }
+    };
+  }, [visiblePages, docHash, pages.length]);
+  
+  // Helper function to request cache for current ±10 pages
+  const requestCacheForPage = useCallback((pageNum: number) => {
+    const totalPages = pages.length;
+    const CACHE_RANGE = 10; // Cache ±10 pages around current
+    
+    const pagesToCache: number[] = [];
+    for (let offset = -CACHE_RANGE; offset <= CACHE_RANGE; offset++) {
+      const p = pageNum + offset;
+      if (p >= 1 && p <= totalPages) {
+        pagesToCache.push(p);
       }
     }
-    return allSummaries;
-  }, [termCache, visiblePages]);
-
-  // Clean up cache: remove entries for pages that haven't been visible for 10 seconds
-  useEffect(() => {
-    const cleanupInterval = setInterval(() => {
-      const now = Date.now();
-      const TEN_SECONDS = 10000;
-      
-      setTermCache(prev => {
-        const newCache = new Map(prev);
-        let cleaned = false;
+    
+    console.log(`[VIEWER] Requesting cache for pages:`, pagesToCache);
+    
+    // Check which pages are not in cache and request them
+    const missingPages = pagesToCache.filter(p => !termCache.has(p));
+    
+    if (missingPages.length > 0) {
+      console.log(`[VIEWER] Cache misses for pages:`, missingPages, '- requesting from background');
+      missingPages.forEach(p => {
+        // Extract text from the specific page
+        const pageEl = document.querySelector(`[data-page-num="${p}"]`);
+        let pageText = '';
         
-        for (const [pageNum, cache] of newCache.entries()) {
-          // If page is not currently visible and hasn't been for 10 seconds, remove it
-          if (!visiblePages.has(pageNum) && (now - cache.lastVisibleTime) > TEN_SECONDS) {
-            console.log(`[VIEWER] Cleaning up cache for page ${pageNum} (not visible for >10s)`);
-            newCache.delete(pageNum);
-            cleaned = true;
+        if (pageEl) {
+          const textLayer = pageEl.querySelector('.text-layer') || pageEl.querySelector('.textLayer');
+          if (textLayer) {
+            pageText = textLayer.textContent || '';
           }
         }
         
-        return cleaned ? newCache : prev;
+        console.log(`[VIEWER] Sending request for page ${p} with text length:`, pageText.length);
+        
+        chrome.runtime.sendMessage({
+          type: 'REQUEST_PAGE_TERMS',
+          payload: { 
+            page: p, 
+            docHash,
+            pageText: pageText.trim()
+          }
+        }).catch(err => console.error('Failed to request page terms:', err));
       });
-    }, 2000); // Check every 2 seconds
+    } else {
+      console.log(`[VIEWER] All required pages already in cache`);
+    }
     
-    return () => clearInterval(cleanupInterval);
-  }, [visiblePages]);
-
-  // Update lastVisibleTime for pages that are currently visible
-  // Also request terms for visible pages that don't have cache entries
-  useEffect(() => {
-    const now = Date.now();
+    // Clean up cache: remove pages that are not in the ±10 range
     setTermCache(prev => {
       const newCache = new Map(prev);
-      let updated = false;
+      let cleaned = false;
       
-      for (const pageNum of visiblePages) {
-        const cached = newCache.get(pageNum);
-        if (cached) {
-          cached.lastVisibleTime = now;
-          updated = true;
-        } else {
-          // Cache miss - request terms for this page
-          console.log(`[VIEWER] Cache miss for page ${pageNum}, requesting terms from background`);
-          chrome.runtime.sendMessage({
-            type: 'REQUEST_PAGE_TERMS',
-            payload: { page: pageNum, docHash }
-          }).catch(err => console.error('Failed to request page terms:', err));
+      for (const [cachedPage] of newCache) {
+        if (!pagesToCache.includes(cachedPage)) {
+          console.log(`[VIEWER] Removing page ${cachedPage} from cache (outside ±${CACHE_RANGE} range)`);
+          newCache.delete(cachedPage);
+          cleaned = true;
         }
       }
       
-      return updated ? new Map(newCache) : prev;
+      return cleaned ? new Map(newCache) : prev;
     });
-  }, [visiblePages, docHash]);
+  }, [pages.length, termCache, docHash]);
+
+  // Separate visibility check for highlights - refresh every 0.5 seconds
+  // This ensures highlights appear/disappear based on actual page visibility
+  useEffect(() => {
+    const checkHighlightVisibility = () => {
+      const container = containerRef.current;
+      if (!container) return;
+      
+      const containerRect = container.getBoundingClientRect();
+      const containerTop = containerRect.top;
+      const containerBottom = containerRect.bottom;
+      
+      // Update visible pages based on actual intersection
+      const newVisiblePages = new Set<number>();
+      const pageElements = container.querySelectorAll('[data-page-num]');
+      
+      pageElements.forEach((el) => {
+        const pageNum = parseInt(el.getAttribute('data-page-num') || '0', 10);
+        if (pageNum === 0) return;
+        
+        const rect = el.getBoundingClientRect();
+        // Check if page is visible in viewport at all (any part of it)
+        const isVisible = rect.bottom > containerTop && rect.top < containerBottom;
+        if (isVisible) {
+          newVisiblePages.add(pageNum);
+        }
+      });
+      
+      // Always compare with current ref value to avoid stale closures
+      const oldVisible = Array.from(visiblePagesRef.current).sort();
+      const newVisible = Array.from(newVisiblePages).sort();
+      const changed = oldVisible.length !== newVisible.length ||
+        oldVisible.some((p, i) => p !== newVisible[i]);
+      
+      if (changed) {
+        console.log(`[Highlight Visibility] Pages changed:`, oldVisible, '->', newVisible);
+        visiblePagesRef.current = newVisiblePages;
+        setVisiblePages(newVisiblePages);
+      }
+    };
+    
+    // Check every 0.5 seconds
+    const intervalId = setInterval(checkHighlightVisibility, 500);
+    
+    // Also check immediately
+    checkHighlightVisibility();
+    
+    return () => clearInterval(intervalId);
+  }, []); // No dependencies - runs independently
 
   // Helper function to calculate popup position - always snaps to right edge
   const calculatePopupPosition = useCallback((_x: number, _y: number): { x: number; y: number } => {
@@ -1744,9 +1851,13 @@ Key Points:
             return pages.map((page, idx) => {
               const pageNum = idx + 1;
               const isVisible = visiblePages.has(pageNum);
+              const hasCachedSummaries = termCache.has(pageNum);
+              
               // Render visible pages + 4 pages buffer above/below
+              // Also render any page with cached summaries so highlights are ready
               const shouldRender =
                 isVisible ||
+                hasCachedSummaries ||
                 visiblePagesArray.some(
                   (vp) => Math.abs(vp - pageNum) <= 4
                 );
@@ -1775,7 +1886,7 @@ Key Points:
                 onNoteEdit={handleNoteEdit}
                 onCommentDelete={handleCommentDelete}
                 onCommentEdit={handleCommentEdit}
-                termSummaries={activeTermSummaries}
+                termSummaries={getSummariesForPage(pageNum)}
                 onTermClick={(term, x, y, rects) => {
                   console.log('[App] onTermClick called:', term.term, { x, y, rects, pageNum });
                   setSelectedTerm(term);

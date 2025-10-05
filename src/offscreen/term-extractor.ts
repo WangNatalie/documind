@@ -5,7 +5,7 @@ import { getTableOfContents, TableOfContentsRecord, getChunksByDoc, TOCItem, get
 import { generateEmbedding } from './embedder';
 
 // Configuration
-const GEMINI_MODEL = 'gemini-2.5-flash-lite';
+const GEMINI_MODEL = 'gemini-2.0-flash-lite';
 
 // Initialize Google GenAI client
 const ai = new GoogleGenAI({ apiKey: getGeminiApiKey() });
@@ -141,7 +141,7 @@ Prioritize terms that may need clarification as someone reads through this passa
       contents: prompt,
       config: {
         temperature: 0.3,
-        maxOutputTokens: 1000,
+        maxOutputTokens: 10000,
       }
     });
     
@@ -209,7 +209,7 @@ Or return "None" if no relevant section exists.`;
       contents: prompt,
       config: {
         temperature: 0.2,
-        maxOutputTokens: 2000,
+        maxOutputTokens: 10000,
       }
     });
 
@@ -302,7 +302,7 @@ Return ONLY the JSON array, no additional text.`;
       contents: prompt,
       config: {
         temperature: 0.2,
-        maxOutputTokens: 2000,
+        maxOutputTokens: 10000,
       }
     });
 
@@ -569,7 +569,7 @@ export async function summarizeTerms(
     const termsJson = JSON.stringify(
       termsWithContext.map(t => ({
         term: t.term,
-        context: t.context.substring(0, 1000), // Limit context per term to avoid token limits
+        context: t.context.substring(0, 10000), // Limit context per term to avoid token limits
         section: t.tocItem ? `${t.tocItem.title} (Page ${t.tocItem.page})` : 'No specific section'
       })),
       null,

@@ -144,7 +144,7 @@ Please provide a clear and concise answer based on the context above. If you ref
       contents: prompt,
       config: {
         temperature: 0.7,
-        maxOutputTokens: 2048,
+        maxOutputTokens: 10000,
       }
     });
 
