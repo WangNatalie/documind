@@ -92,7 +92,7 @@ export const TOC: React.FC<TOCProps> = ({ items, onSelect }) => {
       `}</style>
 
       <div className="text-sm font-semibold mb-2 text-neutral-700 dark:text-neutral-200">
-        Table of contents
+        {items.length ? "Table of contents" : "Loading table of contents..."}
       </div>
       <div className="space-y-1">
         {items.map((n) => (
