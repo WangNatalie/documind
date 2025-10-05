@@ -7,8 +7,8 @@ import {
   putTableOfContents,
   getTableOfContents,
 } from '../db/index';
-import { readOPFSFile } from '../db/opfs';
-import { pdfjsLib } from '../viewer/pdf';
+// import { readOPFSFile } from '../db/opfs';
+// import { pdfjsLib } from '../viewer/pdf';
 import { GoogleGenAI } from '@google/genai';
 import { getGeminiApiKey } from './gemini-config';
 
@@ -28,6 +28,7 @@ if (geminiKey) {
 /**
  * Extract PDF outline from PDF.js if it exists
  */
+/*
 async function extractPDFOutline(
   fileUrl?: string,
   uploadId?: string
@@ -171,7 +172,7 @@ async function extractPDFOutline(
     console.error('[TOC] Error extracting PDF outline:', error);
     return null;
   }
-}
+}*/
 
 /**
  * Extract segment headers from chunks
@@ -413,8 +414,8 @@ function linkTOCToChunks(tocItems: TOCItem[], chunks: ChunkRecord[]): TOCItem[] 
  */
 export async function generateTableOfContents(
   docHash: string,
-  fileUrl?: string,
-  uploadId?: string
+  _fileUrl?: string,
+  _uploadId?: string
 ): Promise<void> {
   console.log('[TOC] Generating table of contents for document', docHash);
 
@@ -434,17 +435,17 @@ export async function generateTableOfContents(
     }
 
     // Try to extract PDF outline first
-    let tocItems = await extractPDFOutline(fileUrl, uploadId);
+    let tocItems = null; // await extractPDFOutline(fileUrl, uploadId);
     let source: 'pdf-outline' | 'ai-generated' = 'pdf-outline';
     let model: string | undefined;
 
     // If no outline, generate using AI
-    if (!tocItems || tocItems.length === 0) {
-      console.log('[TOC] No PDF outline, generating with AI...');
-      tocItems = await generateAITableOfContents(chunks);
-      source = 'ai-generated';
-      model = GEMINI_MODEL;
-    }
+    // if (!tocItems || tocItems.length === 0) {
+    console.log('[TOC] No PDF outline, generating with AI...');
+    tocItems = await generateAITableOfContents(chunks);
+    source = 'ai-generated';
+    model = GEMINI_MODEL;
+    // }
 
     // Link TOC items to chunks with bounding boxes
     tocItems = linkTOCToChunks(tocItems, chunks);

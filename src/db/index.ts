@@ -410,6 +410,11 @@ export async function getTableOfContents(docHash: string): Promise<TableOfConten
   return db.get('tableOfContents', docHash);
 }
 
+export async function getTableOfContentsByDoc(docHash: string): Promise<TableOfContentsRecord | undefined> {
+  const db = await getDB();
+  return db.get('tableOfContents', docHash);
+}
+
 export async function deleteTableOfContents(docHash: string): Promise<void> {
   const db = await getDB();
   await db.delete('tableOfContents', docHash);
@@ -424,22 +429,6 @@ export async function putChunkEmbedding(embedding: ChunkEmbeddingRecord): Promis
 export async function getChunkEmbedding(chunkId: string): Promise<ChunkEmbeddingRecord | undefined> {
   const db = await getDB();
   return db.get('chunkEmbeddings', chunkId);
-}
-
-/**
- * Check which chunks are missing embeddings
- * Returns array of chunk IDs that need embeddings
- */
-export async function getMissingEmbeddings(docHash: string): Promise<string[]> {
-  const chunks = await getChunksByDoc(docHash);
-  const embeddings = await getChunkEmbeddingsByDoc(docHash);
-
-  const embeddedChunkIds = new Set(embeddings.map(e => e.chunkId));
-  const missingChunkIds = chunks
-    .filter(chunk => !embeddedChunkIds.has(chunk.id))
-    .map(chunk => chunk.id);
-
-  return missingChunkIds;
 }
 
 export async function getChunkEmbeddingsByDoc(docHash: string): Promise<ChunkEmbeddingRecord[]> {
@@ -458,4 +447,20 @@ export async function deleteChunkEmbeddingsByDoc(docHash: string): Promise<void>
   const tx = db.transaction('chunkEmbeddings', 'readwrite');
   await Promise.all(embeddings.map(e => tx.store.delete(e.id)));
   await tx.done;
+}
+
+/**
+ * Check which chunks are missing embeddings
+ * Returns array of chunk IDs that need embeddings
+ */
+export async function getMissingEmbeddings(docHash: string): Promise<string[]> {
+  const chunks = await getChunksByDoc(docHash);
+  const embeddings = await getChunkEmbeddingsByDoc(docHash);
+  
+  const embeddedChunkIds = new Set(embeddings.map(e => e.chunkId));
+  const missingChunkIds = chunks
+    .filter(chunk => !embeddedChunkIds.has(chunk.id))
+    .map(chunk => chunk.id);
+  
+  return missingChunkIds;
 }

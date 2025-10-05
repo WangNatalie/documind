@@ -17,15 +17,18 @@ import {
   getCommentsByDoc,
   deleteNote,
   deleteComment,
-  getChunksByDoc,
   getTableOfContents,
+  getChunksByDoc,
+  type TableOfContentsRecord,
 } from "../db";
 import { readOPFSFile } from "../db/opfs";
 import ContextMenu from "./ContextMenu";
 import { requestGeminiChunking, requestEmbeddings, requestTOC } from "../utils/chunker-client";
 import { Chatbot } from './chatbot/Chatbot';
+import { buildTOCTree } from "../utils/toc";
+import { TOC } from "./TOC";
 
-const ZOOM_LEVELS = [25, 50, 75, 90, 100, 125, 150, 175, 200, 250, 300, 350, 400, 500];
+const ZOOM_LEVELS = [50, 75, 90, 100, 125, 150, 175, 200, 250, 300, 350, 400, 500];
 
 export const ViewerApp: React.FC = () => {
   const [pdf, setPdf] = useState<PDFDocumentProxy | null>(null);
@@ -39,12 +42,26 @@ export const ViewerApp: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [docHash, setDocHash] = useState<string>("");
   const [isInitialLoad, setIsInitialLoad] = useState(true);
+  const [tableOfContents, setTableOfContents] = useState<TableOfContentsRecord | null>(null);
+
+  // (nestedTOCNodes computed later for use in render)
 
   const containerRef = useRef<HTMLDivElement>(null);
   const observerRef = useRef<IntersectionObserver | null>(null);
   const renderQueue = useRenderQueue();
-  const canvasCacheRef = useRef(new CanvasCache());
+  // Protect pages currently in or near viewport from cache eviction
+  const canvasCacheRef = useRef(new CanvasCache((pageNum: number) => {
+    // visiblePages state may lag slightly; combine both refs for safety
+    if (visiblePagesRef.current.has(pageNum)) return true;
+    if ((intersectionVisiblePagesRef.current || new Set()).has(pageNum)) return true;
+    // Also protect small buffer (+/-2) around any currently visible page to reduce thrash
+    for (const vp of visiblePagesRef.current) {
+      if (Math.abs(vp - pageNum) <= 2) return true;
+    }
+    return false;
+  }));
   const visiblePagesRef = useRef<Set<number>>(new Set([1]));
+  const intersectionVisiblePagesRef = useRef<Set<number>>(new Set([1]));
   const pendingZoomRef = useRef<number | null>(null);
   // Context menu state
   const [contextVisible, setContextVisible] = useState(false);
@@ -69,12 +86,237 @@ export const ViewerApp: React.FC = () => {
     color: string;
     rects: Array<{ top: number; left: number; width: number; height: number }>;
   } | null>(null);
+  const [tocOpen, setTocOpen] = useState(false);
+  const [tocPinned, setTocPinned] = useState(false);
+  // Toolbar ref so we can measure its height and avoid covering it with the TOC drawer
+  const toolbarRef = useRef<HTMLDivElement | null>(null);
+  const [toolbarHeight, setToolbarHeight] = useState(0);
+
+  // Term summaries state
+  interface TermSummary {
+    term: string;
+    definition: string;
+    explanation1: string;
+    explanation2: string;
+    explanation3: string;
+    tocItem: { title: string; page: number; chunkId?: string } | null;
+    matchedChunkId?: string;
+  }
+  
+  // Cache term summaries for current ±1 pages with timestamps
+  interface PageTermCache {
+    page: number;
+    summaries: TermSummary[];
+    lastVisibleTime: number;
+  }
+  const [termCache, setTermCache] = useState<Map<number, PageTermCache>>(new Map());
+  const [selectedTerm, setSelectedTerm] = useState<TermSummary | null>(null);
+  const [termPopupPosition, setTermPopupPosition] = useState<{ x: number; y: number } | null>(null);
+  const [termSourceRects, setTermSourceRects] = useState<Array<{ top: number; left: number; width: number; height: number }>>([]);
+  const [termSourcePage, setTermSourcePage] = useState<number>(1);
 
   // Parse URL params
   const params = new URLSearchParams(window.location.search);
   const fileUrl = params.get("file");
   const uploadId = params.get("uploadId");
-  const fileName = params.get("name") || "document.pdf";
+  // Keep filename in state so we can update it after reading PDF metadata
+  const [fileName, setFileName] = useState<string>(params.get("name") || "document.pdf");
+
+  // Listen for state requests and term summaries from background
+  useEffect(() => {
+    const handleMessage = (message: any) => {
+      if (message.type === 'TERM_SUMMARIES_READY') {
+        // Received term summaries from background script
+        const { summaries, currentPage: summariesPage } = message.payload;
+        console.log('[VIEWER] Received term summaries:', summaries);
+        console.log('[VIEWER] Caching term summaries, count:', summaries?.length || 0, 'for page:', summariesPage);
+        
+        // Add to cache with current timestamp
+        setTermCache(prev => {
+          const newCache = new Map(prev);
+          newCache.set(summariesPage, {
+            page: summariesPage,
+            summaries: summaries || [],
+            lastVisibleTime: Date.now(),
+          });
+          return newCache;
+        });
+        return;
+      }
+
+      if (message.type === 'REQUEST_VIEWER_STATE') {
+        // Extract text from visible pages
+        let visibleText = '';
+        const visiblePages = Array.from(visiblePagesRef.current).sort((a, b) => a - b);
+
+        console.log('[VIEWER] Processing state request for visible pages:', visiblePages);
+
+        for (const pageNum of visiblePages) {
+          const pageEl = document.querySelector(`[data-page-num="${pageNum}"]`);
+          if (pageEl) {
+            // Try both possible class names for text layer
+            const textLayer = pageEl.querySelector('.text-layer') || pageEl.querySelector('.textLayer');
+            if (textLayer) {
+              const pageText = textLayer.textContent || '';
+              if (pageText.trim()) {
+                visibleText += `\n=== Page ${pageNum} ===\n${pageText}\n`;
+              }
+            } else {
+              console.log(`[VIEWER] No text layer found for page ${pageNum}`);
+            }
+          } else {
+            console.log(`[VIEWER] Page element not found for page ${pageNum}`);
+          }
+        }
+
+        console.log('[VIEWER] Sending state to background:', {
+          fileName,
+          currentPage,
+          totalPages: pages.length,
+          visiblePages,
+          textLength: visibleText.length
+        });
+
+        // Send current state to background
+        chrome.runtime.sendMessage({
+          type: 'UPDATE_VIEWER_STATE',
+          payload: {
+            docHash,
+            fileName,
+            currentPage,
+            totalPages: pages.length,
+            zoom,
+            visibleText: visibleText.trim(),
+          }
+        }).catch((error) => {
+          console.error('Failed to send viewer state:', error);
+        });
+      }
+    };
+
+    chrome.runtime.onMessage.addListener(handleMessage);
+    return () => {
+      chrome.runtime.onMessage.removeListener(handleMessage);
+    };
+  }, [docHash, fileName, currentPage, pages.length, zoom]);
+
+  // Get active term summaries from cache for currently visible pages
+  const activeTermSummaries = React.useMemo(() => {
+    const allSummaries: TermSummary[] = [];
+    for (const pageNum of visiblePages) {
+      const cached = termCache.get(pageNum);
+      if (cached) {
+        allSummaries.push(...cached.summaries);
+      }
+    }
+    return allSummaries;
+  }, [termCache, visiblePages]);
+
+  // Clean up cache: remove entries for pages that haven't been visible for 10 seconds
+  useEffect(() => {
+    const cleanupInterval = setInterval(() => {
+      const now = Date.now();
+      const TEN_SECONDS = 10000;
+      
+      setTermCache(prev => {
+        const newCache = new Map(prev);
+        let cleaned = false;
+        
+        for (const [pageNum, cache] of newCache.entries()) {
+          // If page is not currently visible and hasn't been for 10 seconds, remove it
+          if (!visiblePages.has(pageNum) && (now - cache.lastVisibleTime) > TEN_SECONDS) {
+            console.log(`[VIEWER] Cleaning up cache for page ${pageNum} (not visible for >10s)`);
+            newCache.delete(pageNum);
+            cleaned = true;
+          }
+        }
+        
+        return cleaned ? newCache : prev;
+      });
+    }, 2000); // Check every 2 seconds
+    
+    return () => clearInterval(cleanupInterval);
+  }, [visiblePages]);
+
+  // Update lastVisibleTime for pages that are currently visible
+  // Also request terms for visible pages that don't have cache entries
+  useEffect(() => {
+    const now = Date.now();
+    setTermCache(prev => {
+      const newCache = new Map(prev);
+      let updated = false;
+      
+      for (const pageNum of visiblePages) {
+        const cached = newCache.get(pageNum);
+        if (cached) {
+          cached.lastVisibleTime = now;
+          updated = true;
+        } else {
+          // Cache miss - request terms for this page
+          console.log(`[VIEWER] Cache miss for page ${pageNum}, requesting terms from background`);
+          chrome.runtime.sendMessage({
+            type: 'REQUEST_PAGE_TERMS',
+            payload: { page: pageNum, docHash }
+          }).catch(err => console.error('Failed to request page terms:', err));
+        }
+      }
+      
+      return updated ? new Map(newCache) : prev;
+    });
+  }, [visiblePages, docHash]);
+
+  // Helper function to calculate popup position - always snaps to right edge
+  const calculatePopupPosition = useCallback((_x: number, _y: number): { x: number; y: number } => {
+    // Estimated popup dimensions (max-w-md = 448px, approximate height)
+    const POPUP_WIDTH = 448;
+    const POPUP_HEIGHT = 300; // Approximate based on content
+    const MARGIN = 16; // Margin from viewport edge
+
+    const viewportWidth = window.innerWidth;
+    const viewportHeight = window.innerHeight;
+
+    // Always snap to right edge
+    const adjustedX = viewportWidth - POPUP_WIDTH - MARGIN;
+
+    // Center vertically in viewport
+    let adjustedY = (viewportHeight - POPUP_HEIGHT) / 2;
+
+    // Make sure it doesn't go off top or bottom
+    if (adjustedY < MARGIN) {
+      adjustedY = MARGIN;
+    } else if (adjustedY + POPUP_HEIGHT + MARGIN > viewportHeight) {
+      adjustedY = viewportHeight - POPUP_HEIGHT - MARGIN;
+    }
+
+    console.log('[calculatePopupPosition] Snapping to right edge:', { adjustedX, adjustedY }, 'Viewport:', { viewportWidth, viewportHeight });
+
+    return { x: adjustedX, y: adjustedY };
+  }, []);
+
+  // Close popup when clicking outside
+  useEffect(() => {
+    if (!selectedTerm) return;
+
+    const handleClickOutside = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      // Check if click is outside the popup and not on a term highlight
+      if (!target.closest('[data-term-popup]') && !target.closest('[data-term-highlight]')) {
+        console.log('[App] Clicking outside popup, closing');
+        setSelectedTerm(null);
+        setTermPopupPosition(null);
+      }
+    };
+
+    // Use timeout to avoid catching the same click that opened the popup
+    const timeoutId = setTimeout(() => {
+      document.addEventListener('click', handleClickOutside);
+    }, 100);
+
+    return () => {
+      clearTimeout(timeoutId);
+      document.removeEventListener('click', handleClickOutside);
+    };
+  }, [selectedTerm]);
 
   // Load PDF on mount
   useEffect(() => {
@@ -92,14 +334,65 @@ export const ViewerApp: React.FC = () => {
           source = { type: "uploadId", value: uploadId };
           const arrayBuffer = await readOPFSFile(uploadId);
 
-          // Generate hash from file metadata
+          // Generate content-only hash from file metadata
           const firstBytes = arrayBuffer.slice(0, 64 * 1024);
           const lastBytes = arrayBuffer.slice(-64 * 1024);
-          hash = await generateDocHash(source, {
+          const newHash = await generateDocHash(source, {
             size: arrayBuffer.byteLength,
             firstBytes,
             lastBytes,
           });
+
+          // Try to find an existing doc under the new (content-only) hash
+          let existing = await getDoc(newHash);
+
+          if (!existing) {
+            // Fallback: attempt legacy uploadId-including hash for compatibility
+            try {
+              // import helper at top-level: generateLegacyUploadHash
+              // (we import it below where needed)
+              // eslint-disable-next-line @typescript-eslint/no-var-requires
+              const { generateLegacyUploadHash } = await import('../utils/hash');
+              const legacyHash = await generateLegacyUploadHash(source, {
+                size: arrayBuffer.byteLength,
+                firstBytes,
+                lastBytes,
+              });
+
+              const legacyDoc = await getDoc(legacyHash);
+              if (legacyDoc) {
+                console.log('[App] Found existing doc under legacy hash, reusing it:', legacyHash);
+                // Use legacy hash so existing notes/TOC/chunks are found
+                hash = legacyHash;
+                existing = legacyDoc;
+
+                // Optionally create a doc record under the new hash to migrate forward
+                try {
+                  await putDoc({
+                    docHash: newHash,
+                    source,
+                    name: legacyDoc.name,
+                    pageCount: legacyDoc.pageCount,
+                    lastPage: legacyDoc.lastPage,
+                    lastZoom: legacyDoc.lastZoom,
+                    createdAt: legacyDoc.createdAt,
+                    updatedAt: Date.now(),
+                  });
+                  console.log('[App] Migrated doc record to new content-only hash:', newHash);
+                } catch (mErr) {
+                  console.warn('[App] Migration to new hash failed (non-fatal):', mErr);
+                }
+              } else {
+                // No legacy record found; use newHash
+                hash = newHash;
+              }
+            } catch (err) {
+              console.warn('[App] Legacy hash fallback failed:', err);
+              hash = newHash;
+            }
+          } else {
+            hash = newHash;
+          }
 
           pdfDoc = await loadPDF({ data: arrayBuffer });
         } else if (fileUrl) {
@@ -124,6 +417,43 @@ export const ViewerApp: React.FC = () => {
 
         setDocHash(hash);
         setPdf(pdfDoc);
+        // Update the browser tab title to the document name
+        try {
+            document.title = fileName || 'document.pdf';
+        } catch (e) {
+          // ignore in non-browser environments
+        }
+
+          // Derive a better filename synchronously (await metadata) so we can use it when persisting
+          let derivedName: string | undefined = params.get("name") || undefined;
+          if (!derivedName) {
+            try {
+              const meta = await (pdfDoc as any).getMetadata?.();
+              const title = meta?.info?.Title || meta?.info?.title || (meta?.metadata && typeof meta.metadata.get === 'function' ? meta.metadata.get('dc:title') : undefined);
+              if (title && typeof title === 'string' && title.trim().length > 0) {
+                derivedName = title.trim();
+              }
+            } catch (e) {
+              // ignore metadata errors
+            }
+          }
+
+          if (!derivedName && fileUrl) {
+            try {
+              const u = new URL(fileUrl);
+              const parts = u.pathname.split('/').filter(Boolean);
+              const last = parts[parts.length - 1] || '';
+              if (last) {
+                derivedName = decodeURIComponent(last.split('?')[0]) || undefined;
+              }
+            } catch (e) {
+              // ignore
+            }
+          }
+
+          if (!derivedName) derivedName = 'document.pdf';
+          setFileName(derivedName);
+          try { document.title = derivedName; } catch (e) {}
 
         // Load all pages
         const pageCount = pdfDoc.numPages;
@@ -234,91 +564,111 @@ export const ViewerApp: React.FC = () => {
           }
         }
 
-        // Check if we need to generate TOC (for documents that have chunks but no TOC)
-        // This handles the case where a document was processed before TOC feature was added
-        (async () => {
+        // Helper: check DB for chunks/TOC and generate TOC when appropriate.
+        const checkAndGenerateTOC = async () => {
+          console.log('[App] checkAndGenerateTOC called for document:', hash);
           try {
             const [chunks, toc] = await Promise.all([
               getChunksByDoc(hash),
-              getTableOfContents(hash)
+              getTableOfContents(hash),
             ]);
 
-            if (chunks.length > 0 && !toc) {
-              console.log('[App] Document has chunks but no TOC, triggering TOC generation');
-              const tocResponse = await requestTOC({
-                docHash: hash,
-                fileUrl: fileUrl || undefined,
-                uploadId: uploadId || undefined,
-              });
+            console.log('[App] TOC check results:', {
+              chunksCount: chunks.length,
+              hasTOC: !!toc,
+              tocItemsCount: toc?.items?.length || 0,
+            });
 
-              if (tocResponse.success) {
-                console.log('TOC generation task created:', tocResponse.taskId);
-              } else {
-                console.warn('Failed to create TOC task:', tocResponse.error);
+            if (toc) {
+              setTableOfContents(toc);
+              console.log('[App] TOC already present, skipping generation');
+              return;
+            }
+
+            if (chunks.length === 0) {
+              console.log('[App] No chunks found, skipping TOC generation');
+              return;
+            }
+
+            // There are chunks but no TOC — request TOC generation
+            console.log('[App] Document has chunks but no TOC, requesting TOC generation');
+            const tocResponse = await requestTOC({
+              docHash: hash,
+              fileUrl: fileUrl || undefined,
+              uploadId: uploadId || undefined,
+            });
+
+            if (!tocResponse.success) {
+              console.warn('[App] Failed to create TOC task:', tocResponse.error);
+              return;
+            }
+
+            console.log('[App] TOC generation task created:', tocResponse.taskId);
+
+            // Poll for TOC to appear in DB (bounded retries)
+            const maxAttempts = 15;
+            const baseDelayMs = 1000;
+            for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+              try {
+                await new Promise((res) => setTimeout(res, baseDelayMs));
+                const newTOC = await getTableOfContents(hash);
+                if (newTOC) {
+                  console.log(`[App] TOC ready after ${attempt} ${attempt === 1 ? 'attempt' : 'attempts'}`);
+                  setTableOfContents(newTOC);
+                  break;
+                }
+              } catch (pollErr) {
+                console.warn('[App] Error while polling for TOC (non-fatal):', pollErr);
               }
             }
           } catch (err) {
-            console.error('Error checking TOC status (non-fatal):', err);
+            console.error('[App] Error checking/creating TOC (non-fatal):', err);
           }
-        })();
+        };
 
-        // Pass URL directly for url-based PDFs
+        // Kick off initial check
+        console.log('[App] Starting initial TOC check...');
+        checkAndGenerateTOC();
+
+        // Start chunking+embedding workflow (for URL or OPFS uploadId)
         if (fileUrl) {
-          requestGeminiChunking({
-            docHash: hash,
-            fileUrl: fileUrl,
-          })
+          requestGeminiChunking({ docHash: hash, fileUrl })
             .then((response) => {
-              if (response.success) {
-                console.log("Chunking task created:", response.taskId);
-              } else {
-                console.error(
-                  "Failed to create chunking task:",
-                  response.error
-                );
-              }
-
-              // Always request embeddings after chunking (will only generate missing ones)
+              if (response.success) console.log('Chunking task created:', response.taskId);
+              else console.error('Failed to create chunking task:', response.error);
               return requestEmbeddings(hash);
             })
             .then((embeddingResponse) => {
               if (embeddingResponse?.success) {
                 console.log(`Embeddings generated: ${embeddingResponse.count} new embeddings`);
               } else if (embeddingResponse?.error) {
-                console.warn("Failed to generate embeddings:", embeddingResponse.error);
+                console.warn('Failed to generate embeddings:', embeddingResponse.error);
               }
+              console.log('[App] Checking for TOC after embeddings complete...');
+              return checkAndGenerateTOC();
             })
             .catch((err) => {
-              console.error("Error in chunking/embedding workflow:", err);
+              console.error('Error in chunking/embedding workflow:', err);
             });
         } else if (uploadId) {
-          console.log("[App.tsx] Requesting chunking with uploadId:", uploadId);
-          requestGeminiChunking({
-            docHash: hash,
-            uploadId: uploadId,
-          })
+          console.log('[App.tsx] Requesting chunking with uploadId:', uploadId);
+          requestGeminiChunking({ docHash: hash, uploadId })
             .then((response) => {
-              if (response.success) {
-                console.log("Chunking task created:", response.taskId);
-              } else {
-                console.error(
-                  "Failed to create chunking task:",
-                  response.error
-                );
-              }
-
-              // Always request embeddings after chunking (will only generate missing ones)
+              if (response.success) console.log('Chunking task created:', response.taskId);
+              else console.error('Failed to create chunking task:', response.error);
               return requestEmbeddings(hash);
             })
             .then((embeddingResponse) => {
               if (embeddingResponse?.success) {
                 console.log(`Embeddings generated: ${embeddingResponse.count} new embeddings`);
               } else if (embeddingResponse?.error) {
-                console.warn("Failed to generate embeddings:", embeddingResponse.error);
+                console.warn('Failed to generate embeddings:', embeddingResponse.error);
               }
+              console.log('[App] Checking for TOC after embeddings complete...');
+              return checkAndGenerateTOC();
             })
             .catch((err) => {
-              console.error("Error in chunking/embedding workflow:", err);
+              console.error('Error in chunking/embedding workflow:', err);
             });
         }
 
@@ -331,7 +681,64 @@ export const ViewerApp: React.FC = () => {
     };
 
     loadDocument();
-  }, [fileUrl, uploadId, fileName]);
+  }, [fileUrl, uploadId]);
+
+  // Keep track of TOC state changes for debugging and to ensure the value is used
+  useEffect(() => {
+    if (tableOfContents) {
+      console.log('[App] Table of Contents updated:', tableOfContents);
+    }
+  }, [tableOfContents]);
+
+  const handleToggleTOC = useCallback(() => {
+    // Treat the toolbar hamburger as the "pin" toggle: clicking it toggles pinned state
+    setTocPinned((prev) => {
+      const next = !prev;
+      if (next) setTocOpen(true); // when pinned, ensure the TOC is open
+      else setTocOpen(false); // when unpinned, close the TOC
+      return next;
+    });
+  }, []);
+
+  const handleTOCSelect = useCallback((item: any) => {
+    // scroll to page when TOC entry clicked
+    if (typeof item.page === 'number') {
+      scrollToPage(item.page);
+      if (!tocPinned) setTocOpen(false);
+    }
+  }, [tocPinned]);
+
+  // Measure toolbar height so the TOC drawer doesn't cover it
+  useEffect(() => {
+    const el = toolbarRef.current;
+    if (!el) return;
+
+    const update = () => setToolbarHeight(el.getBoundingClientRect().height || 0);
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [toolbarRef.current]);
+
+  // Hover behavior: auto-open when cursor hits left edge; auto-close when leaving unless pinned
+  const hoverCloseTimeout = useRef<number | null>(null);
+
+  const openFromHover = useCallback(() => {
+    if (hoverCloseTimeout.current) {
+      window.clearTimeout(hoverCloseTimeout.current);
+      hoverCloseTimeout.current = null;
+    }
+    setTocOpen(true);
+  }, []);
+
+  const scheduleCloseFromHover = useCallback(() => {
+    if (tocPinned) return; // don't auto-close when pinned
+    if (hoverCloseTimeout.current) window.clearTimeout(hoverCloseTimeout.current);
+    hoverCloseTimeout.current = window.setTimeout(() => {
+      setTocOpen(false);
+      hoverCloseTimeout.current = null;
+    }, 200); // small delay to avoid flicker
+  }, [tocPinned]);
 
   // Right-click to open custom context menu
   useEffect(() => {
@@ -358,6 +765,78 @@ export const ViewerApp: React.FC = () => {
 
   // Handle context menu actions (note creation, comment, etc.)
   const handleContextAction = async (action: string) => {
+    if (action === "explain") {
+      // Get selected text and request summary
+      const sel = window.getSelection();
+      if (!sel || sel.rangeCount === 0) return;
+      const selectedText = sel.toString().trim();
+      if (!selectedText) return;
+
+      const range = sel.getRangeAt(0);
+      const rects = Array.from(range.getClientRects()).map((r) => ({
+        top: r.top,
+        left: r.left,
+        width: r.width,
+        height: r.height,
+      }));
+      const first = rects[0];
+      if (!first) return;
+
+      // Find which page this selection is on and get normalized coordinates
+      const pageEl = document
+        .elementFromPoint(first.left + 1, first.top + 1)
+        ?.closest("[data-page-num]") as HTMLElement | null;
+      
+      if (!pageEl) return;
+      
+      const pageNum = parseInt(pageEl.getAttribute("data-page-num") || "0", 10);
+      const pageBox = pageEl.getBoundingClientRect();
+      
+      // Normalize rects to fractions of page width/height so notes scale with zoom
+      const normalizedRects = rects.map((r) => ({
+        top: (r.top - pageBox.top) / pageBox.height,
+        left: (r.left - pageBox.left) / pageBox.width,
+        width: r.width / pageBox.width,
+        height: r.height / pageBox.height,
+      }));
+
+      console.log('[App] AI Explanation requested for text:', selectedText, 'on page:', pageNum);
+
+      try {
+        // Send message to background script to summarize the selected text
+        const response = await chrome.runtime.sendMessage({
+          type: 'EXPLAIN_SELECTION',
+          payload: { 
+            text: selectedText, 
+            docHash 
+          }
+        });
+
+        console.log('[App] Received response from background:', response);
+
+        if (response && response.success && response.summary) {
+          console.log('[App] Received explanation:', response.summary);
+          
+          // Display the summary in the term popup with adjusted position
+          setSelectedTerm(response.summary);
+          setTermSourceRects(normalizedRects);
+          setTermSourcePage(pageNum);
+          const adjustedPos = calculatePopupPosition(first.left, first.top + first.height);
+          setTermPopupPosition(adjustedPos);
+        } else {
+          console.error('[App] Failed to get explanation:', response?.error || 'No response received');
+          // Show error to user
+          alert(`Failed to generate explanation: ${response?.error || 'No response received'}`);
+        }
+      } catch (error) {
+        console.error('[App] Error requesting explanation:', error);
+        alert(`Error requesting explanation: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      }
+
+      setContextVisible(false);
+      return;
+    }
+
     if (action === "comment") {
       // Open a small input anchored to the selection
       const sel = window.getSelection();
@@ -760,10 +1239,84 @@ export const ViewerApp: React.FC = () => {
     }
   }, [zoom, changeZoom]);
 
+  // Ref for print handler so keyboard effect can call it without ordering issues
+  const handlePrintRef = useRef<(() => Promise<void>) | null>(null);
+
+  // Handler to save term summary as a note
+  const handleSaveTermAsNote = useCallback(async (termSummary: TermSummary) => {
+    try {
+      // Format the note text with term definition and key points
+      const noteText = `📖 ${termSummary.term}
+
+Definition: ${termSummary.definition}
+
+Key Points:
+• ${termSummary.explanation1}
+• ${termSummary.explanation2}
+• ${termSummary.explanation3}`;
+
+      // Use the page where the term was clicked/selected, not where the context is
+      const notePage = termSourcePage || currentPage;
+
+      // Use the rectangles where the term was found, or create a small indicator
+      const noteRects = termSourceRects.length > 0 ? termSourceRects : [{
+        top: 0.02,    // 2% from top
+        left: 0.02,   // 2% from left
+        width: 0.06,  // 6% of page width (small indicator)
+        height: 0.03, // 3% of page height
+      }];
+
+      // Create note with the rectangles from the term location
+      const noteId = `${docHash}:${notePage}:${Date.now()}`;
+      const newNote = {
+        id: noteId,
+        docHash,
+        page: notePage,
+        rects: noteRects,
+        color: 'yellow', // Default color
+        text: noteText,
+        createdAt: Date.now(),
+      };
+
+      await putNote(newNote);
+      setNotes((prev) => [...prev, newNote]);
+      
+      console.log('[App] Saved term summary as note on page', notePage, ':', termSummary.term, 'with rects:', noteRects);
+      
+      // Close the popup after saving
+      setSelectedTerm(null);
+      setTermPopupPosition(null);
+      setTermSourceRects([]);
+      setTermSourcePage(1);
+      
+      // Optional: show a brief success message
+      // You could add a toast notification here if you have that component
+    } catch (err) {
+      console.error('[App] Failed to save term as note:', err);
+      alert('Failed to save note. Please try again.');
+    }
+  }, [docHash, currentPage, termSourceRects, termSourcePage]);
+
   // Keyboard navigation and ctrl+scroll zoom
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const isMod = e.ctrlKey || e.metaKey;
+
+      // Intercept Ctrl/Cmd+P to use in-app printing flow
+      if (isMod && (e.key === 'p' || e.key === 'P')) {
+        e.preventDefault();
+        // call print handler via ref (may be set after effect declared)
+        (async () => {
+          try {
+            const fn = handlePrintRef.current;
+            if (fn) await fn();
+            else console.warn('Print handler not ready');
+          } catch (err) {
+            console.error('Error running in-app print', err);
+          }
+        })();
+        return;
+      }
 
       if (e.key === "ArrowLeft" || e.key === "PageUp") {
         e.preventDefault();
@@ -793,55 +1346,197 @@ export const ViewerApp: React.FC = () => {
     };
   }, [handlePrevPage, handleNextPage, handleZoomIn, handleZoomOut]);
 
-  // Note handlers
-  const handleNoteDelete = useCallback(async (id: string) => {
+    // Note handlers
+    const handleNoteDelete = useCallback(async (id: string) => {
+      try {
+        await deleteNote(id);
+        setNotes((prev) => prev.filter((n) => n.id !== id));
+      } catch (err) {
+        console.error("Failed to delete note", err);
+      }
+    }, []);
+
+    const handleNoteEdit = useCallback(async (id: string, newText: string) => {
+      try {
+        const note = notes.find((n) => n.id === id);
+        if (!note) return;
+
+        const updatedNote = { ...note, text: newText.trim() || undefined };
+        await putNote(updatedNote);
+        setNotes((prev) =>
+          prev.map((n) => (n.id === id ? updatedNote : n))
+        );
+      } catch (err) {
+        console.error("Failed to update note", err);
+      }
+    }, [notes]);
+
+    // Comment handlers
+    const handleCommentDelete = useCallback(async (id: string) => {
+      try {
+        await deleteComment(id);
+        setComments((prev) => prev.filter((c) => c.id !== id));
+      } catch (err) {
+        console.error("Failed to delete comment", err);
+      }
+    }, []);
+
+    const handleCommentEdit = useCallback(async (id: string, newText: string) => {
+      try {
+        const comment = comments.find((c) => c.id === id);
+        if (!comment) return;
+
+        const updatedComment = { ...comment, text: newText };
+        await putComment(updatedComment);
+        setComments((prev) =>
+          prev.map((c) => (c.id === id ? updatedComment : c))
+        );
+      } catch (err) {
+        console.error("Failed to update comment", err);
+      }
+    }, [comments]);
+
+  // Download and print handlers
+  const handleDownload = useCallback(async () => {
     try {
-      await deleteNote(id);
-      setNotes((prev) => prev.filter((n) => n.id !== id));
-    } catch (err) {
-      console.error("Failed to delete note", err);
-    }
-  }, []);
+      // Prefer original URL or OPFS uploadId
+      if (fileUrl) {
+        // Trigger download by navigating to the URL (preserve CORS behavior)
+        const a = document.createElement('a');
+        a.href = fileUrl;
+        a.download = fileName || 'document.pdf';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        return;
+      }
 
-  const handleNoteEdit = useCallback(async (id: string, newText: string) => {
+      if (uploadId) {
+        const arrayBuffer = await readOPFSFile(uploadId);
+        const blob = new Blob([arrayBuffer], { type: 'application/pdf' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = fileName || 'document.pdf';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+        return;
+      }
+
+      // Fallback: try to get raw data from pdfjs (if supported)
+      if (pdf && typeof (pdf as any).getData === 'function') {
+        const data = await (pdf as any).getData();
+        const blob = new Blob([data], { type: 'application/pdf' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = fileName || 'document.pdf';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+        return;
+      }
+
+      console.warn('No source available for download');
+    } catch (err) {
+      console.error('Download failed', err);
+    }
+  }, [fileUrl, uploadId, pdf, fileName]);
+
+  const handlePrint = useCallback(async () => {
     try {
-      const note = notes.find((n) => n.id === id);
-      if (!note) return;
+      let blob: Blob | null = null;
 
-      const updatedNote = { ...note, text: newText.trim() || undefined };
-      await putNote(updatedNote);
-      setNotes((prev) =>
-        prev.map((n) => (n.id === id ? updatedNote : n))
-      );
+      if (uploadId) {
+        const arrayBuffer = await readOPFSFile(uploadId);
+        blob = new Blob([arrayBuffer], { type: 'application/pdf' });
+      } else if (fileUrl) {
+        // Try to fetch the file bytes (may fail due to CORS)
+        try {
+          const resp = await fetch(fileUrl, { mode: 'cors' });
+          if (resp.ok) {
+            const ab = await resp.arrayBuffer();
+            blob = new Blob([ab], { type: 'application/pdf' });
+          } else {
+            // Can't fetch; fall back to opening URL
+            const w = window.open(fileUrl, '_blank');
+            if (w) w.focus();
+            return;
+          }
+        } catch (e) {
+          // CORS or network error - fall back to opening URL
+          const w = window.open(fileUrl, '_blank');
+          if (w) w.focus();
+          return;
+        }
+      } else if (pdf && typeof (pdf as any).getData === 'function') {
+        const data = await (pdf as any).getData();
+        blob = new Blob([data], { type: 'application/pdf' });
+      }
+
+      if (!blob) {
+        console.warn('No source available for print');
+        return;
+      }
+
+      const url = URL.createObjectURL(blob);
+
+      // Create an invisible iframe in the current document (same-origin blob URL)
+      const iframe = document.createElement('iframe');
+      iframe.style.position = 'fixed';
+      iframe.style.right = '0';
+      iframe.style.bottom = '0';
+      iframe.style.width = '0px';
+      iframe.style.height = '0px';
+      iframe.style.border = '0';
+      iframe.src = url;
+      document.body.appendChild(iframe);
+
+      const cleanup = () => {
+        try {
+          if (iframe.parentNode) iframe.parentNode.removeChild(iframe);
+        } catch (e) {}
+        try { URL.revokeObjectURL(url); } catch (e) {}
+      };
+
+      const onLoad = () => {
+        try {
+          iframe.contentWindow?.focus();
+          // Trigger print in the iframe (should open print dialog)
+          iframe.contentWindow?.print();
+        } catch (e) {
+          console.warn('Iframe print failed', e);
+          // Fallback: open blob URL in new tab
+          try { window.open(url, '_blank')?.focus(); } catch (err) {}
+        } finally {
+          // cleanup after short delay to allow print dialog to start
+          setTimeout(cleanup, 2000);
+        }
+      };
+
+      // Attach load handler
+      iframe.addEventListener('load', onLoad, { once: true });
+
+      // Safety: if load never fires, attempt print after 1s and cleanup after 5s
+      setTimeout(() => {
+        try {
+          if (iframe.contentWindow) iframe.contentWindow.print();
+        } catch (e) {}
+      }, 1000);
+      setTimeout(cleanup, 5000);
     } catch (err) {
-      console.error("Failed to update note", err);
+      console.error('Print failed', err);
     }
-  }, [notes]);
+  }, [fileUrl, uploadId, pdf]);
 
-  // Comment handlers
-  const handleCommentDelete = useCallback(async (id: string) => {
-    try {
-      await deleteComment(id);
-      setComments((prev) => prev.filter((c) => c.id !== id));
-    } catch (err) {
-      console.error("Failed to delete comment", err);
-    }
-  }, []);
-
-  const handleCommentEdit = useCallback(async (id: string, newText: string) => {
-    try {
-      const comment = comments.find((c) => c.id === id);
-      if (!comment) return;
-
-      const updatedComment = { ...comment, text: newText };
-      await putComment(updatedComment);
-      setComments((prev) =>
-        prev.map((c) => (c.id === id ? updatedComment : c))
-      );
-    } catch (err) {
-      console.error("Failed to update comment", err);
-    }
-  }, [comments]);
+  // Keep ref updated so keyboard handler can call print without ordering issues
+  useEffect(() => {
+    handlePrintRef.current = handlePrint;
+    return () => { handlePrintRef.current = null; };
+  }, [handlePrint]);
 
   // Ctrl+scroll zoom handler - attached to container only
   useEffect(() => {
@@ -903,10 +1598,12 @@ export const ViewerApp: React.FC = () => {
       if (wheelTimeout) {
         clearTimeout(wheelTimeout);
       }
+      container.removeEventListener("wheel", handleWheel);
+      if (wheelTimeout) {
+        clearTimeout(wheelTimeout);
+      }
     };
-  }, [zoom, changeZoom]);
-
-  const handleRender = useCallback(
+  }, [zoom, changeZoom]);  const handleRender = useCallback(
     async (
       pageNum: number,
       canvas: HTMLCanvasElement,
@@ -994,9 +1691,11 @@ export const ViewerApp: React.FC = () => {
   return (
     <div className="h-screen flex flex-col bg-neutral-50 dark:bg-neutral-900">
       <Toolbar
+        ref={toolbarRef}
         currentPage={currentPage}
         totalPages={pages.length}
         zoom={zoom}
+        onToggleTOC={handleToggleTOC}
         onPrevPage={handlePrevPage}
         onNextPage={handleNextPage}
         onZoomIn={handleZoomIn}
@@ -1004,7 +1703,37 @@ export const ViewerApp: React.FC = () => {
         onFitWidth={() => changeZoom("fitWidth", { snapToTop: true })}
         onFitPage={() => changeZoom("fitPage", { snapToTop: true })}
         onPageChange={(page) => scrollToPage(page)}
+        onDownload={handleDownload}
+        onPrint={handlePrint}
       />
+
+      {/* Left-edge hover target: 12px wide invisible strip to auto-open TOC when cursor hits the edge */}
+      <div
+        onMouseEnter={() => openFromHover()}
+        onMouseLeave={() => scheduleCloseFromHover()}
+        style={{ width: 12 }}
+        className="fixed left-0 top-0 h-full z-40 bg-transparent"
+        aria-hidden
+      />
+
+      {/* TOC slide-out panel. It is positioned below the toolbar and does not cover toolbar.
+          When TOC is open from hover, overlay does not block interaction (pointer-events-none).
+          If pinned, we add a small clickable close area and pointer events for overlay. */}
+      <div
+        className={`fixed left-0 top-0 z-50 transform transition-transform ${tocOpen ? 'translate-x-0' : '-translate-x-full'}`}
+        style={{
+          // offset by toolbar height so the drawer doesn't cover the toolbar
+          top: toolbarHeight,
+          height: `calc(100% - ${toolbarHeight}px)`,
+          // ensure it doesn't capture pointer events when open due to hover-only
+        }}
+        onMouseEnter={() => openFromHover()}
+        onMouseLeave={() => scheduleCloseFromHover()}
+      >
+        <div className="relative h-full">
+          <TOC items={tableOfContents ? buildTOCTree(tableOfContents.items) : []} onSelect={handleTOCSelect} />
+        </div>
+      </div>
 
       <div ref={containerRef} className="flex-1 overflow-auto">
         <div className="py-4 flex flex-col items-center">
@@ -1046,6 +1775,15 @@ export const ViewerApp: React.FC = () => {
                 onNoteEdit={handleNoteEdit}
                 onCommentDelete={handleCommentDelete}
                 onCommentEdit={handleCommentEdit}
+                termSummaries={activeTermSummaries}
+                onTermClick={(term, x, y, rects) => {
+                  console.log('[App] onTermClick called:', term.term, { x, y, rects, pageNum });
+                  setSelectedTerm(term);
+                  setTermSourceRects(rects);
+                  setTermSourcePage(pageNum);
+                  const adjustedPos = calculatePopupPosition(x, y);
+                  setTermPopupPosition(adjustedPos);
+                }}
               />
               );
             });
@@ -1171,6 +1909,86 @@ export const ViewerApp: React.FC = () => {
 
       <Chatbot docHash={docHash} /> 
       
+      {/* Term summary popup */}
+      {selectedTerm && termPopupPosition && (
+        <div
+          data-term-popup
+          className="fixed z-[100] bg-white dark:bg-neutral-800 border-2 border-blue-500 rounded-lg shadow-2xl p-4 max-w-md"
+          style={{
+            left: `${termPopupPosition.x}px`,
+            top: `${termPopupPosition.y}px`,
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="flex justify-between items-start mb-3">
+            <h3 className="text-lg font-bold text-neutral-900 dark:text-neutral-100">
+              {selectedTerm.term}
+            </h3>
+            <button
+              onClick={() => {
+                setSelectedTerm(null);
+                setTermPopupPosition(null);
+              }}
+              className="text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300"
+              title="Close"
+            >
+              ✕
+            </button>
+          </div>
+
+          <div className="mb-3">
+            <p className="text-sm font-semibold text-neutral-700 dark:text-neutral-300 mb-1">
+              Definition:
+            </p>
+            <p className="text-sm text-neutral-900 dark:text-neutral-100">
+              {selectedTerm.definition}
+            </p>
+          </div>
+
+          {(selectedTerm.explanation1 || selectedTerm.explanation2 || selectedTerm.explanation3) && (
+            <div className="mb-3">
+              <p className="text-sm font-semibold text-neutral-700 dark:text-neutral-300 mb-1">
+                Key Points:
+              </p>
+              <ul className="list-disc list-inside text-sm text-neutral-900 dark:text-neutral-100 space-y-1">
+                {selectedTerm.explanation1 && <li>{selectedTerm.explanation1}</li>}
+                {selectedTerm.explanation2 && <li>{selectedTerm.explanation2}</li>}
+                {selectedTerm.explanation3 && <li>{selectedTerm.explanation3}</li>}
+              </ul>
+            </div>
+          )}
+
+          {selectedTerm.tocItem && (
+            <div className="mb-2 text-sm text-neutral-600 dark:text-neutral-400">
+              <span className="font-semibold">Section: </span>
+              {selectedTerm.tocItem.title} (Page {selectedTerm.tocItem.page})
+            </div>
+          )}
+
+          <div className="mt-3 pt-3 border-t border-neutral-200 dark:border-neutral-700 flex gap-2">
+            <button
+              onClick={() => handleSaveTermAsNote(selectedTerm)}
+              className="px-3 py-1.5 text-sm bg-green-500 hover:bg-green-600 text-white rounded"
+              title="Save this explanation as a note"
+            >
+              Save as Note
+            </button>
+            {selectedTerm.matchedChunkId && (
+              <button
+                onClick={() => {
+                  // Navigate to the chunk's page if available
+                  if (selectedTerm.tocItem?.page) {
+                    scrollToPage(selectedTerm.tocItem.page);
+                  }
+                }}
+                className="px-3 py-1.5 text-sm bg-blue-500 hover:bg-blue-600 text-white rounded"
+              >
+                Go to Context
+              </button>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 };

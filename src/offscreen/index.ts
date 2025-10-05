@@ -164,6 +164,67 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       sendResponse({ success: true, result });
     }).catch((error: Error) => {
       console.error('Error generating chat response:', error);
+  if (message.type === 'EXTRACT_TERMS') {
+    const { passage } = message.payload;
+    console.log(`Received EXTRACT_TERMS request for passage (${passage.length} chars)`);
+    
+    import('./term-extractor.js').then(async (extractor) => {
+      const result = await extractor.extractTerms(passage);
+      console.log(`Extracted ${result.terms.length} terms`);
+      sendResponse({ success: true, result });
+    }).catch((error: Error) => {
+      console.error('Error extracting terms:', error);
+      sendResponse({ success: false, error: error.message });
+    });
+    
+    // Return true to indicate we'll send response asynchronously
+    return true;
+  }
+  
+  if (message.type === 'FIND_SECTIONS_FOR_TERMS') {
+    const { terms, docHash } = message.payload;
+    console.log(`Received FIND_SECTIONS_FOR_TERMS request for ${terms.length} terms`);
+    
+    import('./term-extractor.js').then(async (extractor) => {
+      const results = await extractor.findSectionsForTerms(terms, docHash);
+      console.log(`Found sections for ${results.filter(r => r.tocItem).length}/${results.length} terms`);
+      sendResponse({ success: true, results });
+    }).catch((error: Error) => {
+      console.error('Error finding sections for terms:', error);
+      sendResponse({ success: false, error: error.message });
+    });
+    
+    // Return true to indicate we'll send response asynchronously
+    return true;
+  }
+  
+  if (message.type === 'SUMMARIZE_TERMS') {
+    const { termsWithSections, docHash } = message.payload;
+    console.log(`Received SUMMARIZE_TERMS request for ${termsWithSections.length} terms`);
+    
+    import('./term-extractor.js').then(async (extractor) => {
+      const summaries = await extractor.summarizeTerms(termsWithSections, docHash);
+      console.log(`Generated ${summaries.length} summaries`);
+      sendResponse({ success: true, summaries });
+    }).catch((error: Error) => {
+      console.error('Error summarizing terms:', error);
+      sendResponse({ success: false, error: error.message });
+    });
+    
+    // Return true to indicate we'll send response asynchronously
+    return true;
+  }
+  
+  if (message.type === 'EXPLAIN_SELECTION_TEXT') {
+    const { text, docHash } = message.payload;
+    console.log(`Received EXPLAIN_SELECTION_TEXT request for text: "${text.substring(0, 50)}..."`);
+    
+    import('./term-extractor.js').then(async (extractor) => {
+      const summary = await extractor.explainSelectedText(text, docHash);
+      console.log(`Generated summary for selected text`);
+      sendResponse({ success: true, summary });
+    }).catch((error: Error) => {
+      console.error('Error summarizing selected text:', error);
       sendResponse({ success: false, error: error.message });
     });
     

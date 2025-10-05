@@ -1,6 +1,16 @@
 import React, { useEffect, useRef, useState, useCallback } from "react";
 import type { PDFPageProxy } from "pdfjs-dist";
 
+interface TermSummary {
+  term: string;
+  definition: string;
+  explanation1: string;
+  explanation2: string;
+  explanation3: string;
+  tocItem: { title: string; page: number; chunkId?: string } | null;
+  matchedChunkId?: string;
+}
+
 interface PageProps {
   pageNum: number;
   page: PDFPageProxy | null;
@@ -29,6 +39,8 @@ interface PageProps {
   onNoteEdit?: (id: string, newText: string) => void;
   onCommentDelete?: (id: string) => void;
   onCommentEdit?: (id: string, newText: string) => void;
+  termSummaries?: TermSummary[];
+  onTermClick?: (term: TermSummary, x: number, y: number, rects: Array<{ top: number; left: number; width: number; height: number }>) => void;
 }
 
 const ZOOM_DEBOUNCE_MS = 75;
@@ -46,6 +58,8 @@ export const Page: React.FC<PageProps> = ({
   onNoteEdit,
   onCommentDelete,
   onCommentEdit,
+  termSummaries = [],
+  onTermClick,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const textLayerRef = useRef<HTMLDivElement>(null);
@@ -59,6 +73,10 @@ export const Page: React.FC<PageProps> = ({
   const targetScaleRef = useRef<number>(0);
   const renderTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const lastCSSScaleRef = useRef<number>(0);
+  const [termHighlights, setTermHighlights] = useState<Array<{
+    term: TermSummary;
+    rect: { top: number; left: number; width: number; height: number };
+  }>>([]);
 
   // Rendering page component
 
@@ -308,6 +326,117 @@ export const Page: React.FC<PageProps> = ({
     };
   }, []);
 
+  // Find and highlight first occurrence of each term in the text layer
+  useEffect(() => {
+    if (!textLayerRef.current || !shouldRender || isLoading || termSummaries.length === 0 || !page) {
+      setTermHighlights([]);
+      return;
+    }
+
+    const textLayer = textLayerRef.current;
+    const highlights: Array<{
+      term: TermSummary;
+      rect: { top: number; left: number; width: number; height: number };
+    }> = [];
+
+    // Wait for text layer to be populated
+    const checkTextLayer = () => {
+      const textContent = textLayer.textContent || '';
+      if (textContent.trim().length === 0) {
+        // Text layer not ready yet, try again
+        setTimeout(checkTextLayer, 100);
+        return;
+      }
+
+      // Get DOM dimensions of text layer
+      const textLayerRect = textLayer.getBoundingClientRect();
+      
+      // Get the CSS transform scale applied to the text layer
+      const textLayerStyle = window.getComputedStyle(textLayer);
+      const transformMatch = textLayerStyle.transform.match(/matrix\(([^,]+),[^,]+,[^,]+,([^,]+),/);
+      const scaleX = parseFloat(transformMatch?.[1] || "1");
+      const scaleY = parseFloat(transformMatch?.[2] || "1");
+
+      // For each term, find its first occurrence
+      for (const termSummary of termSummaries) {
+        const term = termSummary.term;
+        const lowerText = textContent.toLowerCase();
+        const lowerTerm = term.toLowerCase();
+        
+        const index = lowerText.indexOf(lowerTerm);
+        if (index === -1) continue; // Term not found on this page
+
+        // Find the text node and position of the term
+        let currentIndex = 0;
+        let foundNode: Node | null = null;
+        let nodeOffset = 0;
+
+        const walker = document.createTreeWalker(
+          textLayer,
+          NodeFilter.SHOW_TEXT,
+          null
+        );
+
+        while (walker.nextNode()) {
+          const node = walker.currentNode;
+          const nodeText = node.textContent || '';
+          const nodeLength = nodeText.length;
+
+          if (currentIndex + nodeLength > index) {
+            // This node contains the start of our term
+            foundNode = node;
+            nodeOffset = index - currentIndex;
+            break;
+          }
+
+          currentIndex += nodeLength;
+        }
+
+        if (!foundNode) continue;
+
+        try {
+          // Create a range for the term
+          const range = document.createRange();
+          range.setStart(foundNode, nodeOffset);
+          range.setEnd(foundNode, Math.min(nodeOffset + term.length, (foundNode.textContent || '').length));
+
+          const rects = range.getClientRects();
+          if (rects.length > 0) {
+            const rect = rects[0];
+            
+            // Convert to text-layer-relative coordinates and correct for CSS scaling
+            highlights.push({
+              term: termSummary,
+              rect: {
+                top: (rect.top - textLayerRect.top) / scaleY,
+                left: (rect.left - textLayerRect.left) / scaleX,
+                width: rect.width / scaleX,
+                height: rect.height / scaleY,
+              },
+            });
+            
+            console.log(`[Page ${pageNum}] Highlight for "${term}":`, {
+              domRect: rect,
+              textLayerRect: textLayerRect,
+              scales: { scaleX, scaleY },
+              correctedCoords: {
+                top: (rect.top - textLayerRect.top) / scaleY,
+                left: (rect.left - textLayerRect.left) / scaleX,
+              }
+            });
+          }
+        } catch (err) {
+          console.error(`[Page ${pageNum}] Error creating range for term "${term}":`, err);
+        }
+      }
+
+      console.log(`[Page ${pageNum}] Found ${highlights.length} term highlights`);
+      setTermHighlights(highlights);
+    };
+
+    checkTextLayer();
+  }, [textLayerRef.current, shouldRender, isLoading, termSummaries, pageNum, page, scale]);
+
   // Get approximate dimensions for skeleton
   const viewport = page?.getViewport({ scale: scale || 1 });
   const width = viewport?.width || 800;
@@ -371,6 +500,11 @@ export const Page: React.FC<PageProps> = ({
           const mergedLines = mergeRectsIntoLines(n.rects, width, height);
           const hasText = n.text && n.text.trim().length > 0;
           const isEditing = editingNoteId === n.id;
+
+          // Skip rendering if note has no rectangles (e.g., page-level notes)
+          if (mergedLines.length === 0) {
+            return null;
+          }
 
           return (
             <div key={n.id} className="group">
@@ -450,14 +584,15 @@ export const Page: React.FC<PageProps> = ({
                 </div>
               ) : (
                 <div
-                  className="invisible group-hover:visible absolute bg-white dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-600 rounded-md shadow-lg z-40 flex items-center gap-2 pointer-events-auto p-1"
+                  className="invisible group-hover:visible absolute bg-white dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-600 rounded-md shadow-lg z-40 flex items-center gap-2 pointer-events-auto p-2"
                   style={{
                     top: mergedLines[0].top - 25,
                     left: mergedLines[0].left,
+                    width: '300px',
                   }}
                 >
                   {hasText && (
-                    <span className="p-0.5 text-xs text-neutral-900 dark:text-neutral-100 whitespace-nowrap">
+                    <span className="flex-1 text-xs text-neutral-900 dark:text-neutral-100 whitespace-pre-wrap break-words">
                       {n.text}
                     </span>
                   )}
@@ -610,6 +745,74 @@ export const Page: React.FC<PageProps> = ({
             </div>
           );
         })}
+
+        {/* Term highlights - clickable highlights for first occurrence of each term */}
+        {termHighlights.map((highlight, index) => (
+          <div
+            key={`term-${index}`}
+            data-term-highlight
+            className="absolute z-[30] cursor-pointer transition-colors"
+            style={{
+              top: highlight.rect.top,
+              left: highlight.rect.left,
+              width: highlight.rect.width,
+              height: highlight.rect.height,
+              pointerEvents: "auto",
+              borderBottom: "2px dashed rgb(147, 51, 234)",
+              boxSizing: "border-box",
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.borderBottom = "2px dashed rgb(217, 180, 255)";
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.borderBottom = "2px dashed rgb(147, 51, 234)";
+            }}
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              
+              if (onTermClick) {
+                // Position popup near the highlight
+                const rect = e.currentTarget.getBoundingClientRect();
+                console.log('[TermHighlight] Clicked term:', highlight.term.term, 'at position:', rect);
+                
+                // Calculate position to keep popup on screen
+                const popupWidth = 400; // approximate max-w-md
+                const popupHeight = 300; // approximate height
+                
+                let x = rect.left;
+                let y = rect.bottom + 5;
+                
+                // Adjust if popup would go off right edge
+                if (x + popupWidth > window.innerWidth) {
+                  x = window.innerWidth - popupWidth - 20;
+                }
+                
+                // Adjust if popup would go off bottom edge
+                if (y + popupHeight > window.innerHeight) {
+                  y = rect.top - popupHeight - 5;
+                }
+                
+                // Ensure minimum margins
+                x = Math.max(10, x);
+                y = Math.max(10, y);
+                
+                // Normalize the highlight rect to page dimensions
+                const pageBox = document.querySelector(`[data-page-num="${pageNum}"]`)?.getBoundingClientRect();
+                const normalizedRects = pageBox ? [{
+                  top: (rect.top - pageBox.top) / pageBox.height,
+                  left: (rect.left - pageBox.left) / pageBox.width,
+                  width: rect.width / pageBox.width,
+                  height: rect.height / pageBox.height,
+                }] : [];
+                
+                console.log('[TermHighlight] Popup position:', { x, y }, 'normalized rects:', normalizedRects);
+                onTermClick(highlight.term, x, y, normalizedRects);
+              }
+            }}
+            title={`Click to see definition of "${highlight.term.term}"`}
+          />
+        ))}
       </div>
     </div>
   );

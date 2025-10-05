@@ -46,6 +46,12 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({ visible = false, x = 0
       <div className="border-t border-neutral-100 dark:border-neutral-700 mt-2 pt-2 px-3">
         <button
           className="w-full text-sm text-neutral-700 dark:text-neutral-200 text-left px-2 py-1 rounded hover:bg-neutral-100 dark:hover:bg-neutral-700"
+          onClick={() => handleSelect('explain')}
+        >
+          Explain with AI
+        </button>
+        <button
+          className="w-full text-sm text-neutral-700 dark:text-neutral-200 text-left px-2 py-1 rounded hover:bg-neutral-100 dark:hover:bg-neutral-700"
           onClick={() => handleSelect('comment')}
         >
           Comment

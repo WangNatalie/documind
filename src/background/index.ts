@@ -1,164 +1,227 @@
-// Background service worker for MV3
-import { createChunkingTask, createGeminiChunkingTask, processPendingTasks } from './chunker';
-import { createTOCTask, processPendingTOCTasks } from './toc';
+// Offscreen document for chunking operations
+// This runs in a DOM context where IndexedDB is available
 
-console.log('DocuMind background service worker loaded');
+import { processChunkingTaskInOffscreen } from './chunker-offscreen';
 
-// Intercept PDF navigation and redirect to our viewer
-// Using onCommitted instead of onBeforeNavigate for earlier interception
-chrome.webNavigation.onCommitted.addListener(
-  (details) => {
-    // Only handle main frame navigation
-    if (details.frameId !== 0) return;
+console.log('DocuMind offscreen document loaded at', new Date().toISOString());
 
-    const url = details.url;
+// Keepalive mechanism to prevent termination during long-running tasks
+let keepaliveInterval: number | null = null;
 
-    // Check if it's a PDF URL (case insensitive)
-    if (url.match(/^https?:\/\/.+\.pdf(\?.*)?$/i)) {
-      console.log('PDF detected, redirecting to viewer:', url);
+function startKeepalive() {
+  if (keepaliveInterval) return;
+  console.log('Starting keepalive mechanism');
+  keepaliveInterval = window.setInterval(() => {
+    console.log('Keepalive ping', new Date().toISOString());
+  }, 20000); // Ping every 20 seconds
+}
 
-      // Redirect to our viewer
-      const viewerUrl = chrome.runtime.getURL(`viewer.html?file=${encodeURIComponent(url)}`);
-
-      // Use chrome.tabs.update to navigate to our viewer
-      chrome.tabs.update(details.tabId, { url: viewerUrl }).catch((error) => {
-        console.error('Failed to redirect:', error);
-      });
-    }
+function stopKeepalive() {
+  if (keepaliveInterval) {
+    console.log('Stopping keepalive mechanism');
+    clearInterval(keepaliveInterval);
+    keepaliveInterval = null;
   }
-);
+}
 
-// Request storage persistence on install
-chrome.runtime.onInstalled.addListener(async () => {
-  console.log('Extension installed');
-
-  // Process any pending chunking tasks from previous session
-  try {
-    await processPendingTasks();
-  } catch (error) {
-    console.error('Failed to process pending chunking tasks:', error);
-  }
-
-  // Process any pending TOC tasks from previous session
-  try {
-    await processPendingTOCTasks();
-  } catch (error) {
-    console.error('Failed to process pending TOC tasks:', error);
-  }
-
-  // Future: Set up cleanup alarm
-  // chrome.alarms.create('cleanup', { periodInMinutes: 60 });
-});
-
-// Future: Cleanup alarm handler
-// chrome.alarms.onAlarm.addListener((alarm) => {
-//   if (alarm.name === 'cleanup') {
-//     // Cleanup old OPFS files, expired cache, etc.
-//   }
-// });
-
-// Message handler for creating chunking tasks
+// Handle messages from the service worker
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  if (message.type === 'CREATE_CHUNKING_TASK_CHUNKR') {
-    console.log('[background/index] Received message:', message);
-    const { docHash, fileUrl, uploadId } = message.payload;
-    console.log('[background/index] Extracted params:', { docHash, fileUrl, uploadId });
-    
-    createChunkingTask({ docHash, fileUrl, uploadId })
-      .then((taskId) => {
-        sendResponse({ success: true, taskId });
+
+  //
+  // --- Chunking (standard + Gemini) ---
+  //
+  if (message.type === 'PROCESS_CHUNKING_TASK') {
+    const { taskId, docHash, fileUrl, uploadId } = message.payload;
+    console.log(`Received PROCESS_CHUNKING_TASK message for task ${taskId}`);
+    startKeepalive();
+
+    processChunkingTaskInOffscreen({ taskId, docHash, fileUrl, uploadId })
+      .then(() => {
+        console.log(`Task ${taskId} completed successfully`);
+        stopKeepalive();
+        sendResponse({ success: true });
       })
-      .catch((error) => {
-        console.error('Failed to create chunking task:', error);
+      .catch((error: Error) => {
+        console.error('Failed to process chunking task in offscreen:', error);
+        stopKeepalive();
         sendResponse({ success: false, error: error.message });
       });
-    
-    // Return true to indicate we'll send response asynchronously
     return true;
   }
 
-  if (message.type === 'CREATE_CHUNKING_TASK_GEMINI') {
-    console.log('[background/index] Received CREATE_CHUNKING_TASK_GEMINI message:', message);
-    const { docHash, fileUrl, uploadId } = message.payload;
-    console.log('[background/index] Extracted params:', { docHash, fileUrl, uploadId });
-    
-    createGeminiChunkingTask({ docHash, fileUrl, uploadId })
-      .then((taskId) => {
-        sendResponse({ success: true, taskId });
-      })
-      .catch((error) => {
-        console.error('Failed to create Gemini chunking task:', error);
-        sendResponse({ success: false, error: error.message });
-      });
-    
-    // Return true to indicate we'll send response asynchronously
+  if (message.type === 'PROCESS_CHUNKING_TASK_GEMINI') {
+    const { taskId, docHash, fileUrl, uploadId } = message.payload;
+    console.log(`Received PROCESS_CHUNKING_TASK_GEMINI message for task ${taskId}`);
+    startKeepalive();
+
+    import('./chunker-offscreen.js').then(async (chunker) => {
+      await chunker.processChunkingTaskInOffscreenWithGemini({ taskId, docHash, fileUrl, uploadId });
+      console.log(`Gemini chunking task ${taskId} completed successfully`);
+      stopKeepalive();
+      sendResponse({ success: true });
+    }).catch((error: Error) => {
+      console.error('Failed to process Gemini chunking task in offscreen:', error);
+      stopKeepalive();
+      sendResponse({ success: false, error: error.message });
+    });
     return true;
   }
 
-  if (message.type === 'CREATE_TOC_TASK') {
-    console.log('[background/index] Received CREATE_TOC_TASK message:', message);
-    const { docHash, fileUrl, uploadId } = message.payload;
-    console.log('[background/index] Extracted params:', { docHash, fileUrl, uploadId });
-    
-    createTOCTask({ docHash, fileUrl, uploadId })
-      .then((taskId) => {
-        sendResponse({ success: true, taskId });
-      })
-      .catch((error) => {
-        console.error('Failed to create TOC task:', error);
-        sendResponse({ success: false, error: error.message });
-      });
-    
-    // Return true to indicate we'll send response asynchronously
+  //
+  // --- Chunk existence verification ---
+  //
+  if (message.type === 'VERIFY_CHUNKS_EXIST') {
+    const { docHash } = message.payload;
+    console.log(`Verifying chunks exist for document ${docHash}`);
+
+    import('../db/index.js').then(async (db) => {
+      const chunks = await db.getChunksByDoc(docHash);
+      const exists = chunks.length > 0;
+      console.log(`Document ${docHash} has ${chunks.length} chunks (exists: ${exists})`);
+      sendResponse({ exists });
+    }).catch((error: Error) => {
+      console.error('Error verifying chunks:', error);
+      sendResponse({ exists: false });
+    });
     return true;
   }
 
+  //
+  // --- Embeddings generation ---
+  //
+  if (message.type === 'GENERATE_EMBEDDINGS') {
+    const { docHash } = message.payload;
+    console.log(`Received GENERATE_EMBEDDINGS request for document ${docHash}`);
+    startKeepalive();
+
+    import('./embedder.js').then(async (embedder) => {
+      const count = await embedder.generateMissingEmbeddings(docHash);
+      console.log(`Generated ${count} embeddings for document ${docHash}`);
+      stopKeepalive();
+      sendResponse({ success: true, count });
+    }).catch((error: Error) => {
+      console.error('Error generating embeddings:', error);
+      stopKeepalive();
+      sendResponse({ success: false, error: error.message });
+    });
+    return true;
+  }
+
+  //
+  // --- Table of Contents generation + verification ---
+  //
+  if (message.type === 'PROCESS_TOC_TASK') {
+    const { taskId, docHash, fileUrl, uploadId } = message.payload;
+    console.log(`Received PROCESS_TOC_TASK message for task ${taskId}`);
+    startKeepalive();
+
+    import('./toc-generator.js').then(async (toc) => {
+      await toc.generateTableOfContents(docHash, fileUrl, uploadId);
+      console.log(`TOC task ${taskId} completed successfully`);
+      stopKeepalive();
+      sendResponse({ success: true });
+    }).catch((error: Error) => {
+      console.error('Failed to process TOC task in offscreen:', error);
+      stopKeepalive();
+      sendResponse({ success: false, error: error.message });
+    });
+    return true;
+  }
+
+  if (message.type === 'VERIFY_TOC_EXISTS') {
+    const { docHash } = message.payload;
+    console.log(`Verifying TOC exists for document ${docHash}`);
+
+    import('../db/index.js').then(async (db) => {
+      const toc = await db.getTableOfContents(docHash);
+      const exists = !!toc;
+      console.log(`Document ${docHash} has TOC: ${exists}`);
+      sendResponse({ exists });
+    }).catch((error: Error) => {
+      console.error('Error verifying TOC:', error);
+      sendResponse({ exists: false });
+    });
+    return true;
+  }
+
+  //
+  // --- Term extraction and summarization ---
+  //
+  if (message.type === 'EXTRACT_TERMS') {
+    const { passage } = message.payload;
+    console.log(`Received EXTRACT_TERMS request for passage (${passage.length} chars)`);
+
+    import('./term-extractor.js').then(async (extractor) => {
+      const result = await extractor.extractTerms(passage);
+      console.log(`Extracted ${result.terms.length} terms`);
+      sendResponse({ success: true, result });
+    }).catch((error: Error) => {
+      console.error('Error extracting terms:', error);
+      sendResponse({ success: false, error: error.message });
+    });
+    return true;
+  }
+
+  if (message.type === 'FIND_SECTIONS_FOR_TERMS') {
+    const { terms, docHash } = message.payload;
+    console.log(`Received FIND_SECTIONS_FOR_TERMS request for ${terms.length} terms`);
+
+    import('./term-extractor.js').then(async (extractor) => {
+      const results = await extractor.findSectionsForTerms(terms, docHash);
+      console.log(`Found sections for ${results.filter(r => r.tocItem).length}/${results.length} terms`);
+      sendResponse({ success: true, results });
+    }).catch((error: Error) => {
+      console.error('Error finding sections for terms:', error);
+      sendResponse({ success: false, error: error.message });
+    });
+    return true;
+  }
+
+  if (message.type === 'SUMMARIZE_TERMS') {
+    const { termsWithSections, docHash } = message.payload;
+    console.log(`Received SUMMARIZE_TERMS request for ${termsWithSections.length} terms`);
+
+    import('./term-extractor.js').then(async (extractor) => {
+      const summaries = await extractor.summarizeTerms(termsWithSections, docHash);
+      console.log(`Generated ${summaries.length} summaries`);
+      sendResponse({ success: true, summaries });
+    }).catch((error: Error) => {
+      console.error('Error summarizing terms:', error);
+      sendResponse({ success: false, error: error.message });
+    });
+    return true;
+  }
+
+  if (message.type === 'EXPLAIN_SELECTION_TEXT') {
+    const { text, docHash } = message.payload;
+    console.log(`Received EXPLAIN_SELECTION_TEXT request for text: "${text.substring(0, 50)}..."`);
+
+    import('./term-extractor.js').then(async (extractor) => {
+      const summary = await extractor.explainSelectedText(text, docHash);
+      console.log(`Generated summary for selected text`);
+      sendResponse({ success: true, summary });
+    }).catch((error: Error) => {
+      console.error('Error summarizing selected text:', error);
+      sendResponse({ success: false, error: error.message });
+    });
+    return true;
+  }
+
+  //
+  // --- Chatbot functionality ---
+  //
   if (message.type === 'CHAT_QUERY') {
     const { query, docHash } = message.payload;
-    console.log(`[background] Received CHAT_QUERY for query: "${query.substring(0, 50)}..."`);
-    
-    (async () => {
-      try {
-        // Ensure offscreen document exists
-        let offscreenExists = false;
-        try {
-          const existingContexts = await chrome.runtime.getContexts({
-            contextTypes: ['OFFSCREEN_DOCUMENT' as chrome.runtime.ContextType],
-            documentUrls: [chrome.runtime.getURL('offscreen.html')]
-          });
-          offscreenExists = existingContexts.length > 0;
-        } catch (err) {
-          console.log('[background] Error checking offscreen context:', err);
-        }
+    console.log(`Received CHAT_QUERY request for query: "${query.substring(0, 50)}..."`);
 
-        if (!offscreenExists) {
-          console.log('[background] Creating offscreen document for chat query...');
-          await chrome.offscreen.createDocument({
-            url: 'offscreen.html',
-            reasons: ['DOM_SCRAPING' as chrome.offscreen.Reason],
-            justification: 'Generate AI chat response with document context'
-          });
-        }
-
-        // Forward to offscreen document
-        const response = await chrome.runtime.sendMessage({
-          type: 'CHAT_QUERY',
-          payload: { query, docHash }
-        });
-
-        if (response && response.success) {
-          console.log('[background] Chat query successful');
-          sendResponse({ success: true, result: response.result });
-        } else {
-          console.error('[background] Chat query failed:', response?.error);
-          sendResponse({ success: false, error: response?.error || 'Unknown error' });
-        }
-      } catch (error: any) {
-        console.error('[background] Error processing chat query:', error);
-        sendResponse({ success: false, error: error.message || 'Unknown error' });
-      }
-    })();
-    
-    return true; // Indicate async response
+    import('./chatbot.js').then(async (chatbot) => {
+      const result = await chatbot.generateChatResponse(query, docHash);
+      console.log(`Generated chat response (${result.response.length} chars) with ${result.sources.length} sources`);
+      sendResponse({ success: true, result });
+    }).catch((error: Error) => {
+      console.error('Error generating chat response:', error);
+      sendResponse({ success: false, error: error.message });
+    });
+    return true;
   }
 });

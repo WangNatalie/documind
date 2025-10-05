@@ -23,6 +23,7 @@ export interface RenderQueue {
   ) => Promise<void>;
   cancel: () => void;
   clear: () => void;
+  touch?: (pageNum: number) => void; // optional; only available if caller supplies CanvasCache instance
 }
 
 export function useRenderQueue(): RenderQueue {
@@ -63,7 +64,8 @@ export function useRenderQueue(): RenderQueue {
       const newHeight = viewport.height * dpr;
 
       // Check if we need to resize the canvas
-      const needsResize = task.canvas.width !== newWidth || task.canvas.height !== newHeight;
+      const needsResize =
+        task.canvas.width !== newWidth || task.canvas.height !== newHeight;
 
       if (needsResize) {
         // For resize, we need to save the old content to avoid flash
@@ -281,15 +283,39 @@ export function useRenderQueue(): RenderQueue {
 // Memory management: keep track of rendered canvases
 const MAX_RENDERED_PAGES = 10;
 
+// isProtected: a predicate that returns true if a page should *not* be evicted right now
 export class CanvasCache {
   private cache = new Map<
     number,
     { canvas: HTMLCanvasElement; lastUsed: number }
   >();
+  private isProtected: (pageNum: number) => boolean;
+
+  constructor(isProtected?: (pageNum: number) => boolean) {
+    this.isProtected = isProtected || (() => false);
+  }
 
   add(pageNum: number, canvas: HTMLCanvasElement) {
     this.cache.set(pageNum, { canvas, lastUsed: Date.now() });
+    // Debug: log current cache keys before eviction
+    if (typeof window !== "undefined") {
+      console.log(
+        "[CanvasCache] add page",
+        pageNum,
+        "cache size ->",
+        this.cache.size,
+        "keys:",
+        Array.from(this.cache.keys())
+      );
+    }
     this.evict();
+  }
+
+  touch(pageNum: number): void {
+    const entry = this.cache.get(pageNum);
+    if (entry) {
+      entry.lastUsed = Date.now();
+    }
   }
 
   get(pageNum: number): HTMLCanvasElement | undefined {
@@ -308,34 +334,36 @@ export class CanvasCache {
   private evict() {
     if (this.cache.size <= MAX_RENDERED_PAGES) return;
 
-    // Sort by last used, remove oldest
-    const entries = Array.from(this.cache.entries()).sort(
-      (a, b) => a[1].lastUsed - b[1].lastUsed
+    // Separate protected vs evictable entries
+    const evictableEntries = Array.from(this.cache.entries()).filter(
+      ([pageNum]) => !this.isProtected(pageNum)
     );
-    const toRemove = entries.slice(0, this.cache.size - MAX_RENDERED_PAGES);
 
-    toRemove.forEach(([pageNum, entry]) => {
-      // Clear canvas to free memory
-      const ctx = entry.canvas.getContext("2d");
-      if (ctx) {
-        ctx.clearRect(0, 0, entry.canvas.width, entry.canvas.height);
-      }
-      entry.canvas.width = 0;
-      entry.canvas.height = 0;
+    // If nothing we can evict (all protected), skip
+    if (evictableEntries.length === 0) return;
+
+    // Sort evictable pages by last used (LRU)
+    evictableEntries.sort((a, b) => a[1].lastUsed - b[1].lastUsed);
+
+    // Number of pages we need to remove based on total size beyond limit
+    const excess = this.cache.size - MAX_RENDERED_PAGES;
+    const toRemove = evictableEntries.slice(0, excess);
+
+    toRemove.forEach(([pageNum]) => {
+      // DON'T zero out width/height if the canvas is still currently displayed.
+      // Just drop our reference; React virtualization will unmount stale pages.
       this.cache.delete(pageNum);
-      console.log(`Evicted page ${pageNum} from canvas cache`);
+      console.log(`Evicted page ${pageNum} from canvas cache (non-visible)`);
     });
+    if (toRemove.length > 0) {
+      console.log(
+        "[CanvasCache] post-evict keys:",
+        Array.from(this.cache.keys())
+      );
+    }
   }
 
   clear() {
-    this.cache.forEach((entry) => {
-      const ctx = entry.canvas.getContext("2d");
-      if (ctx) {
-        ctx.clearRect(0, 0, entry.canvas.width, entry.canvas.height);
-      }
-      entry.canvas.width = 0;
-      entry.canvas.height = 0;
-    });
     this.cache.clear();
   }
 }
