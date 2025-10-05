@@ -1,5 +1,5 @@
 import React from 'react';
-import { Edit, Download, Maximize, Minimize, ChevronLeft, ChevronRight, ZoomIn, ZoomOut } from 'lucide-react';
+import { Edit, Brain, Download, Maximize, Minimize, ChevronLeft, ChevronRight, ZoomIn, ZoomOut } from 'lucide-react';
 
 interface ToolbarProps {
   onToggleTOC?: () => void;
@@ -17,6 +17,8 @@ interface ToolbarProps {
   onPageChange: (page: number) => void;
   onDownload?: () => void;
   onPrint?: () => void;
+  highlightsVisible?: boolean;
+  onToggleHighlights?: () => void;
   onToggleDrawing?: () => void;
   isDrawingMode?: boolean;
 }
@@ -37,6 +39,8 @@ const ToolbarInner: React.FC<ToolbarProps & { forwardedRef?: React.Ref<HTMLDivEl
   onPageChange,
   onDownload,
   onPrint,
+  highlightsVisible,
+  onToggleHighlights,
   onToggleDrawing,
   isDrawingMode,
   forwardedRef,
@@ -160,6 +164,19 @@ const ToolbarInner: React.FC<ToolbarProps & { forwardedRef?: React.Ref<HTMLDivEl
             {zoom === 'fitWidth' ? <Minimize size={16} /> : <Maximize size={16} />}
           </button>
 
+          {/* Highlights Toggle */}
+          <button
+            onClick={onToggleHighlights}
+            className={`px-3 py-1.5 rounded transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400 ${
+              highlightsVisible
+                ? 'bg-purple-600 text-white hover:bg-purple-700'
+                : 'bg-neutral-100 text-neutral-800 dark:bg-neutral-800 dark:text-neutral-100 hover:bg-neutral-200 dark:hover:bg-neutral-700'
+            }`}
+            title={highlightsVisible ? "Hide highlights" : "Show highlights"}
+          >
+            <Brain size={18} />
+          </button>
+          
           {/* Drawing Tool */}
           <div className="border-l border-neutral-300 dark:border-neutral-600 h-6 mx-1" />
           <button
