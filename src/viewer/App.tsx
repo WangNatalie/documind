@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef, useCallback } from "react";
 import type { PDFDocumentProxy, PDFPageProxy } from "pdfjs-dist";
-import { loadPDF, calculateScale } from "./pdf";
+import { loadPDF, calculateScale, DPI_ADJUSTMENT } from "./pdf";
 import { Page } from "./Page";
 import { Toolbar } from "./Toolbar";
 import { useRenderQueue, CanvasCache } from "./useRenderQueue";
@@ -19,7 +19,11 @@ import {
   deleteComment,
   getTableOfContents,
   getChunksByDoc,
+  getDrawingsByDoc,
+  putDrawing,
   type TableOfContentsRecord,
+  type DrawingStroke,
+  type DrawingRecord,
 } from "../db";
 import { readOPFSFile } from "../db/opfs";
 import ContextMenu from "./ContextMenu";
@@ -27,6 +31,7 @@ import { requestGeminiChunking, requestEmbeddings, requestTOC } from "../utils/c
 import { Chatbot } from './chatbot/Chatbot';
 import { buildTOCTree } from "../utils/toc";
 import { TOC } from "./TOC";
+import { DrawingToolbar } from "./DrawingToolbar";
 
 const ZOOM_LEVELS = [50, 75, 90, 100, 125, 150, 175, 200, 250, 300, 350, 400, 500];
 
@@ -91,12 +96,15 @@ export const ViewerApp: React.FC = () => {
   // Toolbar ref so we can measure its height and avoid covering it with the TOC drawer
   const toolbarRef = useRef<HTMLDivElement | null>(null);
   const [toolbarHeight, setToolbarHeight] = useState(0);
-  // Highlights visibility toggle
-  const [highlightsVisible, setHighlightsVisible] = useState(false);
-  // Toast notification for highlights toggle
-  const [showHighlightsToast, setShowHighlightsToast] = useState(false);
-  const highlightsToastTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
+  // Drawing state - all in memory, no database
+  const [isDrawingMode, setIsDrawingMode] = useState(false);
+  const [drawingColor, setDrawingColor] = useState('#000000');
+  const [drawingStrokeWidth] = useState(2);
+  const [isEraserMode, setIsEraserMode] = useState(false);
+  const [pageDrawings, setPageDrawings] = useState<Map<number, DrawingStroke[]>>(new Map());
+  const [drawingHistory, setDrawingHistory] = useState<Map<number, DrawingStroke[][]>>(new Map());
+  const [drawingHistoryIndex, setDrawingHistoryIndex] = useState<Map<number, number>>(new Map());
   // Term summaries state
   interface TermSummary {
     term: string;
@@ -107,22 +115,18 @@ export const ViewerApp: React.FC = () => {
     tocItem: { title: string; page: number; chunkId?: string } | null;
     matchedChunkId?: string;
   }
-  
-  // Cache term summaries for current, prev, and next pages
+
+  // Cache term summaries for current ±1 pages with timestamps
   interface PageTermCache {
     page: number;
     summaries: TermSummary[];
+    lastVisibleTime: number;
   }
   const [termCache, setTermCache] = useState<Map<number, PageTermCache>>(new Map());
   const [selectedTerm, setSelectedTerm] = useState<TermSummary | null>(null);
   const [termPopupPosition, setTermPopupPosition] = useState<{ x: number; y: number } | null>(null);
   const [termSourceRects, setTermSourceRects] = useState<Array<{ top: number; left: number; width: number; height: number }>>([]);
   const [termSourcePage, setTermSourcePage] = useState<number>(1);
-  const [termReturnPage, setTermReturnPage] = useState<number | null>(null); // Track page to return to after "Go to Context"
-  
-  // Track last visible page for recaching logic
-  const lastVisiblePageRef = useRef<number>(1);
-  const recacheTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   // Parse URL params
   const params = new URLSearchParams(window.location.search);
@@ -139,13 +143,14 @@ export const ViewerApp: React.FC = () => {
         const { summaries, currentPage: summariesPage } = message.payload;
         console.log('[VIEWER] Received term summaries:', summaries);
         console.log('[VIEWER] Caching term summaries, count:', summaries?.length || 0, 'for page:', summariesPage);
-        
-        // Add to cache
+
+        // Add to cache with current timestamp
         setTermCache(prev => {
           const newCache = new Map(prev);
           newCache.set(summariesPage, {
             page: summariesPage,
             summaries: summaries || [],
+            lastVisibleTime: Date.now(),
           });
           return newCache;
         });
@@ -197,7 +202,10 @@ export const ViewerApp: React.FC = () => {
             visibleText: visibleText.trim(),
           }
         }).catch((error) => {
-          console.error('Failed to send viewer state:', error);
+          // Suppress "message port closed" errors - these are normal when extension reloads
+          if (!error.message?.includes('message port closed')) {
+            console.error('Failed to send viewer state:', error);
+          }
         });
       }
     };
@@ -208,175 +216,70 @@ export const ViewerApp: React.FC = () => {
     };
   }, [docHash, fileName, currentPage, pages.length, zoom]);
 
-  // Helper to get summaries for a specific page from cache
-  const getSummariesForPage = useCallback((pageNum: number): TermSummary[] => {
-    const cached = termCache.get(pageNum);
-    return cached?.summaries || [];
-  }, [termCache]);
+  // Get active term summaries from cache for currently visible pages
+  const activeTermSummaries = React.useMemo(() => {
+    const allSummaries: TermSummary[] = [];
+    for (const pageNum of visiblePages) {
+      const cached = termCache.get(pageNum);
+      if (cached) {
+        allSummaries.push(...cached.summaries);
+      }
+    }
+    return allSummaries;
+  }, [termCache, visiblePages]);
 
-  // Cache management: maintain current ±10 pages in cache (21 pages total)
-  // When current page changes, wait 15 seconds before recaching if it becomes completely invisible
+  // Clean up cache: remove entries for pages that haven't been visible for 10 seconds
   useEffect(() => {
-    if (visiblePages.size === 0) return;
-    
-    // Find the "current" page (the first visible page in order)
-    const sortedVisible = Array.from(visiblePages).sort((a, b) => a - b);
-    const newCurrentPage = sortedVisible[0];
-    
-    // Check if the previous "current" page is now completely invisible
-    const previousPage = lastVisiblePageRef.current;
-    const previousPageNowInvisible = !visiblePages.has(previousPage);
-    
-    if (previousPageNowInvisible && previousPage !== newCurrentPage) {
-      console.log(`[VIEWER] Previous page ${previousPage} is now invisible, scheduling recache in 15s`);
-      
-      // Clear any existing timeout
-      if (recacheTimeoutRef.current) {
-        clearTimeout(recacheTimeoutRef.current);
-      }
-      
-      // Wait 15 seconds before recaching
-      recacheTimeoutRef.current = setTimeout(() => {
-        console.log(`[VIEWER] Recaching for new current page: ${newCurrentPage}`);
-        requestCacheForPage(newCurrentPage);
-        recacheTimeoutRef.current = null;
-      }, 15000);
-    } else if (newCurrentPage !== previousPage) {
-      // Current page changed to a different visible page
-      console.log(`[VIEWER] Current page changed from ${previousPage} to ${newCurrentPage}`);
-      
-      // Clear any pending recache timeout
-      if (recacheTimeoutRef.current) {
-        clearTimeout(recacheTimeoutRef.current);
-        recacheTimeoutRef.current = null;
-      }
-      
-      // Request cache for new current page (function will check what's already cached)
-      requestCacheForPage(newCurrentPage);
-    }
-    
-    // Update the last visible page ref
-    lastVisiblePageRef.current = newCurrentPage;
-    
-    return () => {
-      if (recacheTimeoutRef.current) {
-        clearTimeout(recacheTimeoutRef.current);
-      }
-    };
-  }, [visiblePages, docHash, pages.length]);
-  
-  // Helper function to request cache for current ±10 pages
-  const requestCacheForPage = useCallback((pageNum: number) => {
-    const totalPages = pages.length;
-    const CACHE_RANGE = 10; // Cache ±10 pages around current
-    
-    const pagesToCache: number[] = [];
-    for (let offset = -CACHE_RANGE; offset <= CACHE_RANGE; offset++) {
-      const p = pageNum + offset;
-      if (p >= 1 && p <= totalPages) {
-        pagesToCache.push(p);
-      }
-    }
-    
-    console.log(`[VIEWER] Requesting cache for pages:`, pagesToCache);
-    
-    // Check which pages are not in cache and request them
-    const missingPages = pagesToCache.filter(p => !termCache.has(p));
-    
-    if (missingPages.length > 0) {
-      console.log(`[VIEWER] Cache misses for pages:`, missingPages, '- requesting from background');
-      missingPages.forEach(p => {
-        // Extract text from the specific page
-        const pageEl = document.querySelector(`[data-page-num="${p}"]`);
-        let pageText = '';
-        
-        if (pageEl) {
-          const textLayer = pageEl.querySelector('.text-layer') || pageEl.querySelector('.textLayer');
-          if (textLayer) {
-            pageText = textLayer.textContent || '';
+    const cleanupInterval = setInterval(() => {
+      const now = Date.now();
+      const TEN_SECONDS = 10000;
+
+      setTermCache(prev => {
+        const newCache = new Map(prev);
+        let cleaned = false;
+
+        for (const [pageNum, cache] of newCache.entries()) {
+          // If page is not currently visible and hasn't been for 10 seconds, remove it
+          if (!visiblePages.has(pageNum) && (now - cache.lastVisibleTime) > TEN_SECONDS) {
+            console.log(`[VIEWER] Cleaning up cache for page ${pageNum} (not visible for >10s)`);
+            newCache.delete(pageNum);
+            cleaned = true;
           }
         }
-        
-        console.log(`[VIEWER] Sending request for page ${p} with text length:`, pageText.length);
-        
-        chrome.runtime.sendMessage({
-          type: 'REQUEST_PAGE_TERMS',
-          payload: { 
-            page: p, 
-            docHash,
-            pageText: pageText.trim()
-          }
-        }).catch(err => console.error('Failed to request page terms:', err));
+
+        return cleaned ? newCache : prev;
       });
-    } else {
-      console.log(`[VIEWER] All required pages already in cache`);
-    }
-    
-    // Clean up cache: remove pages that are not in the ±10 range
+    }, 2000); // Check every 2 seconds
+
+    return () => clearInterval(cleanupInterval);
+  }, [visiblePages]);
+
+  // Update lastVisibleTime for pages that are currently visible
+  // Also request terms for visible pages that don't have cache entries
+  useEffect(() => {
+    const now = Date.now();
     setTermCache(prev => {
       const newCache = new Map(prev);
-      let cleaned = false;
-      
-      for (const [cachedPage] of newCache) {
-        if (!pagesToCache.includes(cachedPage)) {
-          console.log(`[VIEWER] Removing page ${cachedPage} from cache (outside ±${CACHE_RANGE} range)`);
-          newCache.delete(cachedPage);
-          cleaned = true;
-        }
-      }
-      
-      return cleaned ? new Map(newCache) : prev;
-    });
-  }, [pages.length, termCache, docHash]);
+      let updated = false;
 
-  // Separate visibility check for highlights - refresh every 0.5 seconds
-  // This ensures highlights appear/disappear based on actual page visibility
-  useEffect(() => {
-    const checkHighlightVisibility = () => {
-      const container = containerRef.current;
-      if (!container) return;
-      
-      const containerRect = container.getBoundingClientRect();
-      const containerTop = containerRect.top;
-      const containerBottom = containerRect.bottom;
-      
-      // Update visible pages based on actual intersection
-      const newVisiblePages = new Set<number>();
-      const pageElements = container.querySelectorAll('[data-page-num]');
-      
-      pageElements.forEach((el) => {
-        const pageNum = parseInt(el.getAttribute('data-page-num') || '0', 10);
-        if (pageNum === 0) return;
-        
-        const rect = el.getBoundingClientRect();
-        // Check if page is visible in viewport at all (any part of it)
-        const isVisible = rect.bottom > containerTop && rect.top < containerBottom;
-        if (isVisible) {
-          newVisiblePages.add(pageNum);
+      for (const pageNum of visiblePages) {
+        const cached = newCache.get(pageNum);
+        if (cached) {
+          cached.lastVisibleTime = now;
+          updated = true;
+        } else {
+          // Cache miss - request terms for this page
+          console.log(`[VIEWER] Cache miss for page ${pageNum}, requesting terms from background`);
+          chrome.runtime.sendMessage({
+            type: 'REQUEST_PAGE_TERMS',
+            payload: { page: pageNum, docHash }
+          }).catch(err => console.error('Failed to request page terms:', err));
         }
-      });
-      
-      // Always compare with current ref value to avoid stale closures
-      const oldVisible = Array.from(visiblePagesRef.current).sort();
-      const newVisible = Array.from(newVisiblePages).sort();
-      const changed = oldVisible.length !== newVisible.length ||
-        oldVisible.some((p, i) => p !== newVisible[i]);
-      
-      if (changed) {
-        console.log(`[Highlight Visibility] Pages changed:`, oldVisible, '->', newVisible);
-        visiblePagesRef.current = newVisiblePages;
-        setVisiblePages(newVisiblePages);
       }
-    };
-    
-    // Check every 0.5 seconds
-    const intervalId = setInterval(checkHighlightVisibility, 500);
-    
-    // Also check immediately
-    checkHighlightVisibility();
-    
-    return () => clearInterval(intervalId);
-  }, []); // No dependencies - runs independently
+
+      return updated ? new Map(newCache) : prev;
+    });
+  }, [visiblePages, docHash]);
 
   // Helper function to calculate popup position - always snaps to right edge
   const calculatePopupPosition = useCallback((_x: number, _y: number): { x: number; y: number } => {
@@ -417,7 +320,6 @@ export const ViewerApp: React.FC = () => {
         console.log('[App] Clicking outside popup, closing');
         setSelectedTerm(null);
         setTermPopupPosition(null);
-        setTermReturnPage(null);
       }
     };
 
@@ -653,6 +555,38 @@ export const ViewerApp: React.FC = () => {
           }
         })();
 
+        // Load drawings for this document (non-fatal)
+        (async () => {
+          try {
+            const drawings = await getDrawingsByDoc(hash);
+            console.log('[App] Loaded drawings:', drawings.length);
+
+            // Convert array of DrawingRecords to Map<pageNum, strokes[]>
+            const drawingsMap = new Map<number, DrawingStroke[]>();
+            const historyMap = new Map<number, DrawingStroke[][]>();
+            const historyIndexMap = new Map<number, number>();
+
+            drawings.forEach(drawing => {
+              drawingsMap.set(drawing.pageNum, drawing.strokes);
+              // Initialize history with current state
+              historyMap.set(drawing.pageNum, [drawing.strokes]);
+              historyIndexMap.set(drawing.pageNum, 0);
+            });
+
+            setPageDrawings(drawingsMap);
+            setDrawingHistory(historyMap);
+            setDrawingHistoryIndex(historyIndexMap);
+          } catch (err) {
+            console.error("Failed to load drawings (non-fatal)", err);
+            try {
+              resetDB();
+            } catch (resetErr) {
+              console.warn('resetDB failed while loading drawings:', resetErr);
+            }
+            // Keep empty maps on error
+          }
+        })();
+
         // Create or update doc record — make DB errors non-fatal so viewer still loads
         try {
           if (!existingDoc) {
@@ -814,28 +748,6 @@ export const ViewerApp: React.FC = () => {
     });
   }, []);
 
-  const handleToggleHighlights = useCallback(() => {
-    setHighlightsVisible((prev) => {
-      const newValue = !prev;
-      
-      // Show toast notification
-      setShowHighlightsToast(true);
-      
-      // Clear any existing timeout
-      if (highlightsToastTimeoutRef.current) {
-        clearTimeout(highlightsToastTimeoutRef.current);
-      }
-      
-      // Hide toast after 1.5 seconds
-      highlightsToastTimeoutRef.current = setTimeout(() => {
-        setShowHighlightsToast(false);
-        highlightsToastTimeoutRef.current = null;
-      }, 1500);
-      
-      return newValue;
-    });
-  }, []);
-
   const handleTOCSelect = useCallback((item: any) => {
     // scroll to page when TOC entry clicked
     if (typeof item.page === 'number') {
@@ -922,12 +834,12 @@ export const ViewerApp: React.FC = () => {
       const pageEl = document
         .elementFromPoint(first.left + 1, first.top + 1)
         ?.closest("[data-page-num]") as HTMLElement | null;
-      
+
       if (!pageEl) return;
-      
+
       const pageNum = parseInt(pageEl.getAttribute("data-page-num") || "0", 10);
       const pageBox = pageEl.getBoundingClientRect();
-      
+
       // Normalize rects to fractions of page width/height so notes scale with zoom
       const normalizedRects = rects.map((r) => ({
         top: (r.top - pageBox.top) / pageBox.height,
@@ -942,9 +854,9 @@ export const ViewerApp: React.FC = () => {
         // Send message to background script to summarize the selected text
         const response = await chrome.runtime.sendMessage({
           type: 'EXPLAIN_SELECTION',
-          payload: { 
-            text: selectedText, 
-            docHash 
+          payload: {
+            text: selectedText,
+            docHash
           }
         });
 
@@ -952,7 +864,7 @@ export const ViewerApp: React.FC = () => {
 
         if (response && response.success && response.summary) {
           console.log('[App] Received explanation:', response.summary);
-          
+
           // Display the summary in the term popup with adjusted position
           setSelectedTerm(response.summary);
           setTermSourceRects(normalizedRects);
@@ -1357,7 +1269,23 @@ export const ViewerApp: React.FC = () => {
 
   const handleZoomIn = useCallback(() => {
     if (zoom === "fitWidth" || zoom === "fitPage") {
-      changeZoom("100", { snapToTop: true });
+      // Compute current fit percent and choose the nearest higher numeric zoom
+      const container = containerRef.current;
+      if (!container || !pages[0]) {
+        changeZoom("100", { snapToTop: true });
+        return;
+      }
+
+      try {
+        const cw = container.clientWidth;
+        const ch = container.clientHeight - 40;
+        const s = calculateScale(pages[0], cw, ch, zoom as 'fitWidth' | 'fitPage');
+        const percent = Math.round((s / DPI_ADJUSTMENT) * 100);
+        const nextZoom = ZOOM_LEVELS.find((z) => z > percent) || ZOOM_LEVELS[ZOOM_LEVELS.length - 1];
+        changeZoom(nextZoom.toString(), { snapToTop: true });
+      } catch (e) {
+        changeZoom("100", { snapToTop: true });
+      }
     } else {
       const currentZoom = parseInt(zoom, 10);
       const nextZoom = ZOOM_LEVELS.find((z) => z > currentZoom) || ZOOM_LEVELS[ZOOM_LEVELS.length - 1];
@@ -1367,7 +1295,24 @@ export const ViewerApp: React.FC = () => {
 
   const handleZoomOut = useCallback(() => {
     if (zoom === "fitWidth" || zoom === "fitPage") {
-      changeZoom("100", { snapToTop: true });
+      // Compute current fit percent and choose the nearest lower numeric zoom
+      const container = containerRef.current;
+      if (!container || !pages[0]) {
+        changeZoom("100", { snapToTop: true });
+        return;
+      }
+
+      try {
+        const cw = container.clientWidth;
+        const ch = container.clientHeight - 40;
+        const s = calculateScale(pages[0], cw, ch, zoom as 'fitWidth' | 'fitPage');
+        const percent = Math.round((s / DPI_ADJUSTMENT) * 100);
+        const reversed = [...ZOOM_LEVELS].reverse();
+        const prevZoom = reversed.find((z) => z < percent) || ZOOM_LEVELS[0];
+        changeZoom(prevZoom.toString(), { snapToTop: true });
+      } catch (e) {
+        changeZoom("100", { snapToTop: true });
+      }
     } else {
       const currentZoom = parseInt(zoom, 10);
       const prevZoom = [...ZOOM_LEVELS].reverse().find((z) => z < currentZoom) || 50;
@@ -1416,16 +1361,15 @@ Key Points:
 
       await putNote(newNote);
       setNotes((prev) => [...prev, newNote]);
-      
+
       console.log('[App] Saved term summary as note on page', notePage, ':', termSummary.term, 'with rects:', noteRects);
-      
+
       // Close the popup after saving
       setSelectedTerm(null);
       setTermPopupPosition(null);
       setTermSourceRects([]);
       setTermSourcePage(1);
-      setTermReturnPage(null);
-      
+
       // Optional: show a brief success message
       // You could add a toast notification here if you have that component
     } catch (err) {
@@ -1675,14 +1619,191 @@ Key Points:
     return () => { handlePrintRef.current = null; };
   }, [handlePrint]);
 
-  // Cleanup highlights toast timeout on unmount
+  // Drawing handlers
+  const handleToggleDrawing = useCallback(() => {
+    setIsDrawingMode(prev => !prev);
+  }, []);
+
+  const handleColorSelect = useCallback((color: string) => {
+    setDrawingColor(color);
+  }, []);
+
+  const handleToggleEraser = useCallback(() => {
+    setIsEraserMode(prev => !prev);
+  }, []);
+
+  const handleDrawingStrokesChange = useCallback((pageNum: number, strokes: DrawingStroke[]) => {
+    setPageDrawings(prev => {
+      const updated = new Map(prev);
+      updated.set(pageNum, strokes);
+      return updated;
+    });
+
+    // Save to history for undo/redo
+    setDrawingHistory(prev => {
+      const updated = new Map(prev);
+      const pageHistory = updated.get(pageNum) || [];
+      const currentIndex = drawingHistoryIndex.get(pageNum) ?? -1;
+
+      // Trim any future history if we're not at the end
+      const trimmedHistory = pageHistory.slice(0, currentIndex + 1);
+      trimmedHistory.push(strokes);
+
+      updated.set(pageNum, trimmedHistory);
+      return updated;
+    });
+
+    setDrawingHistoryIndex(prev => {
+      const updated = new Map(prev);
+      const currentIndex = prev.get(pageNum) ?? -1;
+      updated.set(pageNum, currentIndex + 1);
+      return updated;
+    });
+
+    // Save to IndexedDB (non-blocking, error handling)
+    (async () => {
+      try {
+        const id = `${docHash}:${pageNum}`;
+        const now = Date.now();
+        const drawingRecord: DrawingRecord = {
+          id,
+          docHash,
+          pageNum,
+          strokes,
+          createdAt: now,
+          updatedAt: now,
+        };
+        await putDrawing(drawingRecord);
+        console.log(`[Drawing] Saved page ${pageNum} with ${strokes.length} strokes`);
+      } catch (err) {
+        console.error(`[Drawing] Failed to save page ${pageNum}:`, err);
+        // Non-fatal: drawing is still in memory
+      }
+    })();
+  }, [drawingHistoryIndex, docHash]);
+
+  const handleDrawingUndo = useCallback((pageNum: number) => {
+    const currentIndex = drawingHistoryIndex.get(pageNum) ?? -1;
+    if (currentIndex <= 0) return;
+
+    const newIndex = currentIndex - 1;
+    setDrawingHistoryIndex(prev => {
+      const updated = new Map(prev);
+      updated.set(pageNum, newIndex);
+      return updated;
+    });
+
+    const history = drawingHistory.get(pageNum) || [];
+    const previousStrokes = history[newIndex] || [];
+    setPageDrawings(prev => {
+      const updated = new Map(prev);
+      updated.set(pageNum, previousStrokes);
+      return updated;
+    });
+  }, [drawingHistory, drawingHistoryIndex]);
+
+  const handleDrawingRedo = useCallback((pageNum: number) => {
+    const history = drawingHistory.get(pageNum) || [];
+    const currentIndex = drawingHistoryIndex.get(pageNum) ?? -1;
+    if (currentIndex >= history.length - 1) return;
+
+    const newIndex = currentIndex + 1;
+    setDrawingHistoryIndex(prev => {
+      const updated = new Map(prev);
+      updated.set(pageNum, newIndex);
+      return updated;
+    });
+
+    const nextStrokes = history[newIndex] || [];
+    setPageDrawings(prev => {
+      const updated = new Map(prev);
+      updated.set(pageNum, nextStrokes);
+      return updated;
+    });
+  }, [drawingHistory, drawingHistoryIndex]);
+
+  const handleDrawingClear = useCallback((pageNum: number) => {
+    handleDrawingStrokesChange(pageNum, []);
+  }, [handleDrawingStrokesChange]);
+
+  // Keyboard navigation and shortcuts
   useEffect(() => {
-    return () => {
-      if (highlightsToastTimeoutRef.current) {
-        clearTimeout(highlightsToastTimeoutRef.current);
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const isMod = e.ctrlKey || e.metaKey;
+
+      // Intercept Ctrl/Cmd+P to use in-app printing flow
+      if (isMod && (e.key === 'p' || e.key === 'P')) {
+        e.preventDefault();
+        // call print handler via ref (may be set after effect declared)
+        (async () => {
+          try {
+            const fn = handlePrintRef.current;
+            if (fn) await fn();
+            else console.warn('Print handler not ready');
+          } catch (err) {
+            console.error('Error running in-app print', err);
+          }
+        })();
+        return;
+      }
+
+      // Drawing mode shortcuts
+      if (isDrawingMode) {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          setIsDrawingMode(false);
+          return;
+        }
+
+        // Toggle eraser with 'E' key
+        if (e.key === "e" || e.key === "E") {
+          e.preventDefault();
+          setIsEraserMode(prev => !prev);
+          return;
+        }
+
+        // Undo: Ctrl+Z (or Cmd+Z on Mac)
+        if (isMod && e.key === "z" && !e.shiftKey) {
+          e.preventDefault();
+          handleDrawingUndo(currentPage);
+          return;
+        }
+
+        // Redo: Ctrl+Y or Ctrl+Shift+Z (or Cmd+Y / Cmd+Shift+Z on Mac)
+        if (isMod && (e.key === "y" || (e.key === "z" && e.shiftKey))) {
+          e.preventDefault();
+          handleDrawingRedo(currentPage);
+          return;
+        }
+      }
+
+      if (e.key === "ArrowLeft" || e.key === "PageUp") {
+        e.preventDefault();
+        handlePrevPage();
+      } else if (e.key === "ArrowRight" || e.key === "PageDown") {
+        e.preventDefault();
+        handleNextPage();
+      } else if (isMod && e.key === "+") {
+        e.preventDefault();
+        handleZoomIn();
+      } else if (isMod && e.key === "-") {
+        e.preventDefault();
+        handleZoomOut();
+      } else if (isMod && e.key === "0") {
+        e.preventDefault();
+        setZoom("fitWidth");
       }
     };
-  }, []);
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      // Cancel any pending zoom animation
+      if (pendingZoomRef.current !== null) {
+        cancelAnimationFrame(pendingZoomRef.current);
+      }
+    };
+  }, [handlePrevPage, handleNextPage, handleZoomIn, handleZoomOut, isDrawingMode, handleDrawingUndo, handleDrawingRedo, currentPage]);
 
   // Ctrl+scroll zoom handler - attached to container only
   useEffect(() => {
@@ -1833,6 +1954,23 @@ Key Points:
   if (!pdf || pages.length === 0) {
     return null;
   }
+  // compute fit percentages to display numeric labels when in fit mode
+  const containerForFit = containerRef.current;
+  let fitWidthPercent = 100;
+  let fitPagePercent = 100;
+  if (containerForFit && pages[0]) {
+    try {
+      const cw = containerForFit.clientWidth;
+      const ch = containerForFit.clientHeight - 40;
+      const sWidth = calculateScale(pages[0], cw, ch, 'fitWidth');
+      const sPage = calculateScale(pages[0], cw, ch, 'fitPage');
+      // convert internal scale to user-facing percentage (account for DPI adjustment)
+      fitWidthPercent = Math.round((sWidth / DPI_ADJUSTMENT) * 100);
+      fitPagePercent = Math.round((sPage / DPI_ADJUSTMENT) * 100);
+    } catch (e) {
+      // ignore
+    }
+  }
 
   return (
     <div className="h-screen flex flex-col bg-neutral-50 dark:bg-neutral-900">
@@ -1841,6 +1979,8 @@ Key Points:
         currentPage={currentPage}
         totalPages={pages.length}
         zoom={zoom}
+        fitWidthPercent={fitWidthPercent}
+        fitPagePercent={fitPagePercent}
         onToggleTOC={handleToggleTOC}
         onPrevPage={handlePrevPage}
         onNextPage={handleNextPage}
@@ -1851,8 +1991,22 @@ Key Points:
         onPageChange={(page) => scrollToPage(page)}
         onDownload={handleDownload}
         onPrint={handlePrint}
-        highlightsVisible={highlightsVisible}
-        onToggleHighlights={handleToggleHighlights}
+        isDrawingMode={isDrawingMode}
+        onToggleDrawing={handleToggleDrawing}
+      />
+      {/* Drawing toolbar (fixed overlay) - rendered always so it doesn't shift layout */}
+      <DrawingToolbar
+        isExpanded={isDrawingMode}
+        selectedColor={drawingColor}
+        onColorSelect={handleColorSelect}
+        onUndo={() => handleDrawingUndo(currentPage)}
+        onRedo={() => handleDrawingRedo(currentPage)}
+        onClear={() => handleDrawingClear(currentPage)}
+        canUndo={(drawingHistoryIndex.get(currentPage) ?? -1) > 0}
+        canRedo={(drawingHistoryIndex.get(currentPage) ?? -1) < ((drawingHistory.get(currentPage) || []).length - 1)}
+        isEraserMode={isEraserMode}
+        onToggleEraser={handleToggleEraser}
+        toolbarTop={toolbarHeight}
       />
 
       {/* Left-edge hover target: 12px wide invisible strip to auto-open TOC when cursor hits the edge */}
@@ -1892,13 +2046,9 @@ Key Points:
             return pages.map((page, idx) => {
               const pageNum = idx + 1;
               const isVisible = visiblePages.has(pageNum);
-              const hasCachedSummaries = termCache.has(pageNum);
-              
               // Render visible pages + 4 pages buffer above/below
-              // Also render any page with cached summaries so highlights are ready
               const shouldRender =
                 isVisible ||
-                hasCachedSummaries ||
                 visiblePagesArray.some(
                   (vp) => Math.abs(vp - pageNum) <= 4
                 );
@@ -1927,7 +2077,13 @@ Key Points:
                 onNoteEdit={handleNoteEdit}
                 onCommentDelete={handleCommentDelete}
                 onCommentEdit={handleCommentEdit}
-                termSummaries={getSummariesForPage(pageNum)}
+                isDrawingMode={isDrawingMode}
+                drawingColor={drawingColor}
+                drawingStrokeWidth={drawingStrokeWidth}
+                drawingStrokes={pageDrawings.get(pageNum) || []}
+                onDrawingStrokesChange={(strokes) => handleDrawingStrokesChange(pageNum, strokes)}
+                isEraserMode={isEraserMode}
+                termSummaries={activeTermSummaries}
                 onTermClick={(term, x, y, rects) => {
                   console.log('[App] onTermClick called:', term.term, { x, y, rects, pageNum });
                   setSelectedTerm(term);
@@ -1936,7 +2092,6 @@ Key Points:
                   const adjustedPos = calculatePopupPosition(x, y);
                   setTermPopupPosition(adjustedPos);
                 }}
-                highlightsVisible={highlightsVisible}
               />
               );
             });
@@ -2060,8 +2215,8 @@ Key Points:
         onSelect={(a) => handleContextAction(a)}
       />
 
-      <Chatbot docHash={docHash} /> 
-      
+      <Chatbot docHash={docHash} />
+
       {/* Term summary popup */}
       {selectedTerm && termPopupPosition && (
         <div
@@ -2081,7 +2236,6 @@ Key Points:
               onClick={() => {
                 setSelectedTerm(null);
                 setTermPopupPosition(null);
-                setTermReturnPage(null);
               }}
               className="text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300"
               title="Close"
@@ -2130,34 +2284,17 @@ Key Points:
             {selectedTerm.matchedChunkId && (
               <button
                 onClick={() => {
-                  if (termReturnPage !== null) {
-                    // Return to the saved page
-                    scrollToPage(termReturnPage);
-                    setTermReturnPage(null);
-                  } else if (selectedTerm.tocItem?.page) {
-                    // Save current page and navigate to context
-                    setTermReturnPage(currentPage);
+                  // Navigate to the chunk's page if available
+                  if (selectedTerm.tocItem?.page) {
                     scrollToPage(selectedTerm.tocItem.page);
                   }
                 }}
                 className="px-3 py-1.5 text-sm bg-blue-500 hover:bg-blue-600 text-white rounded"
               >
-                {termReturnPage !== null ? '← Return' : 'Go to Context'}
+                Go to Context
               </button>
             )}
           </div>
-        </div>
-      )}
-
-      {/* Toast notification for highlights toggle */}
-      {showHighlightsToast && (
-        <div
-          className="fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 z-[200] bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900 px-6 py-3 rounded-lg shadow-2xl font-medium text-lg pointer-events-none animate-fadeIn"
-          style={{
-            animation: 'fadeIn 0.2s ease-in-out',
-          }}
-        >
-          {highlightsVisible ? 'Smart reader mode on' : 'Smart reader mode off'}
         </div>
       )}
     </div>

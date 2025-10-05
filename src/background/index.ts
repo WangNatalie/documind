@@ -116,7 +116,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     console.log('[background/index] Received message:', message);
     const { docHash, fileUrl, uploadId } = message.payload;
     console.log('[background/index] Extracted params:', { docHash, fileUrl, uploadId });
-    
+
     createChunkingTask({ docHash, fileUrl, uploadId })
       .then((taskId) => {
         sendResponse({ success: true, taskId });
@@ -125,7 +125,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         console.error('Failed to create chunking task:', error);
         sendResponse({ success: false, error: error.message });
       });
-    
+
     // Return true to indicate we'll send response asynchronously
     return true;
   }
@@ -134,7 +134,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     console.log('[background/index] Received CREATE_CHUNKING_TASK_GEMINI message:', message);
     const { docHash, fileUrl, uploadId } = message.payload;
     console.log('[background/index] Extracted params:', { docHash, fileUrl, uploadId });
-    
+
     createGeminiChunkingTask({ docHash, fileUrl, uploadId })
       .then((taskId) => {
         sendResponse({ success: true, taskId });
@@ -143,7 +143,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         console.error('Failed to create Gemini chunking task:', error);
         sendResponse({ success: false, error: error.message });
       });
-    
+
     // Return true to indicate we'll send response asynchronously
     return true;
   }
@@ -152,7 +152,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     console.log('[background/index] Received CREATE_TOC_TASK message:', message);
     const { docHash, fileUrl, uploadId } = message.payload;
     console.log('[background/index] Extracted params:', { docHash, fileUrl, uploadId });
-    
+
     createTOCTask({ docHash, fileUrl, uploadId })
       .then((taskId) => {
         sendResponse({ success: true, taskId });
@@ -161,39 +161,37 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         console.error('Failed to create TOC task:', error);
         sendResponse({ success: false, error: error.message });
       });
-    
+
     // Return true to indicate we'll send response asynchronously
     return true;
   }
 
   if (message.type === 'REQUEST_PAGE_TERMS') {
     // Viewer is requesting terms for a specific page (cache miss)
-    const { page, docHash, pageText } = message.payload;
+    const { page, docHash } = message.payload;
     const tabId = sender.tab?.id;
-    
+
     if (tabId) {
-      console.log(`[REQUEST_PAGE_TERMS] Viewer requesting terms for page ${page}, text length: ${pageText?.length || 0}`);
-      
+      console.log(`[REQUEST_PAGE_TERMS] Viewer requesting terms for page ${page}`);
+
       // Remove this page from processed set to allow re-processing
       const processedSet = processedPages.get(tabId);
       if (processedSet) {
         processedSet.delete(page);
       }
-      
-      // Get the viewer state
+
+      // Get the viewer state to extract text
       const state = viewerStates.get(tabId);
       if (state && state.docHash === docHash) {
-        // If we have page text, process it immediately
-        if (pageText && pageText.trim().length > 0) {
-          console.log(`[REQUEST_PAGE_TERMS] Processing page ${page} with provided text`);
-          // Process this specific page with its text
-          const pageSet = processedPages.get(tabId);
-          if (pageSet && !pageSet.has(page)) {
-            pageSet.add(page);
-            extractTermsFromText(pageText, state.fileName, page, state.docHash);
-          }
+        // If this is the current page, process it immediately
+        if (state.currentPage === page && state.visibleText) {
+          processPageTerms(tabId, page, state);
         } else {
-          console.warn(`[REQUEST_PAGE_TERMS] No text provided for page ${page}, cannot extract terms`);
+          // For other pages, we'd need to request their text
+          // For now, just re-trigger state request which will process current page
+          chrome.tabs.sendMessage(tabId, { type: 'REQUEST_VIEWER_STATE' }).catch(err => {
+            console.error('Failed to request viewer state:', err);
+          });
         }
       }
     }
@@ -215,46 +213,55 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         lastUpdate: Date.now(),
       };
       viewerStates.set(tabId, state);
-      
+
       // Extract terms only when the current page changes (real page transition)
       if (state.visibleText && state.visibleText.length > 0) {
         const previousPage = lastExtractedPage.get(tabId);
         if (previousPage !== state.currentPage) {
           console.log(`[UPDATE_VIEWER_STATE] Page changed from ${previousPage || 'none'} to ${state.currentPage} for tab ${tabId}`);
           lastExtractedPage.set(tabId, state.currentPage);
-          
+
           // Initialize processed pages set if needed
           if (!processedPages.has(tabId)) {
             processedPages.set(tabId, new Set());
           }
-          
+
           // Clean up processed pages cache: only keep current ±2 pages to save memory
           const pagesToKeep = new Set<number>();
           for (let i = Math.max(1, state.currentPage - 2); i <= Math.min(state.totalPages, state.currentPage + 2); i++) {
             pagesToKeep.add(i);
           }
-          
+
           const processedSet = processedPages.get(tabId)!;
           for (const page of Array.from(processedSet)) {
             if (!pagesToKeep.has(page)) {
               processedSet.delete(page);
             }
           }
-          
-          // Process current page with visible text
-          // Adjacent pages will be requested via REQUEST_PAGE_TERMS with their own text
+
+          // Process current page first (priority)
           processPageTerms(tabId, state.currentPage, state);
+
+          // Pre-process adjacent pages (prev and next) for caching
+          if (state.currentPage > 1) {
+            processPageTerms(tabId, state.currentPage - 1, state, true);
+          }
+          if (state.currentPage < state.totalPages) {
+            processPageTerms(tabId, state.currentPage + 1, state, true);
+          }
         }
       }
     }
-    return false;
+    // Send acknowledgment response
+    sendResponse({ success: true });
+    return true; // Indicate async response
   }
 
   if (message.type === 'EXPLAIN_SELECTION') {
     // Handle summarize selection from context menu
     const { text, docHash } = message.payload;
     console.log(`[EXPLAIN_SELECTION] Received request for text: "${text.substring(0, 50)}..."`);
-    
+
     // Handle async operation properly
     (async () => {
       try {
@@ -300,14 +307,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       console.error('[EXPLAIN_SELECTION] Unhandled error:', error);
       sendResponse({ success: false, error: error.message || 'Unknown error' });
     });
-    
+
     return true; // Indicate async response
   }
 
   if (message.type === 'CHAT_QUERY') {
     const { query, docHash } = message.payload;
     console.log(`[background] Received CHAT_QUERY for query: "${query.substring(0, 50)}..."`);
-    
+
     (async () => {
       try {
         // Ensure offscreen document exists
@@ -349,31 +356,35 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse({ success: false, error: error.message || 'Unknown error' });
       }
     })();
-    
+
     return true; // Indicate async response
   }
 });
 
-// Helper function to process terms for the current page
-async function processPageTerms(tabId: number, pageNum: number, state: ViewerState) {
+// Helper function to process terms for a specific page
+async function processPageTerms(tabId: number, pageNum: number, state: ViewerState, isAdjacentPage: boolean = false) {
   const pageSet = processedPages.get(tabId);
   if (!pageSet) return;
-  
+
   // Skip if this page has already been processed
   if (pageSet.has(pageNum)) {
     console.log(`[processPageTerms] Page ${pageNum} already processed for tab ${tabId}, skipping`);
     return;
   }
-  
+
   // Mark as processed
   pageSet.add(pageNum);
-  
-  // Process current page with visible text
-  if (state.visibleText && state.visibleText.trim().length > 0) {
-    console.log(`[processPageTerms] Processing current page ${pageNum} for tab ${tabId}`);
+
+  // For current page, use existing visible text
+  // For adjacent pages, we'd need to request their text - for now, we'll skip adjacent if no text
+  if (pageNum === state.currentPage && state.visibleText) {
+    const priority = isAdjacentPage ? 'adjacent' : 'current';
+    console.log(`[processPageTerms] Processing ${priority} page ${pageNum} for tab ${tabId}`);
     await extractTermsFromText(state.visibleText, state.fileName, pageNum, state.docHash);
-  } else {
-    console.warn(`[processPageTerms] No visible text for page ${pageNum}, skipping`);
+  } else if (isAdjacentPage) {
+    // For adjacent pages, we could request text from the viewer
+    // For now, we'll just log and skip
+    console.log(`[processPageTerms] Skipping adjacent page ${pageNum} (would need to request text from viewer)`);
   }
 }
 
@@ -414,7 +425,7 @@ async function extractTermsFromText(passage: string, fileName: string, currentPa
     if (response.success && response.result) {
       console.log(`[extractTerms] Successfully extracted ${response.result.terms.length} terms for "${fileName}" page ${currentPage}:`);
       console.log(`  Terms: ${response.result.terms.join(', ')}`);
-      
+
       // Find sections for each term
       if (response.result.terms.length > 0) {
         await findSectionsForTerms(response.result.terms, docHash, fileName, currentPage);
@@ -431,7 +442,7 @@ async function extractTermsFromText(passage: string, fileName: string, currentPa
 async function findSectionsForTerms(terms: string[], docHash: string, fileName: string, currentPage: number) {
   try {
     console.log(`[findSections] Finding sections for ${terms.length} terms in "${fileName}" page ${currentPage}`);
-    
+
     // Send message to offscreen document to find sections
     const response = await chrome.runtime.sendMessage({
       type: 'FIND_SECTIONS_FOR_TERMS',
@@ -447,7 +458,7 @@ async function findSectionsForTerms(terms: string[], docHash: string, fileName: 
       } else {
         console.log(`[findSections] No sections found for "${fileName}" page ${currentPage}`);
       }
-      
+
       // Log each term with its section
       for (const result of response.results) {
         if (result.tocItem) {
@@ -457,7 +468,7 @@ async function findSectionsForTerms(terms: string[], docHash: string, fileName: 
           console.log(`  • ${result.term} → No section found`);
         }
       }
-      
+
       // Generate summaries for all terms
       await summarizeTerms(response.results, docHash, fileName, currentPage);
     } else {
@@ -479,7 +490,7 @@ async function summarizeTerms(termsWithSections: any[], docHash: string, fileNam
 
     if (response.success && response.summaries) {
       console.log(`[summarize] Successfully generated summaries for "${fileName}" page ${currentPage}:`);
-      
+
       // Log each term summary
       for (const summary of response.summaries) {
         console.log(`\n📚 Term: ${summary.term}`);
@@ -495,12 +506,12 @@ async function summarizeTerms(termsWithSections: any[], docHash: string, fileNam
         console.log(`   2. ${summary.explanation2}`);
         console.log(`   3. ${summary.explanation3}`);
       }
-      
+
       // Send summaries to the viewer tab for display
       const viewerTab = Array.from(viewerStates.entries()).find(
         ([_, state]) => state.docHash === docHash
       );
-      
+
       if (viewerTab) {
         const [tabId] = viewerTab;
         try {
@@ -513,7 +524,7 @@ async function summarizeTerms(termsWithSections: any[], docHash: string, fileNam
           console.error(`[summarize] Failed to send summaries to tab ${tabId}:`, error);
         }
       }
-    
+
     } else {
       console.warn('[summarize] Failed to generate summaries:', response.error);
     }
