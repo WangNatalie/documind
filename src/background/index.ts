@@ -112,7 +112,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     console.log('[background/index] Received message:', message);
     const { docHash, fileUrl, uploadId } = message.payload;
     console.log('[background/index] Extracted params:', { docHash, fileUrl, uploadId });
-    
+
     createChunkingTask({ docHash, fileUrl, uploadId })
       .then((taskId) => {
         sendResponse({ success: true, taskId });
@@ -121,7 +121,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         console.error('Failed to create chunking task:', error);
         sendResponse({ success: false, error: error.message });
       });
-    
+
     // Return true to indicate we'll send response asynchronously
     return true;
   }
@@ -130,7 +130,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     console.log('[background/index] Received CREATE_CHUNKING_TASK_GEMINI message:', message);
     const { docHash, fileUrl, uploadId } = message.payload;
     console.log('[background/index] Extracted params:', { docHash, fileUrl, uploadId });
-    
+
     createGeminiChunkingTask({ docHash, fileUrl, uploadId })
       .then((taskId) => {
         sendResponse({ success: true, taskId });
@@ -139,7 +139,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         console.error('Failed to create Gemini chunking task:', error);
         sendResponse({ success: false, error: error.message });
       });
-    
+
     // Return true to indicate we'll send response asynchronously
     return true;
   }
@@ -148,7 +148,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     console.log('[background/index] Received CREATE_TOC_TASK message:', message);
     const { docHash, fileUrl, uploadId } = message.payload;
     console.log('[background/index] Extracted params:', { docHash, fileUrl, uploadId });
-    
+
     createTOCTask({ docHash, fileUrl, uploadId })
       .then((taskId) => {
         sendResponse({ success: true, taskId });
@@ -157,7 +157,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         console.error('Failed to create TOC task:', error);
         sendResponse({ success: false, error: error.message });
       });
-    
+
     // Return true to indicate we'll send response asynchronously
     return true;
   }
@@ -177,7 +177,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         lastUpdate: Date.now(),
       };
       viewerStates.set(tabId, state);
-      
+
       // Extract terms from visible text only if it has changed
       if (state.visibleText && state.visibleText.length > 0) {
         const previousText = lastVisibleText.get(tabId);
@@ -198,7 +198,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 async function extractTermsFromText(passage: string, tabId: number, fileName: string, currentPage: number, docHash: string) {
   try {
     console.log(`[extractTerms] Extracting terms for tab ${tabId}, page ${currentPage}`);
-    
+
     // Ensure offscreen document exists
     let offscreenExists = false;
     try {
@@ -234,7 +234,7 @@ async function extractTermsFromText(passage: string, tabId: number, fileName: st
       console.log(`[extractTerms] Successfully extracted terms for "${fileName}" page ${currentPage}:`);
       console.log(`  Terms: ${response.result.terms.join(', ')}`);
       console.log(`  Total terms: ${response.result.terms.length}`);
-      
+
       // Find sections for each term
       if (response.result.terms.length > 0) {
         await findSectionsForTerms(response.result.terms, docHash, fileName, currentPage);
@@ -251,7 +251,7 @@ async function extractTermsFromText(passage: string, tabId: number, fileName: st
 async function findSectionsForTerms(terms: string[], docHash: string, fileName: string, currentPage: number) {
   try {
     console.log(`[findSections] Finding sections for ${terms.length} terms in "${fileName}" page ${currentPage}`);
-    
+
     // Send message to offscreen document to find sections
     const response = await chrome.runtime.sendMessage({
       type: 'FIND_SECTIONS_FOR_TERMS',
@@ -264,7 +264,7 @@ async function findSectionsForTerms(terms: string[], docHash: string, fileName: 
       } else {
         console.log(`[findSections] No sections found for "${fileName}" page ${currentPage}`);
       }
-      
+
       // Log each term with its section
       for (const result of response.results) {
         if (result.tocItem) {
@@ -274,12 +274,12 @@ async function findSectionsForTerms(terms: string[], docHash: string, fileName: 
           console.log(`  • ${result.term} → No section found`);
         }
       }
-      
+
       // Summary
       const termsWithSections = response.results.filter((r: any) => r.tocItem).length;
       const termsWithChunks = response.results.filter((r: any) => r.matchedChunkId).length;
       console.log(`[findSections] Found sections for ${termsWithSections}/${terms.length} terms (${termsWithChunks} with chunk context)`);
-      
+
       // Generate summaries for all terms
       await summarizeTerms(response.results, docHash, fileName, currentPage);
     } else {
@@ -294,7 +294,7 @@ async function findSectionsForTerms(terms: string[], docHash: string, fileName: 
 async function summarizeTerms(termsWithSections: any[], docHash: string, fileName: string, currentPage: number) {
   try {
     console.log(`[summarize] Generating summaries for ${termsWithSections.length} terms in "${fileName}" page ${currentPage}`);
-    
+
     // Send message to offscreen document to generate summaries
     const response = await chrome.runtime.sendMessage({
       type: 'SUMMARIZE_TERMS',
@@ -304,7 +304,7 @@ async function summarizeTerms(termsWithSections: any[], docHash: string, fileNam
     if (response.success && response.summaries) {
       console.log(`[summarize] Successfully generated summaries for "${fileName}" page ${currentPage}:`);
       console.log('═══════════════════════════════════════════════════════');
-      
+
       // Log each term summary
       for (const summary of response.summaries) {
         console.log(`\n📚 Term: ${summary.term}`);
@@ -320,7 +320,7 @@ async function summarizeTerms(termsWithSections: any[], docHash: string, fileNam
         console.log(`   2. ${summary.explanation2}`);
         console.log(`   3. ${summary.explanation3}`);
       }
-      
+
       console.log('\n═══════════════════════════════════════════════════════');
       console.log(`[summarize] Generated ${response.summaries.length} summaries`);
     } else {

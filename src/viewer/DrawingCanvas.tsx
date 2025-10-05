@@ -9,6 +9,7 @@ interface DrawingCanvasProps {
   strokeWidth: number;
   existingStrokes: DrawingStroke[];
   onStrokesChange: (strokes: DrawingStroke[]) => void;
+  isEraserMode: boolean;
 }
 
 export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
@@ -19,6 +20,7 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
   strokeWidth,
   existingStrokes,
   onStrokesChange,
+  isEraserMode,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [isDrawing, setIsDrawing] = useState(false);
@@ -88,6 +90,47 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
     [width, height]
   );
 
+  // Helper function to check if a point is near a stroke
+  const isPointNearStroke = useCallback(
+    (point: { x: number; y: number }, stroke: DrawingStroke, threshold: number = 0.01) => {
+      // Convert threshold to normalized coordinates (0.01 = 1% of dimension)
+      for (let i = 0; i < stroke.points.length - 1; i++) {
+        const p1 = stroke.points[i];
+        const p2 = stroke.points[i + 1];
+
+        // Calculate distance from point to line segment
+        const dx = p2.x - p1.x;
+        const dy = p2.y - p1.y;
+        const lengthSquared = dx * dx + dy * dy;
+
+        if (lengthSquared === 0) {
+          // Points are the same, check distance to point
+          const dist = Math.sqrt(
+            Math.pow(point.x - p1.x, 2) + Math.pow(point.y - p1.y, 2)
+          );
+          if (dist < threshold) return true;
+          continue;
+        }
+
+        // Calculate projection of point onto line segment
+        let t = ((point.x - p1.x) * dx + (point.y - p1.y) * dy) / lengthSquared;
+        t = Math.max(0, Math.min(1, t));
+
+        const projX = p1.x + t * dx;
+        const projY = p1.y + t * dy;
+
+        const dist = Math.sqrt(
+          Math.pow(point.x - projX, 2) + Math.pow(point.y - projY, 2)
+        );
+
+        if (dist < threshold) return true;
+      }
+
+      return false;
+    },
+    []
+  );
+
   const handleMouseDown = useCallback(
     (e: React.MouseEvent<HTMLCanvasElement>) => {
       if (!enabled) return;
@@ -95,28 +138,54 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
       const coords = getNormalizedCoordinates(e);
       if (!coords) return;
 
-      setIsDrawing(true);
-      setCurrentStroke([coords]);
+      if (isEraserMode) {
+        // Eraser mode: find and remove strokes that are touched
+        const updatedStrokes = existingStrokes.filter(
+          (stroke) => !isPointNearStroke(coords, stroke, 0.015)
+        );
+
+        if (updatedStrokes.length !== existingStrokes.length) {
+          // A stroke was erased
+          onStrokesChange(updatedStrokes);
+        }
+      } else {
+        // Drawing mode: start a new stroke
+        setIsDrawing(true);
+        setCurrentStroke([coords]);
+      }
     },
-    [enabled, getNormalizedCoordinates]
+    [enabled, isEraserMode, getNormalizedCoordinates, existingStrokes, isPointNearStroke, onStrokesChange]
   );
 
   const handleMouseMove = useCallback(
     (e: React.MouseEvent<HTMLCanvasElement>) => {
-      if (!enabled || !isDrawing) return;
+      if (!enabled) return;
 
       const coords = getNormalizedCoordinates(e);
       if (!coords) return;
 
-      setCurrentStroke((prev) => [...prev, coords]);
+      if (isEraserMode && isDrawing) {
+        // Eraser mode: continuously erase strokes as mouse moves
+        const updatedStrokes = existingStrokes.filter(
+          (stroke) => !isPointNearStroke(coords, stroke, 0.015)
+        );
+
+        if (updatedStrokes.length !== existingStrokes.length) {
+          onStrokesChange(updatedStrokes);
+        }
+      } else if (!isEraserMode && isDrawing) {
+        // Drawing mode: add points to current stroke
+        setCurrentStroke((prev) => [...prev, coords]);
+      }
     },
-    [enabled, isDrawing, getNormalizedCoordinates]
+    [enabled, isEraserMode, isDrawing, getNormalizedCoordinates, existingStrokes, isPointNearStroke, onStrokesChange]
   );
 
   const handleMouseUp = useCallback(() => {
     if (!enabled || !isDrawing) return;
 
-    if (currentStroke.length > 1) {
+    if (!isEraserMode && currentStroke.length > 1) {
+      // Only save strokes in drawing mode
       const newStroke: DrawingStroke = {
         points: currentStroke,
         color,
@@ -128,7 +197,7 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
 
     setIsDrawing(false);
     setCurrentStroke([]);
-  }, [enabled, isDrawing, currentStroke, existingStrokes, color, strokeWidth, onStrokesChange]);
+  }, [enabled, isDrawing, isEraserMode, currentStroke, existingStrokes, color, strokeWidth, onStrokesChange]);
 
   const handleMouseLeave = useCallback(() => {
     if (isDrawing) {
@@ -145,7 +214,7 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
       onMouseLeave={handleMouseLeave}
-      className={`absolute top-0 left-0 z-30 ${enabled ? 'cursor-crosshair' : 'pointer-events-none'}`}
+      className={`absolute top-0 left-0 z-30 ${enabled ? (isEraserMode ? 'cursor-not-allowed' : 'cursor-crosshair') : 'pointer-events-none'}`}
       style={{
         width: `${width}px`,
         height: `${height}px`,

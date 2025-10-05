@@ -37,6 +37,7 @@ interface PageProps {
   drawingStrokeWidth?: number;
   drawingStrokes?: DrawingStroke[];
   onDrawingStrokesChange?: (strokes: DrawingStroke[]) => void;
+  isEraserMode?: boolean;
 }
 
 const ZOOM_DEBOUNCE_MS = 75;
@@ -59,6 +60,7 @@ export const Page: React.FC<PageProps> = ({
   drawingStrokeWidth = 2,
   drawingStrokes = [],
   onDrawingStrokesChange,
+  isEraserMode = false,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const textLayerRef = useRef<HTMLDivElement>(null);
@@ -383,6 +385,7 @@ export const Page: React.FC<PageProps> = ({
             strokeWidth={drawingStrokeWidth}
             existingStrokes={drawingStrokes}
             onStrokesChange={onDrawingStrokesChange}
+            isEraserMode={isEraserMode}
           />
         )}
         {/* Text layer for text selection (hidden visually but present for selection) */}

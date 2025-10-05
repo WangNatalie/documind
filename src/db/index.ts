@@ -487,12 +487,12 @@ export async function deleteChunkEmbeddingsByDoc(docHash: string): Promise<void>
 export async function getMissingEmbeddings(docHash: string): Promise<string[]> {
   const chunks = await getChunksByDoc(docHash);
   const embeddings = await getChunkEmbeddingsByDoc(docHash);
-  
+
   const embeddedChunkIds = new Set(embeddings.map(e => e.chunkId));
   const missingChunkIds = chunks
     .filter(chunk => !embeddedChunkIds.has(chunk.id))
     .map(chunk => chunk.id);
-  
+
   return missingChunkIds;
 }
 

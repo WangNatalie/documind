@@ -100,6 +100,7 @@ export const ViewerApp: React.FC = () => {
   const [isDrawingMode, setIsDrawingMode] = useState(false);
   const [drawingColor, setDrawingColor] = useState('#000000');
   const [drawingStrokeWidth] = useState(2);
+  const [isEraserMode, setIsEraserMode] = useState(false);
   const [pageDrawings, setPageDrawings] = useState<Map<number, DrawingStroke[]>>(new Map());
   const [drawingHistory, setDrawingHistory] = useState<Map<number, DrawingStroke[][]>>(new Map());
   const [drawingHistoryIndex, setDrawingHistoryIndex] = useState<Map<number, number>>(new Map());
@@ -399,19 +400,19 @@ export const ViewerApp: React.FC = () => {
           try {
             const drawings = await getDrawingsByDoc(hash);
             console.log('[App] Loaded drawings:', drawings.length);
-            
+
             // Convert array of DrawingRecords to Map<pageNum, strokes[]>
             const drawingsMap = new Map<number, DrawingStroke[]>();
             const historyMap = new Map<number, DrawingStroke[][]>();
             const historyIndexMap = new Map<number, number>();
-            
+
             drawings.forEach(drawing => {
               drawingsMap.set(drawing.pageNum, drawing.strokes);
               // Initialize history with current state
               historyMap.set(drawing.pageNum, [drawing.strokes]);
               historyIndexMap.set(drawing.pageNum, 0);
             });
-            
+
             setPageDrawings(drawingsMap);
             setDrawingHistory(historyMap);
             setDrawingHistoryIndex(historyIndexMap);
@@ -1057,65 +1058,6 @@ export const ViewerApp: React.FC = () => {
   // Ref for print handler so keyboard effect can call it without ordering issues
   const handlePrintRef = useRef<(() => Promise<void>) | null>(null);
 
-  // Keyboard navigation and ctrl+scroll zoom
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      const isMod = e.ctrlKey || e.metaKey;
-
-      // Intercept Ctrl/Cmd+P to use in-app printing flow
-      if (isMod && (e.key === 'p' || e.key === 'P')) {
-        e.preventDefault();
-        // call print handler via ref (may be set after effect declared)
-        (async () => {
-          try {
-            const fn = handlePrintRef.current;
-            if (fn) await fn();
-            else console.warn('Print handler not ready');
-          } catch (err) {
-            console.error('Error running in-app print', err);
-          }
-        })();
-        return;
-      }
-
-      // Drawing mode shortcuts
-      if (isDrawingMode) {
-        if (e.key === "Escape") {
-          e.preventDefault();
-          setIsDrawingMode(false);
-          return;
-        }
-        // Note: Undo/Redo for drawings are handled per-page in DrawingToolbar
-      }
-
-      if (e.key === "ArrowLeft" || e.key === "PageUp") {
-        e.preventDefault();
-        handlePrevPage();
-      } else if (e.key === "ArrowRight" || e.key === "PageDown") {
-        e.preventDefault();
-        handleNextPage();
-      } else if (isMod && e.key === "+") {
-        e.preventDefault();
-        handleZoomIn();
-      } else if (isMod && e.key === "-") {
-        e.preventDefault();
-        handleZoomOut();
-      } else if (isMod && e.key === "0") {
-        e.preventDefault();
-        setZoom("fitWidth");
-      }
-    };
-
-    window.addEventListener("keydown", handleKeyDown);
-    return () => {
-      window.removeEventListener("keydown", handleKeyDown);
-      // Cancel any pending zoom animation
-      if (pendingZoomRef.current !== null) {
-        cancelAnimationFrame(pendingZoomRef.current);
-      }
-    };
-  }, [handlePrevPage, handleNextPage, handleZoomIn, handleZoomOut, isDrawingMode]);
-
     // Note handlers
     const handleNoteDelete = useCallback(async (id: string) => {
       try {
@@ -1317,6 +1259,10 @@ export const ViewerApp: React.FC = () => {
     setDrawingColor(color);
   }, []);
 
+  const handleToggleEraser = useCallback(() => {
+    setIsEraserMode(true);
+  }, []);
+
   const handleDrawingStrokesChange = useCallback((pageNum: number, strokes: DrawingStroke[]) => {
     setPageDrawings(prev => {
       const updated = new Map(prev);
@@ -1410,6 +1356,85 @@ export const ViewerApp: React.FC = () => {
   const handleDrawingClear = useCallback((pageNum: number) => {
     handleDrawingStrokesChange(pageNum, []);
   }, [handleDrawingStrokesChange]);
+
+  // Keyboard navigation and shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const isMod = e.ctrlKey || e.metaKey;
+
+      // Intercept Ctrl/Cmd+P to use in-app printing flow
+      if (isMod && (e.key === 'p' || e.key === 'P')) {
+        e.preventDefault();
+        // call print handler via ref (may be set after effect declared)
+        (async () => {
+          try {
+            const fn = handlePrintRef.current;
+            if (fn) await fn();
+            else console.warn('Print handler not ready');
+          } catch (err) {
+            console.error('Error running in-app print', err);
+          }
+        })();
+        return;
+      }
+
+      // Drawing mode shortcuts
+      if (isDrawingMode) {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          setIsDrawingMode(false);
+          return;
+        }
+
+        // Toggle eraser with 'E' key
+        if (e.key === "e" || e.key === "E") {
+          e.preventDefault();
+          setIsEraserMode(prev => !prev);
+          return;
+        }
+
+        // Undo: Ctrl+Z (or Cmd+Z on Mac)
+        if (isMod && e.key === "z" && !e.shiftKey) {
+          e.preventDefault();
+          handleDrawingUndo(currentPage);
+          return;
+        }
+
+        // Redo: Ctrl+Y or Ctrl+Shift+Z (or Cmd+Y / Cmd+Shift+Z on Mac)
+        if (isMod && (e.key === "y" || (e.key === "z" && e.shiftKey))) {
+          e.preventDefault();
+          handleDrawingRedo(currentPage);
+          return;
+        }
+      }
+
+      if (e.key === "ArrowLeft" || e.key === "PageUp") {
+        e.preventDefault();
+        handlePrevPage();
+      } else if (e.key === "ArrowRight" || e.key === "PageDown") {
+        e.preventDefault();
+        handleNextPage();
+      } else if (isMod && e.key === "+") {
+        e.preventDefault();
+        handleZoomIn();
+      } else if (isMod && e.key === "-") {
+        e.preventDefault();
+        handleZoomOut();
+      } else if (isMod && e.key === "0") {
+        e.preventDefault();
+        setZoom("fitWidth");
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      // Cancel any pending zoom animation
+      if (pendingZoomRef.current !== null) {
+        cancelAnimationFrame(pendingZoomRef.current);
+      }
+    };
+  }, [handlePrevPage, handleNextPage, handleZoomIn, handleZoomOut, isDrawingMode, handleDrawingUndo, handleDrawingRedo, currentPage]);
 
   // Ctrl+scroll zoom handler - attached to container only
   useEffect(() => {
@@ -1593,6 +1618,8 @@ export const ViewerApp: React.FC = () => {
           onClear={() => handleDrawingClear(currentPage)}
           canUndo={(drawingHistoryIndex.get(currentPage) ?? -1) > 0}
           canRedo={(drawingHistoryIndex.get(currentPage) ?? -1) < ((drawingHistory.get(currentPage) || []).length - 1)}
+          isEraserMode={isEraserMode}
+          onToggleEraser={handleToggleEraser}
         />
       )}
 
@@ -1669,6 +1696,7 @@ export const ViewerApp: React.FC = () => {
                 drawingStrokeWidth={drawingStrokeWidth}
                 drawingStrokes={pageDrawings.get(pageNum) || []}
                 onDrawingStrokesChange={(strokes) => handleDrawingStrokesChange(pageNum, strokes)}
+                isEraserMode={isEraserMode}
               />
               );
             });
