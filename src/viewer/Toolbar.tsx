@@ -1,5 +1,6 @@
 import React from 'react';
 import { Edit, Brain, Download, Maximize, Minimize, ChevronLeft, ChevronRight, ZoomIn, ZoomOut } from 'lucide-react';
+import documindLogoUrl from '../assets/documind-logo-full.svg'; // Remove ?react
 
 interface ToolbarProps {
   onToggleTOC?: () => void;
@@ -68,14 +69,14 @@ const ToolbarInner: React.FC<ToolbarProps & { forwardedRef?: React.Ref<HTMLDivEl
   };
 
   return (
-    <div ref={forwardedRef} className="sticky top-0 z-50 bg-white dark:bg-neutral-900 shadow-md border-b border-neutral-200 dark:border-neutral-700">
-      <div className="flex items-center justify-between px-4 py-2 gap-2">
+    <div ref={forwardedRef} className="sticky top-0 z-50 bg-neutral-25 dark:bg-neutral-800 shadow-md border-b border-neutral-200 dark:border-neutral-700">
+      <div className="flex items-center px-4 py-2 gap-2">
         {/* Left: TOC toggle + Navigation */}
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-1 min-w-0">
           {/* Hamburger / TOC toggle */}
           <button
             onClick={onToggleTOC}
-            className="px-3 py-1.5 bg-neutral-100 text-neutral-800 dark:bg-neutral-800 dark:text-neutral-100 hover:bg-neutral-200 dark:hover:bg-neutral-700 rounded transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400"
+            className="px-3 py-1.5 bg-transparent text-neutral-800 dark:bg-transparent dark:text-neutral-100 hover:bg-neutral-200 dark:hover:bg-neutral-700 active:bg-primary-600 active:text-white rounded transition-colors outline-none focus:outline-none"
             title="Toggle table of contents"
           >
             ☰
@@ -86,7 +87,7 @@ const ToolbarInner: React.FC<ToolbarProps & { forwardedRef?: React.Ref<HTMLDivEl
           <button
             onClick={onPrevPage}
             disabled={currentPage <= 1}
-            className="px-3 py-1.5 bg-neutral-100 text-neutral-800 dark:bg-neutral-800 dark:text-neutral-100 hover:bg-neutral-200 dark:hover:bg-neutral-700 disabled:opacity-50 disabled:cursor-not-allowed rounded transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400"
+            className="px-3 py-1.5 bg-transparent text-neutral-800 dark:bg-transparent dark:text-neutral-100 hover:bg-neutral-200 dark:hover:bg-neutral-700 active:bg-primary-600 active:text-white disabled:opacity-50 disabled:cursor-not-allowed rounded transition-colors outline-none focus:outline-none"
             title="Previous page (← or PgUp)"
           >
             <ChevronLeft size={16} />
@@ -99,7 +100,7 @@ const ToolbarInner: React.FC<ToolbarProps & { forwardedRef?: React.Ref<HTMLDivEl
               max={totalPages}
               value={currentPage}
               onChange={handlePageInput}
-              className="w-16 px-2 py-1 text-center border border-neutral-300 dark:border-neutral-600 rounded bg-white text-neutral-800 dark:bg-neutral-800 dark:text-neutral-100 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400"
+              className="w-16 px-2 py-1 text-center border border-neutral-300 dark:border-neutral-600 rounded bg-white text-neutral-800 dark:bg-neutral-800 dark:text-neutral-100 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:focus:ring-primary-400"
             />
             <span className="text-neutral-600 dark:text-neutral-400">
               / {totalPages}
@@ -109,7 +110,7 @@ const ToolbarInner: React.FC<ToolbarProps & { forwardedRef?: React.Ref<HTMLDivEl
           <button
             onClick={onNextPage}
             disabled={currentPage >= totalPages}
-            className="px-3 py-1.5 bg-neutral-100 text-neutral-800 dark:bg-neutral-800 dark:text-neutral-100 hover:bg-neutral-200 dark:hover:bg-neutral-700 disabled:opacity-50 disabled:cursor-not-allowed rounded transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400"
+            className="px-3 py-1.5 bg-transparent text-neutral-800 dark:bg-transparent dark:text-neutral-100 hover:bg-neutral-200 dark:hover:bg-neutral-700 active:bg-primary-600 active:text-white disabled:opacity-50 disabled:cursor-not-allowed rounded transition-colors outline-none focus:outline-none"
             title="Next page (→ or PgDn)"
           >
             <ChevronRight size={16} />
@@ -117,18 +118,24 @@ const ToolbarInner: React.FC<ToolbarProps & { forwardedRef?: React.Ref<HTMLDivEl
           </div>
         </div>
 
-        {/* Zoom controls */}
-        <div className="flex items-center gap-2">
+        {/* Center: Logo */}
+        <div className="flex justify-center items-center flex-none">
+          <img src={documindLogoUrl} alt="Documind Logo" style={{ height: 32, width: 'auto' }} />
+        </div>
+
+        {/* Right: Zoom, Drawing, Download, etc. */}
+        <div className="flex items-center gap-1 flex-1 min-w-0 justify-end">
+          {/* Zoom controls */}
           <button
             onClick={onZoomOut}
-            className="px-3 py-1.5 bg-neutral-100 text-neutral-800 dark:bg-neutral-800 dark:text-neutral-100 hover:bg-neutral-200 dark:hover:bg-neutral-700 rounded transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400"
+            className="px-3 py-1.5 bg-transparent text-neutral-800 dark:bg-transparent dark:text-neutral-100 hover:bg-neutral-200 dark:hover:bg-neutral-700 active:bg-primary-600 active:text-white rounded transition-colors outline-none focus:outline-none"
             title="Zoom out (Ctrl/Cmd + -)"
           >
             <ZoomOut size={16} />
           </button>
 
           <span
-            className="min-w-[50px] text-center text-sm font-medium text-neutral-700 dark:text-neutral-300"
+            className="min-w-[70px] text-center font-medium text-neutral-700 dark:text-neutral-300"
             title={
               zoom === 'fitWidth' || zoom === 'fitPage'
                 ? `Fit Width: ${Math.round(fitWidthPercent ?? 100)}% — Fit Page: ${Math.round(fitPagePercent ?? 100)}%`
@@ -140,7 +147,7 @@ const ToolbarInner: React.FC<ToolbarProps & { forwardedRef?: React.Ref<HTMLDivEl
 
           <button
             onClick={onZoomIn}
-            className="px-3 py-1.5 bg-neutral-100 text-neutral-800 dark:bg-neutral-800 dark:text-neutral-100 hover:bg-neutral-200 dark:hover:bg-neutral-700 rounded transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400"
+            className="px-3 py-1.5 bg-transparent text-neutral-800 dark:bg-transparent dark:text-neutral-100 hover:bg-neutral-200 dark:hover:bg-neutral-700 active:bg-primary-600 active:text-white rounded transition-colors outline-none focus:outline-none"
             title="Zoom in (Ctrl/Cmd + +)"
           >
             <ZoomIn size={16} />
@@ -154,10 +161,10 @@ const ToolbarInner: React.FC<ToolbarProps & { forwardedRef?: React.Ref<HTMLDivEl
               if (zoom === 'fitWidth') onFitPage();
               else onFitWidth();
             }}
-            className={`px-3 py-1.5 rounded transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400 ${
+            className={`px-3 py-1.5 rounded transition-colors outline-none focus:outline-none ${
               (zoom === 'fitWidth' || zoom === 'fitPage')
-                ? 'bg-blue-600 text-white'
-                : 'bg-neutral-100 text-neutral-800 dark:bg-neutral-800 dark:text-neutral-100 hover:bg-neutral-200 dark:hover:bg-neutral-700'
+                ? 'bg-primary-600 text-white'
+                : 'bg-transparent text-neutral-800 dark:bg-transparent dark:text-neutral-100 hover:bg-neutral-200 dark:hover:bg-neutral-700 active:bg-primary-600 active:text-white'
             }`}
             title={zoom === 'fitWidth' ? 'Switch to Fit Page' : 'Switch to Fit Width'}
           >
@@ -181,10 +188,10 @@ const ToolbarInner: React.FC<ToolbarProps & { forwardedRef?: React.Ref<HTMLDivEl
           <div className="border-l border-neutral-300 dark:border-neutral-600 h-6 mx-1" />
           <button
             onClick={onToggleDrawing}
-            className={`px-3 py-1.5 rounded transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400 ${
+            className={`px-3 py-1.5 rounded transition-colors outline-none focus:outline-none ${
               isDrawingMode
-                ? 'bg-blue-600 text-white hover:bg-blue-700'
-                : 'bg-neutral-100 text-neutral-800 dark:bg-neutral-800 dark:text-neutral-100 hover:bg-neutral-200 dark:hover:bg-neutral-700'
+                ? 'bg-primary-600 text-white'
+                : 'bg-transparent text-neutral-800 dark:bg-transparent dark:text-neutral-100 hover:bg-neutral-200 dark:hover:bg-neutral-700 active:bg-primary-600 active:text-white'
             }`}
             title="Drawing tool"
           >
@@ -195,7 +202,11 @@ const ToolbarInner: React.FC<ToolbarProps & { forwardedRef?: React.Ref<HTMLDivEl
           <div className="border-l border-neutral-300 dark:border-neutral-600 h-6 mx-1" />
           <button
             onClick={onDownload}
-            className="px-3 py-1.5 bg-neutral-100 text-neutral-800 dark:bg-neutral-800 dark:text-neutral-100 hover:bg-neutral-200 dark:hover:bg-neutral-700 rounded transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400"
+            className={`px-3 py-1.5 rounded transition-colors outline-none focus:outline-none ${
+              // If you want download to "stay" primary when pressed, use isDownloadActive state
+              // Otherwise, just use active: styles for press
+              'bg-transparent text-neutral-800 dark:bg-transparent dark:text-neutral-100 hover:bg-neutral-200 dark:hover:bg-neutral-700 active:bg-primary-600 active:text-white'
+            }`}
             title="Download PDF"
           >
             <Download size={16} />
@@ -205,7 +216,7 @@ const ToolbarInner: React.FC<ToolbarProps & { forwardedRef?: React.Ref<HTMLDivEl
           {false && (
             <button
               onClick={onPrint}
-              className="px-3 py-1.5 bg-neutral-100 text-neutral-800 dark:bg-neutral-800 dark:text-neutral-100 hover:bg-neutral-200 dark:hover:bg-neutral-700 rounded transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400"
+              className="px-3 py-1.5 bg-neutral-100 text-neutral-800 dark:bg-neutral-800 dark:text-neutral-100 hover:bg-neutral-200 dark:hover:bg-neutral-700 rounded transition-colors focus:outline-none focus:ring-2 focus:ring-primary-500 dark:focus:ring-primary-400"
               title="Print"
             >
               🖨

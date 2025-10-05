@@ -1,6 +1,6 @@
 import React, { useRef, useState, useEffect } from 'react';
 import { marked } from 'marked';
-import { sendChatQuery } from '../../utils/chatbot-client';
+import { sendChatQuery } from '../utils/chatbot-client';
 import { ArrowLeft } from 'lucide-react';
 
 const BOT_BUTTON_SIZE = 56;
@@ -103,7 +103,7 @@ export const Chatbot: React.FC<ChatbotProps> = ({ docHash, currentPage, onPageNa
         }]);
       }
     } catch (error) {
-      console.error('[Chatbot] Error sending query:', error);
+      console.error('[Teacher Chatbot] Error sending query:', error);
       setMessages((msgs) => [...msgs, { 
         text: 'Sorry, I encountered an error processing your question. Please try again.', 
         sender: 'bot'
@@ -152,8 +152,8 @@ export const Chatbot: React.FC<ChatbotProps> = ({ docHash, currentPage, onPageNa
       {/* Floating Chatbot Button */}
       {!open && (
         <button
-          aria-label="Open chatbot"
-          className="fixed z-50 bottom-6 right-6 bg-blue-600 hover:bg-blue-700 shadow-lg rounded-full flex items-center justify-center"
+          aria-label="Open Teacher"
+          className="fixed z-50 bottom-6 right-6 bg-primary-600 hover:bg-primary-700 shadow-lg rounded-full flex items-center justify-center"
           style={{
             width: BOT_BUTTON_SIZE,
             height: BOT_BUTTON_SIZE,
@@ -166,7 +166,7 @@ export const Chatbot: React.FC<ChatbotProps> = ({ docHash, currentPage, onPageNa
             <path
               d="M4 12c0-3.314 3.134-6 7-6s7 2.686 7 6-3.134 6-7 6c-.69 0-1.36-.08-1.98-.23l-2.52.86a.5.5 0 0 1-.64-.64l.86-2.52C4.08 13.36 4 12.69 4 12z"
               fill="#fff"
-              stroke="#2563eb"
+              stroke="#633CB1"
               strokeWidth="1.5"
             />
           </svg>
@@ -214,16 +214,16 @@ export const Chatbot: React.FC<ChatbotProps> = ({ docHash, currentPage, onPageNa
             }}
           >
           {/* Header */}
-          <div className="flex items-center justify-between px-4 py-3 border-b border-neutral-200 dark:border-neutral-700 bg-blue-600 rounded-t-xl">
+          <div className="flex items-center justify-between px-4 py-3 border-b border-neutral-200 dark:border-neutral-700 bg-primary-600 rounded-t-xl">
             <div className="flex items-center gap-2">
-              <span className="text-white font-semibold text-lg">Chatbot</span>
+              <span className="font-lacquer text-xl text-primary-200">teacher</span>
             </div>
             <button
-              aria-label="Close chatbot"
-              className="text-white hover:bg-blue-700 rounded-full p-1 transition"
+              aria-label="Close Teacher"
+              className="text-white hover:bg-primary-700 rounded-full p-1 transition"
               onClick={() => setOpen(false)}
             >
-              <svg width="22" height="22" viewBox="0 0 20 20" fill="none">
+              <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
                 <path
                   d="M6 6l8 8M6 14L14 6"
                   stroke="currentColor"
@@ -250,7 +250,7 @@ export const Chatbot: React.FC<ChatbotProps> = ({ docHash, currentPage, onPageNa
                 <div
                   className={`rounded-lg px-3 py-2 max-w-[80%] ${
                     msg.sender === 'user'
-                      ? 'bg-blue-600 text-white'
+                      ? 'bg-primary-600 text-white'
                       : 'bg-neutral-200 dark:bg-neutral-700 text-neutral-900 dark:text-neutral-100'
                   }`}
                 >
@@ -306,7 +306,7 @@ export const Chatbot: React.FC<ChatbotProps> = ({ docHash, currentPage, onPageNa
             onSubmit={handleSend}
           >
             <textarea
-              className="flex-1 resize-none rounded-lg border border-neutral-300 dark:border-neutral-700 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-neutral-50 dark:bg-neutral-800 text-neutral-900 dark:text-neutral-100"
+              className="flex-1 resize-none rounded-lg border border-neutral-300 dark:border-neutral-700 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary-500 bg-neutral-50 dark:bg-neutral-800 text-neutral-900 dark:text-neutral-100"
               rows={1}
               placeholder="Type your message…"
               value={input}
@@ -316,11 +316,11 @@ export const Chatbot: React.FC<ChatbotProps> = ({ docHash, currentPage, onPageNa
             />
             <button
               type="submit"
-              className="bg-blue-600 hover:bg-blue-700 text-white rounded-lg px-4 py-2 font-semibold transition disabled:opacity-60"
+              className="font-lacquer bg-primary-600 hover:bg-primary-700 text-primary-200 rounded-lg px-4 py-2 font-semibold transition disabled:opacity-60"
               disabled={input.trim() === '' || loading}
               tabIndex={0}
             >
-              {loading ? 'Sending...' : 'Send'}
+              {loading ? 'sending...' : 'send'}
             </button>
           </form>
 
