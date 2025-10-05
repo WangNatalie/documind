@@ -28,6 +28,7 @@ import {
 import { readOPFSFile } from "../db/opfs";
 import ContextMenu from "./ContextMenu";
 import { requestGeminiChunking, requestEmbeddings, requestTOC } from "../utils/chunker-client";
+import { Chatbot } from './chatbot/Chatbot';
 import { buildTOCTree } from "../utils/toc";
 import { TOC } from "./TOC";
 import { DrawingToolbar } from "./DrawingToolbar";
@@ -104,6 +105,28 @@ export const ViewerApp: React.FC = () => {
   const [pageDrawings, setPageDrawings] = useState<Map<number, DrawingStroke[]>>(new Map());
   const [drawingHistory, setDrawingHistory] = useState<Map<number, DrawingStroke[][]>>(new Map());
   const [drawingHistoryIndex, setDrawingHistoryIndex] = useState<Map<number, number>>(new Map());
+  // Term summaries state
+  interface TermSummary {
+    term: string;
+    definition: string;
+    explanation1: string;
+    explanation2: string;
+    explanation3: string;
+    tocItem: { title: string; page: number; chunkId?: string } | null;
+    matchedChunkId?: string;
+  }
+
+  // Cache term summaries for current ±1 pages with timestamps
+  interface PageTermCache {
+    page: number;
+    summaries: TermSummary[];
+    lastVisibleTime: number;
+  }
+  const [termCache, setTermCache] = useState<Map<number, PageTermCache>>(new Map());
+  const [selectedTerm, setSelectedTerm] = useState<TermSummary | null>(null);
+  const [termPopupPosition, setTermPopupPosition] = useState<{ x: number; y: number } | null>(null);
+  const [termSourceRects, setTermSourceRects] = useState<Array<{ top: number; left: number; width: number; height: number }>>([]);
+  const [termSourcePage, setTermSourcePage] = useState<number>(1);
 
   // Parse URL params
   const params = new URLSearchParams(window.location.search);
@@ -112,9 +135,28 @@ export const ViewerApp: React.FC = () => {
   // Keep filename in state so we can update it after reading PDF metadata
   const [fileName, setFileName] = useState<string>(params.get("name") || "document.pdf");
 
-  // Listen for state requests from background
+  // Listen for state requests and term summaries from background
   useEffect(() => {
     const handleMessage = (message: any) => {
+      if (message.type === 'TERM_SUMMARIES_READY') {
+        // Received term summaries from background script
+        const { summaries, currentPage: summariesPage } = message.payload;
+        console.log('[VIEWER] Received term summaries:', summaries);
+        console.log('[VIEWER] Caching term summaries, count:', summaries?.length || 0, 'for page:', summariesPage);
+
+        // Add to cache with current timestamp
+        setTermCache(prev => {
+          const newCache = new Map(prev);
+          newCache.set(summariesPage, {
+            page: summariesPage,
+            summaries: summaries || [],
+            lastVisibleTime: Date.now(),
+          });
+          return newCache;
+        });
+        return;
+      }
+
       if (message.type === 'REQUEST_VIEWER_STATE') {
         // Extract text from visible pages
         let visibleText = '';
@@ -173,6 +215,124 @@ export const ViewerApp: React.FC = () => {
       chrome.runtime.onMessage.removeListener(handleMessage);
     };
   }, [docHash, fileName, currentPage, pages.length, zoom]);
+
+  // Get active term summaries from cache for currently visible pages
+  const activeTermSummaries = React.useMemo(() => {
+    const allSummaries: TermSummary[] = [];
+    for (const pageNum of visiblePages) {
+      const cached = termCache.get(pageNum);
+      if (cached) {
+        allSummaries.push(...cached.summaries);
+      }
+    }
+    return allSummaries;
+  }, [termCache, visiblePages]);
+
+  // Clean up cache: remove entries for pages that haven't been visible for 10 seconds
+  useEffect(() => {
+    const cleanupInterval = setInterval(() => {
+      const now = Date.now();
+      const TEN_SECONDS = 10000;
+
+      setTermCache(prev => {
+        const newCache = new Map(prev);
+        let cleaned = false;
+
+        for (const [pageNum, cache] of newCache.entries()) {
+          // If page is not currently visible and hasn't been for 10 seconds, remove it
+          if (!visiblePages.has(pageNum) && (now - cache.lastVisibleTime) > TEN_SECONDS) {
+            console.log(`[VIEWER] Cleaning up cache for page ${pageNum} (not visible for >10s)`);
+            newCache.delete(pageNum);
+            cleaned = true;
+          }
+        }
+
+        return cleaned ? newCache : prev;
+      });
+    }, 2000); // Check every 2 seconds
+
+    return () => clearInterval(cleanupInterval);
+  }, [visiblePages]);
+
+  // Update lastVisibleTime for pages that are currently visible
+  // Also request terms for visible pages that don't have cache entries
+  useEffect(() => {
+    const now = Date.now();
+    setTermCache(prev => {
+      const newCache = new Map(prev);
+      let updated = false;
+
+      for (const pageNum of visiblePages) {
+        const cached = newCache.get(pageNum);
+        if (cached) {
+          cached.lastVisibleTime = now;
+          updated = true;
+        } else {
+          // Cache miss - request terms for this page
+          console.log(`[VIEWER] Cache miss for page ${pageNum}, requesting terms from background`);
+          chrome.runtime.sendMessage({
+            type: 'REQUEST_PAGE_TERMS',
+            payload: { page: pageNum, docHash }
+          }).catch(err => console.error('Failed to request page terms:', err));
+        }
+      }
+
+      return updated ? new Map(newCache) : prev;
+    });
+  }, [visiblePages, docHash]);
+
+  // Helper function to calculate popup position - always snaps to right edge
+  const calculatePopupPosition = useCallback((_x: number, _y: number): { x: number; y: number } => {
+    // Estimated popup dimensions (max-w-md = 448px, approximate height)
+    const POPUP_WIDTH = 448;
+    const POPUP_HEIGHT = 300; // Approximate based on content
+    const MARGIN = 16; // Margin from viewport edge
+
+    const viewportWidth = window.innerWidth;
+    const viewportHeight = window.innerHeight;
+
+    // Always snap to right edge
+    const adjustedX = viewportWidth - POPUP_WIDTH - MARGIN;
+
+    // Center vertically in viewport
+    let adjustedY = (viewportHeight - POPUP_HEIGHT) / 2;
+
+    // Make sure it doesn't go off top or bottom
+    if (adjustedY < MARGIN) {
+      adjustedY = MARGIN;
+    } else if (adjustedY + POPUP_HEIGHT + MARGIN > viewportHeight) {
+      adjustedY = viewportHeight - POPUP_HEIGHT - MARGIN;
+    }
+
+    console.log('[calculatePopupPosition] Snapping to right edge:', { adjustedX, adjustedY }, 'Viewport:', { viewportWidth, viewportHeight });
+
+    return { x: adjustedX, y: adjustedY };
+  }, []);
+
+  // Close popup when clicking outside
+  useEffect(() => {
+    if (!selectedTerm) return;
+
+    const handleClickOutside = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      // Check if click is outside the popup and not on a term highlight
+      if (!target.closest('[data-term-popup]') && !target.closest('[data-term-highlight]')) {
+        console.log('[App] Clicking outside popup, closing');
+        setSelectedTerm(null);
+        setTermPopupPosition(null);
+      }
+    };
+
+    // Use timeout to avoid catching the same click that opened the popup
+    const timeoutId = setTimeout(() => {
+      document.addEventListener('click', handleClickOutside);
+    }, 100);
+
+    return () => {
+      clearTimeout(timeoutId);
+      document.removeEventListener('click', handleClickOutside);
+    };
+  }, [selectedTerm]);
 
   // Load PDF on mount
   useEffect(() => {
@@ -653,6 +813,78 @@ export const ViewerApp: React.FC = () => {
 
   // Handle context menu actions (note creation, comment, etc.)
   const handleContextAction = async (action: string) => {
+    if (action === "explain") {
+      // Get selected text and request summary
+      const sel = window.getSelection();
+      if (!sel || sel.rangeCount === 0) return;
+      const selectedText = sel.toString().trim();
+      if (!selectedText) return;
+
+      const range = sel.getRangeAt(0);
+      const rects = Array.from(range.getClientRects()).map((r) => ({
+        top: r.top,
+        left: r.left,
+        width: r.width,
+        height: r.height,
+      }));
+      const first = rects[0];
+      if (!first) return;
+
+      // Find which page this selection is on and get normalized coordinates
+      const pageEl = document
+        .elementFromPoint(first.left + 1, first.top + 1)
+        ?.closest("[data-page-num]") as HTMLElement | null;
+
+      if (!pageEl) return;
+
+      const pageNum = parseInt(pageEl.getAttribute("data-page-num") || "0", 10);
+      const pageBox = pageEl.getBoundingClientRect();
+
+      // Normalize rects to fractions of page width/height so notes scale with zoom
+      const normalizedRects = rects.map((r) => ({
+        top: (r.top - pageBox.top) / pageBox.height,
+        left: (r.left - pageBox.left) / pageBox.width,
+        width: r.width / pageBox.width,
+        height: r.height / pageBox.height,
+      }));
+
+      console.log('[App] AI Explanation requested for text:', selectedText, 'on page:', pageNum);
+
+      try {
+        // Send message to background script to summarize the selected text
+        const response = await chrome.runtime.sendMessage({
+          type: 'EXPLAIN_SELECTION',
+          payload: {
+            text: selectedText,
+            docHash
+          }
+        });
+
+        console.log('[App] Received response from background:', response);
+
+        if (response && response.success && response.summary) {
+          console.log('[App] Received explanation:', response.summary);
+
+          // Display the summary in the term popup with adjusted position
+          setSelectedTerm(response.summary);
+          setTermSourceRects(normalizedRects);
+          setTermSourcePage(pageNum);
+          const adjustedPos = calculatePopupPosition(first.left, first.top + first.height);
+          setTermPopupPosition(adjustedPos);
+        } else {
+          console.error('[App] Failed to get explanation:', response?.error || 'No response received');
+          // Show error to user
+          alert(`Failed to generate explanation: ${response?.error || 'No response received'}`);
+        }
+      } catch (error) {
+        console.error('[App] Error requesting explanation:', error);
+        alert(`Error requesting explanation: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      }
+
+      setContextVisible(false);
+      return;
+    }
+
     if (action === "comment") {
       // Open a small input anchored to the selection
       const sel = window.getSelection();
@@ -1057,6 +1289,110 @@ export const ViewerApp: React.FC = () => {
 
   // Ref for print handler so keyboard effect can call it without ordering issues
   const handlePrintRef = useRef<(() => Promise<void>) | null>(null);
+
+  // Handler to save term summary as a note
+  const handleSaveTermAsNote = useCallback(async (termSummary: TermSummary) => {
+    try {
+      // Format the note text with term definition and key points
+      const noteText = `📖 ${termSummary.term}
+
+Definition: ${termSummary.definition}
+
+Key Points:
+• ${termSummary.explanation1}
+• ${termSummary.explanation2}
+• ${termSummary.explanation3}`;
+
+      // Use the page where the term was clicked/selected, not where the context is
+      const notePage = termSourcePage || currentPage;
+
+      // Use the rectangles where the term was found, or create a small indicator
+      const noteRects = termSourceRects.length > 0 ? termSourceRects : [{
+        top: 0.02,    // 2% from top
+        left: 0.02,   // 2% from left
+        width: 0.06,  // 6% of page width (small indicator)
+        height: 0.03, // 3% of page height
+      }];
+
+      // Create note with the rectangles from the term location
+      const noteId = `${docHash}:${notePage}:${Date.now()}`;
+      const newNote = {
+        id: noteId,
+        docHash,
+        page: notePage,
+        rects: noteRects,
+        color: 'yellow', // Default color
+        text: noteText,
+        createdAt: Date.now(),
+      };
+
+      await putNote(newNote);
+      setNotes((prev) => [...prev, newNote]);
+
+      console.log('[App] Saved term summary as note on page', notePage, ':', termSummary.term, 'with rects:', noteRects);
+
+      // Close the popup after saving
+      setSelectedTerm(null);
+      setTermPopupPosition(null);
+      setTermSourceRects([]);
+      setTermSourcePage(1);
+
+      // Optional: show a brief success message
+      // You could add a toast notification here if you have that component
+    } catch (err) {
+      console.error('[App] Failed to save term as note:', err);
+      alert('Failed to save note. Please try again.');
+    }
+  }, [docHash, currentPage, termSourceRects, termSourcePage]);
+
+  // Keyboard navigation and ctrl+scroll zoom
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const isMod = e.ctrlKey || e.metaKey;
+
+      // Intercept Ctrl/Cmd+P to use in-app printing flow
+      if (isMod && (e.key === 'p' || e.key === 'P')) {
+        e.preventDefault();
+        // call print handler via ref (may be set after effect declared)
+        (async () => {
+          try {
+            const fn = handlePrintRef.current;
+            if (fn) await fn();
+            else console.warn('Print handler not ready');
+          } catch (err) {
+            console.error('Error running in-app print', err);
+          }
+        })();
+        return;
+      }
+
+      if (e.key === "ArrowLeft" || e.key === "PageUp") {
+        e.preventDefault();
+        handlePrevPage();
+      } else if (e.key === "ArrowRight" || e.key === "PageDown") {
+        e.preventDefault();
+        handleNextPage();
+      } else if (isMod && e.key === "+") {
+        e.preventDefault();
+        handleZoomIn();
+      } else if (isMod && e.key === "-") {
+        e.preventDefault();
+        handleZoomOut();
+      } else if (isMod && e.key === "0") {
+        e.preventDefault();
+        setZoom("fitWidth");
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      // Cancel any pending zoom animation
+      if (pendingZoomRef.current !== null) {
+        cancelAnimationFrame(pendingZoomRef.current);
+      }
+    };
+  }, [handlePrevPage, handleNextPage, handleZoomIn, handleZoomOut]);
 
     // Note handlers
     const handleNoteDelete = useCallback(async (id: string) => {
@@ -1696,6 +2032,15 @@ export const ViewerApp: React.FC = () => {
                 drawingStrokes={pageDrawings.get(pageNum) || []}
                 onDrawingStrokesChange={(strokes) => handleDrawingStrokesChange(pageNum, strokes)}
                 isEraserMode={isEraserMode}
+                termSummaries={activeTermSummaries}
+                onTermClick={(term, x, y, rects) => {
+                  console.log('[App] onTermClick called:', term.term, { x, y, rects, pageNum });
+                  setSelectedTerm(term);
+                  setTermSourceRects(rects);
+                  setTermSourcePage(pageNum);
+                  const adjustedPos = calculatePopupPosition(x, y);
+                  setTermPopupPosition(adjustedPos);
+                }}
               />
               );
             });
@@ -1818,6 +2163,89 @@ export const ViewerApp: React.FC = () => {
         y={contextPos.y}
         onSelect={(a) => handleContextAction(a)}
       />
+
+      <Chatbot docHash={docHash} />
+
+      {/* Term summary popup */}
+      {selectedTerm && termPopupPosition && (
+        <div
+          data-term-popup
+          className="fixed z-[100] bg-white dark:bg-neutral-800 border-2 border-blue-500 rounded-lg shadow-2xl p-4 max-w-md"
+          style={{
+            left: `${termPopupPosition.x}px`,
+            top: `${termPopupPosition.y}px`,
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="flex justify-between items-start mb-3">
+            <h3 className="text-lg font-bold text-neutral-900 dark:text-neutral-100">
+              {selectedTerm.term}
+            </h3>
+            <button
+              onClick={() => {
+                setSelectedTerm(null);
+                setTermPopupPosition(null);
+              }}
+              className="text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300"
+              title="Close"
+            >
+              ✕
+            </button>
+          </div>
+
+          <div className="mb-3">
+            <p className="text-sm font-semibold text-neutral-700 dark:text-neutral-300 mb-1">
+              Definition:
+            </p>
+            <p className="text-sm text-neutral-900 dark:text-neutral-100">
+              {selectedTerm.definition}
+            </p>
+          </div>
+
+          {(selectedTerm.explanation1 || selectedTerm.explanation2 || selectedTerm.explanation3) && (
+            <div className="mb-3">
+              <p className="text-sm font-semibold text-neutral-700 dark:text-neutral-300 mb-1">
+                Key Points:
+              </p>
+              <ul className="list-disc list-inside text-sm text-neutral-900 dark:text-neutral-100 space-y-1">
+                {selectedTerm.explanation1 && <li>{selectedTerm.explanation1}</li>}
+                {selectedTerm.explanation2 && <li>{selectedTerm.explanation2}</li>}
+                {selectedTerm.explanation3 && <li>{selectedTerm.explanation3}</li>}
+              </ul>
+            </div>
+          )}
+
+          {selectedTerm.tocItem && (
+            <div className="mb-2 text-sm text-neutral-600 dark:text-neutral-400">
+              <span className="font-semibold">Section: </span>
+              {selectedTerm.tocItem.title} (Page {selectedTerm.tocItem.page})
+            </div>
+          )}
+
+          <div className="mt-3 pt-3 border-t border-neutral-200 dark:border-neutral-700 flex gap-2">
+            <button
+              onClick={() => handleSaveTermAsNote(selectedTerm)}
+              className="px-3 py-1.5 text-sm bg-green-500 hover:bg-green-600 text-white rounded"
+              title="Save this explanation as a note"
+            >
+              Save as Note
+            </button>
+            {selectedTerm.matchedChunkId && (
+              <button
+                onClick={() => {
+                  // Navigate to the chunk's page if available
+                  if (selectedTerm.tocItem?.page) {
+                    scrollToPage(selectedTerm.tocItem.page);
+                  }
+                }}
+                className="px-3 py-1.5 text-sm bg-blue-500 hover:bg-blue-600 text-white rounded"
+              >
+                Go to Context
+              </button>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 };

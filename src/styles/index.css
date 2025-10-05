@@ -56,7 +56,33 @@ body {
   background: rgba(0, 123, 255, 0.3);
 }
 
-/* Custom scrollbars (global) */
+/* Chatbot animations */
+.chatbot-animate-in {
+  animation: chatbot-in 0.2s cubic-bezier(.4,0,.2,1);
+}
+.chatbot-animate-out {
+  animation: chatbot-out 0.22s cubic-bezier(.4,0,.2,1) forwards;
+}
+@keyframes chatbot-in {
+  from {
+    opacity: 0;
+    transform: translateY(40px) scale(0.8);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+@keyframes chatbot-out {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(70px) translateX(60px) scale(0.6);
+  }
+}/* Custom scrollbars (global) */
 :root {
   /* stronger default for better contrast */
   --scroll-thumb: rgba(255, 255, 255, 0.452);

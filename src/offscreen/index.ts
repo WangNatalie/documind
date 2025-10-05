@@ -154,6 +154,22 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
   
+  if (message.type === 'CHAT_QUERY') {
+    const { query, docHash } = message.payload;
+    console.log(`Received CHAT_QUERY request for query: "${query.substring(0, 50)}..."`);
+    
+    import('./chatbot.js').then(async (chatbot) => {
+      const result = await chatbot.generateChatResponse(query, docHash);
+      console.log(`Generated chat response (${result.response.length} chars) with ${result.sources.length} sources`);
+      sendResponse({ success: true, result });
+    }).catch((error: Error) => {
+      console.error('Error generating chat response:', error);
+    });
+    
+    // Return true to indicate we'll send response asynchronously
+    return true;
+  }
+
   if (message.type === 'EXTRACT_TERMS') {
     const { passage } = message.payload;
     console.log(`Received EXTRACT_TERMS request for passage (${passage.length} chars)`);
@@ -198,6 +214,23 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       sendResponse({ success: true, summaries });
     }).catch((error: Error) => {
       console.error('Error summarizing terms:', error);
+      sendResponse({ success: false, error: error.message });
+    });
+    
+    // Return true to indicate we'll send response asynchronously
+    return true;
+  }
+  
+  if (message.type === 'EXPLAIN_SELECTION_TEXT') {
+    const { text, docHash } = message.payload;
+    console.log(`Received EXPLAIN_SELECTION_TEXT request for text: "${text.substring(0, 50)}..."`);
+    
+    import('./term-extractor.js').then(async (extractor) => {
+      const summary = await extractor.explainSelectedText(text, docHash);
+      console.log(`Generated summary for selected text`);
+      sendResponse({ success: true, summary });
+    }).catch((error: Error) => {
+      console.error('Error summarizing selected text:', error);
       sendResponse({ success: false, error: error.message });
     });
     

@@ -18,8 +18,11 @@ interface ViewerState {
 
 const viewerStates = new Map<number, ViewerState>();
 
-// Track the last visible text for each tab to avoid re-processing unchanged text
-const lastVisibleText = new Map<number, string>();
+// Track the last page that had terms extracted for each tab
+const lastExtractedPage = new Map<number, number>();
+
+// Track pages that have been processed (to avoid re-processing)
+const processedPages = new Map<number, Set<number>>(); // tabId -> Set of page numbers
 
 // Intercept PDF navigation and redirect to our viewer
 // Using onCommitted instead of onBeforeNavigate for earlier interception
@@ -79,14 +82,15 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     });
 
     // Clean up states for closed tabs
-    const activeTabs = new Set(tabs.map(t => t.id));
-    for (const [tabId] of viewerStates) {
-      if (!activeTabs.has(tabId)) {
-        viewerStates.delete(tabId);
-        lastVisibleText.delete(tabId);
-        console.log(`[trackViewerState] Removed state for closed tab ${tabId}`);
+      const activeTabs = new Set(tabs.map(t => t.id));
+      for (const [tabId] of viewerStates) {
+        if (!activeTabs.has(tabId)) {
+          viewerStates.delete(tabId);
+          lastExtractedPage.delete(tabId);
+          processedPages.delete(tabId);
+          console.log(`[trackViewerState] Removed state for closed tab ${tabId}`);
+        }
       }
-    }
 
     // Request state from each viewer tab
     for (const tab of tabs) {
@@ -162,6 +166,38 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message.type === 'REQUEST_PAGE_TERMS') {
+    // Viewer is requesting terms for a specific page (cache miss)
+    const { page, docHash } = message.payload;
+    const tabId = sender.tab?.id;
+
+    if (tabId) {
+      console.log(`[REQUEST_PAGE_TERMS] Viewer requesting terms for page ${page}`);
+
+      // Remove this page from processed set to allow re-processing
+      const processedSet = processedPages.get(tabId);
+      if (processedSet) {
+        processedSet.delete(page);
+      }
+
+      // Get the viewer state to extract text
+      const state = viewerStates.get(tabId);
+      if (state && state.docHash === docHash) {
+        // If this is the current page, process it immediately
+        if (state.currentPage === page && state.visibleText) {
+          processPageTerms(tabId, page, state);
+        } else {
+          // For other pages, we'd need to request their text
+          // For now, just re-trigger state request which will process current page
+          chrome.tabs.sendMessage(tabId, { type: 'REQUEST_VIEWER_STATE' }).catch(err => {
+            console.error('Failed to request viewer state:', err);
+          });
+        }
+      }
+    }
+    return false;
+  }
+
   if (message.type === 'UPDATE_VIEWER_STATE') {
     // Update the stored state for this viewer tab
     const tabId = sender.tab?.id;
@@ -178,13 +214,41 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       };
       viewerStates.set(tabId, state);
 
-      // Extract terms from visible text only if it has changed
+      // Extract terms only when the current page changes (real page transition)
       if (state.visibleText && state.visibleText.length > 0) {
-        const previousText = lastVisibleText.get(tabId);
-        if (previousText !== state.visibleText) {
-          console.log(`[UPDATE_VIEWER_STATE] Visible text changed for tab ${tabId}, extracting terms`);
-          lastVisibleText.set(tabId, state.visibleText);
-          extractTermsFromText(state.visibleText, tabId, state.fileName, state.currentPage, state.docHash);
+        const previousPage = lastExtractedPage.get(tabId);
+        if (previousPage !== state.currentPage) {
+          console.log(`[UPDATE_VIEWER_STATE] Page changed from ${previousPage || 'none'} to ${state.currentPage} for tab ${tabId}`);
+          lastExtractedPage.set(tabId, state.currentPage);
+
+          // Initialize processed pages set if needed
+          if (!processedPages.has(tabId)) {
+            processedPages.set(tabId, new Set());
+          }
+
+          // Clean up processed pages cache: only keep current ±2 pages to save memory
+          const pagesToKeep = new Set<number>();
+          for (let i = Math.max(1, state.currentPage - 2); i <= Math.min(state.totalPages, state.currentPage + 2); i++) {
+            pagesToKeep.add(i);
+          }
+
+          const processedSet = processedPages.get(tabId)!;
+          for (const page of Array.from(processedSet)) {
+            if (!pagesToKeep.has(page)) {
+              processedSet.delete(page);
+            }
+          }
+
+          // Process current page first (priority)
+          processPageTerms(tabId, state.currentPage, state);
+
+          // Pre-process adjacent pages (prev and next) for caching
+          if (state.currentPage > 1) {
+            processPageTerms(tabId, state.currentPage - 1, state, true);
+          }
+          if (state.currentPage < state.totalPages) {
+            processPageTerms(tabId, state.currentPage + 1, state, true);
+          }
         }
       }
     }
@@ -192,13 +256,141 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     sendResponse({ success: true });
     return true; // Indicate async response
   }
+
+  if (message.type === 'EXPLAIN_SELECTION') {
+    // Handle summarize selection from context menu
+    const { text, docHash } = message.payload;
+    console.log(`[EXPLAIN_SELECTION] Received request for text: "${text.substring(0, 50)}..."`);
+
+    // Handle async operation properly
+    (async () => {
+      try {
+        // Ensure offscreen document exists
+        let offscreenExists = false;
+        try {
+          const existingContexts = await chrome.runtime.getContexts({
+            contextTypes: ['OFFSCREEN_DOCUMENT' as chrome.runtime.ContextType],
+            documentUrls: [chrome.runtime.getURL('offscreen.html')]
+          });
+          offscreenExists = existingContexts.length > 0;
+        } catch (err) {
+          console.log('[EXPLAIN_SELECTION] Error checking offscreen context:', err);
+        }
+
+        if (!offscreenExists) {
+          console.log('[EXPLAIN_SELECTION] Creating offscreen document...');
+          await chrome.offscreen.createDocument({
+            url: 'offscreen.html',
+            reasons: ['DOM_SCRAPING' as chrome.offscreen.Reason],
+            justification: 'Generate AI explanation for selected text'
+          });
+        }
+
+        // Send message to offscreen document to explain the selection
+        const response = await chrome.runtime.sendMessage({
+          type: 'EXPLAIN_SELECTION_TEXT',
+          payload: { text, docHash }
+        });
+
+        if (response && response.success && response.summary) {
+          console.log('[EXPLAIN_SELECTION] Successfully generated explanation');
+          sendResponse({ success: true, summary: response.summary });
+        } else {
+          console.error('[EXPLAIN_SELECTION] Failed to generate explanation:', response?.error);
+          sendResponse({ success: false, error: response?.error || 'Unknown error' });
+        }
+      } catch (error: any) {
+        console.error('[EXPLAIN_SELECTION] Error:', error);
+        sendResponse({ success: false, error: error.message || 'Unknown error' });
+      }
+    })().catch((error) => {
+      console.error('[EXPLAIN_SELECTION] Unhandled error:', error);
+      sendResponse({ success: false, error: error.message || 'Unknown error' });
+    });
+
+    return true; // Indicate async response
+  }
+
+  if (message.type === 'CHAT_QUERY') {
+    const { query, docHash } = message.payload;
+    console.log(`[background] Received CHAT_QUERY for query: "${query.substring(0, 50)}..."`);
+
+    (async () => {
+      try {
+        // Ensure offscreen document exists
+        let offscreenExists = false;
+        try {
+          const existingContexts = await chrome.runtime.getContexts({
+            contextTypes: ['OFFSCREEN_DOCUMENT' as chrome.runtime.ContextType],
+            documentUrls: [chrome.runtime.getURL('offscreen.html')]
+          });
+          offscreenExists = existingContexts.length > 0;
+        } catch (err) {
+          console.log('[background] Error checking offscreen context:', err);
+        }
+
+        if (!offscreenExists) {
+          console.log('[background] Creating offscreen document for chat query...');
+          await chrome.offscreen.createDocument({
+            url: 'offscreen.html',
+            reasons: ['DOM_SCRAPING' as chrome.offscreen.Reason],
+            justification: 'Generate AI chat response with document context'
+          });
+        }
+
+        // Forward to offscreen document
+        const response = await chrome.runtime.sendMessage({
+          type: 'CHAT_QUERY',
+          payload: { query, docHash }
+        });
+
+        if (response && response.success) {
+          console.log('[background] Chat query successful');
+          sendResponse({ success: true, result: response.result });
+        } else {
+          console.error('[background] Chat query failed:', response?.error);
+          sendResponse({ success: false, error: response?.error || 'Unknown error' });
+        }
+      } catch (error: any) {
+        console.error('[background] Error processing chat query:', error);
+        sendResponse({ success: false, error: error.message || 'Unknown error' });
+      }
+    })();
+
+    return true; // Indicate async response
+  }
 });
 
-// Helper function to extract terms using offscreen document
-async function extractTermsFromText(passage: string, tabId: number, fileName: string, currentPage: number, docHash: string) {
-  try {
-    console.log(`[extractTerms] Extracting terms for tab ${tabId}, page ${currentPage}`);
+// Helper function to process terms for a specific page
+async function processPageTerms(tabId: number, pageNum: number, state: ViewerState, isAdjacentPage: boolean = false) {
+  const pageSet = processedPages.get(tabId);
+  if (!pageSet) return;
 
+  // Skip if this page has already been processed
+  if (pageSet.has(pageNum)) {
+    console.log(`[processPageTerms] Page ${pageNum} already processed for tab ${tabId}, skipping`);
+    return;
+  }
+
+  // Mark as processed
+  pageSet.add(pageNum);
+
+  // For current page, use existing visible text
+  // For adjacent pages, we'd need to request their text - for now, we'll skip adjacent if no text
+  if (pageNum === state.currentPage && state.visibleText) {
+    const priority = isAdjacentPage ? 'adjacent' : 'current';
+    console.log(`[processPageTerms] Processing ${priority} page ${pageNum} for tab ${tabId}`);
+    await extractTermsFromText(state.visibleText, state.fileName, pageNum, state.docHash);
+  } else if (isAdjacentPage) {
+    // For adjacent pages, we could request text from the viewer
+    // For now, we'll just log and skip
+    console.log(`[processPageTerms] Skipping adjacent page ${pageNum} (would need to request text from viewer)`);
+  }
+}
+
+// Helper function to extract terms using offscreen document
+async function extractTermsFromText(passage: string, fileName: string, currentPage: number, docHash: string) {
+  try {
     // Ensure offscreen document exists
     let offscreenExists = false;
     try {
@@ -231,9 +423,8 @@ async function extractTermsFromText(passage: string, tabId: number, fileName: st
     });
 
     if (response.success && response.result) {
-      console.log(`[extractTerms] Successfully extracted terms for "${fileName}" page ${currentPage}:`);
+      console.log(`[extractTerms] Successfully extracted ${response.result.terms.length} terms for "${fileName}" page ${currentPage}:`);
       console.log(`  Terms: ${response.result.terms.join(', ')}`);
-      console.log(`  Total terms: ${response.result.terms.length}`);
 
       // Find sections for each term
       if (response.result.terms.length > 0) {
@@ -260,7 +451,10 @@ async function findSectionsForTerms(terms: string[], docHash: string, fileName: 
 
     if (response.success && response.results) {
       if (response.results.length > 0) {
-        console.log(`[findSections] Successfully found sections for "${fileName}" page ${currentPage}:`);
+        // Summary
+        const termsWithSections = response.results.filter((r: any) => r.tocItem).length;
+        const termsWithChunks = response.results.filter((r: any) => r.matchedChunkId).length;
+        console.log(`[findSections] Found sections for ${termsWithSections}/${terms.length} terms (${termsWithChunks} with chunk context)`);
       } else {
         console.log(`[findSections] No sections found for "${fileName}" page ${currentPage}`);
       }
@@ -275,11 +469,6 @@ async function findSectionsForTerms(terms: string[], docHash: string, fileName: 
         }
       }
 
-      // Summary
-      const termsWithSections = response.results.filter((r: any) => r.tocItem).length;
-      const termsWithChunks = response.results.filter((r: any) => r.matchedChunkId).length;
-      console.log(`[findSections] Found sections for ${termsWithSections}/${terms.length} terms (${termsWithChunks} with chunk context)`);
-
       // Generate summaries for all terms
       await summarizeTerms(response.results, docHash, fileName, currentPage);
     } else {
@@ -293,8 +482,6 @@ async function findSectionsForTerms(terms: string[], docHash: string, fileName: 
 // Helper function to generate summaries for terms
 async function summarizeTerms(termsWithSections: any[], docHash: string, fileName: string, currentPage: number) {
   try {
-    console.log(`[summarize] Generating summaries for ${termsWithSections.length} terms in "${fileName}" page ${currentPage}`);
-
     // Send message to offscreen document to generate summaries
     const response = await chrome.runtime.sendMessage({
       type: 'SUMMARIZE_TERMS',
@@ -303,7 +490,6 @@ async function summarizeTerms(termsWithSections: any[], docHash: string, fileNam
 
     if (response.success && response.summaries) {
       console.log(`[summarize] Successfully generated summaries for "${fileName}" page ${currentPage}:`);
-      console.log('═══════════════════════════════════════════════════════');
 
       // Log each term summary
       for (const summary of response.summaries) {
@@ -321,8 +507,24 @@ async function summarizeTerms(termsWithSections: any[], docHash: string, fileNam
         console.log(`   3. ${summary.explanation3}`);
       }
 
-      console.log('\n═══════════════════════════════════════════════════════');
-      console.log(`[summarize] Generated ${response.summaries.length} summaries`);
+      // Send summaries to the viewer tab for display
+      const viewerTab = Array.from(viewerStates.entries()).find(
+        ([_, state]) => state.docHash === docHash
+      );
+
+      if (viewerTab) {
+        const [tabId] = viewerTab;
+        try {
+          await chrome.tabs.sendMessage(tabId, {
+            type: 'TERM_SUMMARIES_READY',
+            payload: { summaries: response.summaries, currentPage }
+          });
+          console.log(`[summarize] Sent ${response.summaries.length} summaries to tab ${tabId}`);
+        } catch (error) {
+          console.error(`[summarize] Failed to send summaries to tab ${tabId}:`, error);
+        }
+      }
+
     } else {
       console.warn('[summarize] Failed to generate summaries:', response.error);
     }
