@@ -597,7 +597,7 @@ export const Page: React.FC<PageProps> = ({
                       }
                       setEditingNoteId(null);
                     }}
-                    className="px-2 py-1 text-xs bg-blue-500 hover:bg-blue-600 text-white rounded"
+                    className="px-2 py-1 text-xs bg-primary-500 hover:bg-primary-600 text-white rounded"
                     title="Save"
                   >
                     ✓
@@ -629,7 +629,7 @@ export const Page: React.FC<PageProps> = ({
                       setEditingNoteId(n.id);
                       setEditingNoteText(n.text || "");
                     }}
-                    className="p-0.5 text-xs bg-blue-500 hover:bg-blue-600 text-white rounded"
+                    className="p-0.5 text-xs bg-primary-500 hover:bg-primary-600 text-white rounded"
                     title="Edit note"
                   >
                     ✎
@@ -729,7 +729,7 @@ export const Page: React.FC<PageProps> = ({
                           }
                           setEditingCommentId(null);
                         }}
-                        className="flex-1 px-2 py-1 text-xs bg-blue-500 hover:bg-blue-600 text-white rounded"
+                        className="flex-1 px-2 py-1 text-xs bg-primary-500 hover:bg-primary-600 text-white rounded"
                         title="Save (Ctrl+Enter)"
                       >
                         Save
@@ -752,7 +752,7 @@ export const Page: React.FC<PageProps> = ({
                           setEditingCommentId(c.id);
                           setEditingCommentText(c.text);
                         }}
-                        className="flex-1 px-2 py-1 text-xs bg-blue-500 hover:bg-blue-600 text-white rounded"
+                        className="flex-1 px-2 py-1 text-xs bg-primary-500 hover:bg-primary-600 text-white rounded"
                         title="Edit comment"
                       >
                         Edit
@@ -786,14 +786,14 @@ export const Page: React.FC<PageProps> = ({
               width: highlight.rect.width,
               height: highlight.rect.height,
               pointerEvents: "auto",
-              borderBottom: "2px dashed rgb(147, 51, 234)",
+              borderBottom: "1px dashed rgb(147, 51, 234)",
               boxSizing: "border-box",
             }}
             onMouseEnter={(e) => {
-              e.currentTarget.style.borderBottom = "2px dashed rgb(217, 180, 255)";
+              e.currentTarget.style.borderBottom = "1px dashed rgb(217, 180, 255)";
             }}
             onMouseLeave={(e) => {
-              e.currentTarget.style.borderBottom = "2px dashed rgb(147, 51, 234)";
+              e.currentTarget.style.borderBottom = "1px dashed rgb(147, 51, 234)";
             }}
             onClick={(e) => {
               e.preventDefault();
