@@ -28,7 +28,7 @@ function TOCEntry({
           title={`Go to page ${node.page}`}
         >
           <span className="w-6" />
-          <span className="truncate">{node.title}</span>
+          <span className="truncate">{String(node.title).trim()}</span>
         </button>
       </div>
     );
@@ -40,7 +40,7 @@ function TOCEntry({
         <summary className="cursor-pointer px-2 py-1 hover:bg-neutral-100 dark:hover:bg-neutral-800 rounded">
           <div className="flex items-center gap-2">
             <svg
-              className="chev w-4 h-4 text-neutral-700 dark:text-neutral-200 transition-transform"
+              className="chev w-6 h-6 text-neutral-700 dark:text-neutral-200 transition-transform"
               viewBox="0 0 24 24"
               fill="none"
               stroke="currentColor"
@@ -60,7 +60,7 @@ function TOCEntry({
               className="text-left w-full text-neutral-800 dark:text-neutral-100"
               title={`Go to page ${node.page}`}
             >
-              {node.title}
+              {String(node.title).trim()}
             </button>
           </div>
         </summary>
