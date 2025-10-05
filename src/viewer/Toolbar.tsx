@@ -135,7 +135,7 @@ const ToolbarInner: React.FC<ToolbarProps & { forwardedRef?: React.Ref<HTMLDivEl
           </button>
 
           <span
-            className="min-w-[70px] text-center font-medium text-neutral-700 dark:text-neutral-300"
+            className="min-w-[50px] text-center text-sm font-medium text-neutral-700 dark:text-neutral-300"
             title={
               zoom === 'fitWidth' || zoom === 'fitPage'
                 ? `Fit Width: ${Math.round(fitWidthPercent ?? 100)}% — Fit Page: ${Math.round(fitPagePercent ?? 100)}%`

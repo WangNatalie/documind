@@ -52,6 +52,12 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({ visible = false, x = 0
         </button>
         <button
           className="w-full text-sm text-neutral-700 dark:text-neutral-200 text-left px-2 py-1 rounded hover:bg-neutral-100 dark:hover:bg-neutral-700"
+          onClick={() => handleSelect('narrate')}
+        >
+          Narrate
+        </button>
+        <button
+          className="w-full text-sm text-neutral-700 dark:text-neutral-200 text-left px-2 py-1 rounded hover:bg-neutral-100 dark:hover:bg-neutral-700"
           onClick={() => handleSelect('comment')}
         >
           Comment
