@@ -119,7 +119,7 @@ export async function mergeAnnotationsIntoPdf(
       Rect: pdfDoc.context.obj([llx, lly, urx, ury]),
       Contents: PDFHexString.fromText(String(contents || "")),
       C: pdfDoc.context.obj([color.r, color.g, color.b]),
-      T: PDFHexString.fromText("Documind"),
+      T: PDFHexString.fromText("DocuMind"),
     });
     registerAnnot(page, annot);
   };
@@ -207,7 +207,7 @@ export async function mergeAnnotationsIntoPdf(
       Rect: pdfDoc.context.obj([llx, lly, urx, ury]),
       QuadPoints: pdfDoc.context.obj(quadPoints),
       C: pdfDoc.context.obj([color.r, color.g, color.b]),
-      T: PDFHexString.fromText("Documind"),
+      T: PDFHexString.fromText("DocuMind"),
       Contents: PDFHexString.fromText(String(contents || "")),
     });
     registerAnnot(page, annot);
@@ -232,7 +232,7 @@ export async function mergeAnnotationsIntoPdf(
       InkList: pdfDoc.context.obj(inkList),
       C: pdfDoc.context.obj([color.r, color.g, color.b]),
       BS: pdfDoc.context.obj({ W: thickness || 1 }),
-      T: PDFHexString.fromText("Documind"),
+      T: PDFHexString.fromText("DocuMind"),
     });
     registerAnnot(page, annot);
   };
