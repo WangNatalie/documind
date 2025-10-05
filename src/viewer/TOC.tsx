@@ -1,10 +1,15 @@
-import React from "react";
-import type { TOCItem } from "../db";
+import React, { useState } from "react";
+import { List, Bookmark as BookmarkIcon } from 'lucide-react';
+import type { TOCItem, NoteRecord, CommentRecord } from "../db";
 import type { TOCNode } from "../utils/toc";
 
 interface TOCProps {
   items: TOCNode[]; // nested nodes
   onSelect?: (item: TOCItem) => void;
+  // optional bookmark mode data
+  notes?: NoteRecord[];
+  comments?: CommentRecord[];
+  onSelectBookmark?: (item: NoteRecord | CommentRecord) => void;
 }
 
 function TOCEntry({
@@ -78,7 +83,53 @@ function TOCEntry({
   );
 }
 
-export const TOC: React.FC<TOCProps> = ({ items, onSelect }) => {
+export const TOC: React.FC<TOCProps> = ({
+  items,
+  onSelect,
+  notes = [],
+  comments = [],
+  onSelectBookmark,
+}) => {
+  const [mode, setMode] = useState<"toc" | "bookmarks">("toc");
+
+  // strongly-typed bookmark wrapper so we can keep original record and a simple display shape
+  interface BookmarkItem {
+    id: string;
+    page: number;
+    text?: string;
+    createdAt?: number;
+    __type: "note" | "comment";
+    original: NoteRecord | CommentRecord;
+  }
+
+  const bookmarks: BookmarkItem[] = [
+    ...(notes || []).map(
+      (n) =>
+        ({
+          id: n.id,
+          page: n.page,
+          text: n.text,
+          createdAt: n.createdAt,
+          __type: "note" as const,
+          original: n,
+        }) as BookmarkItem
+    ),
+    ...(comments || []).map(
+      (c) =>
+        ({
+          id: c.id,
+          page: c.page,
+          text: c.text,
+          createdAt: c.createdAt,
+          __type: "comment" as const,
+          original: c,
+        }) as BookmarkItem
+    ),
+  ].sort(
+    (a, b) =>
+      (a.page || 0) - (b.page || 0) || (a.createdAt || 0) - (b.createdAt || 0)
+  );
+
   return (
     <div className="w-96 h-full bg-white dark:bg-neutral-900 border-r border-neutral-200 dark:border-neutral-700 overflow-auto pr-6 p-3 text-neutral-800 dark:text-neutral-100 toc-container">
       {/* Inline styles to hide native marker and rotate custom chevron when details is open */}
@@ -91,14 +142,84 @@ export const TOC: React.FC<TOCProps> = ({ items, onSelect }) => {
         .toc-container { overflow-x: hidden; }
       `}</style>
 
-      <div className="text-sm font-semibold mb-2 text-neutral-700 dark:text-neutral-200">
-        {items.length ? "Table of contents" : "Loading table of contents..."}
+      <div className="flex items-center justify-between mb-2">
+        <div className="text-sm font-semibold text-neutral-700 dark:text-neutral-200">
+          {items.length ? "Table of contents" : "Loading table of contents..."}
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setMode("toc")}
+            className={`px-2 py-1 rounded ${mode === "toc" ? "bg-neutral-200 dark:bg-neutral-800" : "hover:bg-neutral-100 dark:hover:bg-neutral-800"}`}
+            title="Show table of contents"
+            aria-label="Table of contents"
+          >
+            <List size={16} />
+          </button>
+          <button
+            onClick={() => setMode("bookmarks")}
+            className={`px-2 py-1 rounded ${mode === "bookmarks" ? "bg-neutral-200 dark:bg-neutral-800" : "hover:bg-neutral-100 dark:hover:bg-neutral-800"}`}
+            title="Show bookmarks"
+            aria-label="Bookmarks"
+          >
+            <BookmarkIcon size={16} />
+          </button>
+        </div>
       </div>
-      <div className="space-y-1">
-        {items.map((n) => (
-          <TOCEntry key={`${n.title}:${n.page}`} node={n} onSelect={onSelect} />
-        ))}
-      </div>
+
+      {mode === "toc" ? (
+        <div className="space-y-1">
+          {items.map((n) => (
+            <TOCEntry
+              key={`${n.title}:${n.page}`}
+              node={n}
+              onSelect={onSelect}
+            />
+          ))}
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {bookmarks.length === 0 && (
+            <div className="text-sm text-neutral-500">
+              No notes or comments yet.
+            </div>
+          )}
+          {bookmarks.map((b: BookmarkItem) => (
+            <div
+              key={b.id}
+              className="p-2 rounded border border-neutral-100 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-900 cursor-pointer"
+              onClick={() => onSelectBookmark?.(b.original)}
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  onSelectBookmark?.(b.original);
+                }
+              }}
+            >
+              <div className="flex items-center justify-between">
+                <div className="text-xs text-neutral-500">
+                  {b.__type === "note" ? "Note" : "Comment"} • Page {b.page}
+                </div>
+                {b.__type === "note" && (
+                  // color swatch for note
+                  <div
+                    className="w-3 h-3 rounded"
+                    style={{
+                      backgroundColor:
+                        (b.original as NoteRecord).color || "transparent",
+                      border: "1px solid rgba(0,0,0,0.08)",
+                    }}
+                    aria-hidden
+                  />
+                )}
+              </div>
+              <div className="mt-2 text-sm text-neutral-800 dark:text-neutral-100 whitespace-pre-wrap">
+                {String(b.text || "").trim()}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 };
