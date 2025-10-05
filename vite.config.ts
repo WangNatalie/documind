@@ -9,6 +9,7 @@ export default defineConfig({
     react(),
     crx({ manifest: manifest as any }),
   ],
+  assetsInclude: ['.../src/assets/fonts/Lacquer-Regular.woff2'],
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),

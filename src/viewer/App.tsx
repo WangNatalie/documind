@@ -2173,7 +2173,7 @@ Key Points:
     return (
       <div className="flex items-center justify-center h-screen bg-neutral-50 dark:bg-neutral-900">
         <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mx-auto mb-4"></div>
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-500 mx-auto mb-4"></div>
           <p className="text-neutral-600 dark:text-neutral-400">
             Loading PDF...
           </p>
@@ -2184,7 +2184,7 @@ Key Points:
 
   if (error === "cors") {
     return (
-      <div className="flex items-center justify-center h-screen bg-neutral-50 dark:bg-neutral-900 p-4">
+      <div className="flex items-center justify-center h-screen bg-neutral-100 dark:bg-neutral-900 p-4">
         <div className="max-w-md w-full bg-white dark:bg-neutral-800 rounded-lg shadow-lg border border-neutral-200 dark:border-neutral-700 p-6">
           <h2 className="text-xl font-semibold text-red-600 dark:text-red-400 mb-4">
             Unable to Load PDF
@@ -2198,7 +2198,7 @@ Key Points:
               href={fileUrl || "#"}
               target="_blank"
               rel="noopener noreferrer"
-              className="block w-full px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded text-center transition-colors"
+              className="block w-full px-4 py-2 bg-primary-500 hover:bg-primary-600 text-white rounded text-center transition-colors"
             >
               Open in Native Viewer
             </a>
@@ -2249,7 +2249,7 @@ Key Points:
   }
 
   return (
-    <div className="h-screen flex flex-col bg-neutral-50 dark:bg-neutral-900">
+    <div className="h-screen flex flex-col bg-neutral-100 dark:bg-neutral-900">
       <Toolbar
         ref={toolbarRef}
         currentPage={currentPage}
@@ -2512,7 +2512,7 @@ Key Points:
       {selectedTerm && termPopupPosition && (
         <div
           data-term-popup
-          className="fixed z-[100] bg-white dark:bg-neutral-800 border-2 border-blue-500 rounded-lg shadow-2xl p-4 max-w-md"
+          className="fixed z-[100] bg-white dark:bg-neutral-800 rounded-lg shadow-2xl p-4 max-w-md" // removed border-2 border-primary-500
           style={{
             left: `${termPopupPosition.x}px`,
             top: `${termPopupPosition.y}px`,
@@ -2588,7 +2588,7 @@ Key Points:
                     scrollToPage(selectedTerm.tocItem.page);
                   }
                 }}
-                className="px-3 py-1.5 text-sm bg-blue-500 hover:bg-blue-600 text-white rounded"
+                className="px-3 py-1.5 text-sm bg-primary-500 hover:bg-primary-600 text-white rounded"
               >
                 Go to Context
               </button>
