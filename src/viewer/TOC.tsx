@@ -10,6 +10,17 @@ interface TOCProps {
   notes?: NoteRecord[];
   comments?: CommentRecord[];
   onSelectBookmark?: (item: NoteRecord | CommentRecord) => void;
+  onAddContext?: (bookmark: BookmarkItem) => void;
+}
+
+// strongly-typed bookmark wrapper so we can keep original record and a simple display shape
+export interface BookmarkItem {
+  id: string;
+  page: number;
+  text?: string;
+  createdAt?: number;
+  __type: "note" | "comment";
+  original: NoteRecord | CommentRecord;
 }
 
 function TOCEntry({
@@ -89,18 +100,9 @@ export const TOC: React.FC<TOCProps> = ({
   notes = [],
   comments = [],
   onSelectBookmark,
+  onAddContext,
 }) => {
   const [mode, setMode] = useState<"toc" | "bookmarks">("toc");
-
-  // strongly-typed bookmark wrapper so we can keep original record and a simple display shape
-  interface BookmarkItem {
-    id: string;
-    page: number;
-    text?: string;
-    createdAt?: number;
-    __type: "note" | "comment";
-    original: NoteRecord | CommentRecord;
-  }
 
   const bookmarks: BookmarkItem[] = [
     ...(notes || []).map(
@@ -225,7 +227,7 @@ export const TOC: React.FC<TOCProps> = ({
             return (
               <div
                 key={b.id}
-                className="p-2 rounded border border-neutral-100 dark:border-neutral-800 cursor-pointer"
+                className="p-2 rounded border border-neutral-100 dark:border-neutral-800 cursor-pointer group relative"
                 onClick={() => onSelectBookmark?.(b.original)}
                 role="button"
                 tabIndex={0}
@@ -240,6 +242,16 @@ export const TOC: React.FC<TOCProps> = ({
                   <div className="text-xs text-neutral-500">
                     {isNote ? "Note" : "Comment"} • Page {b.page}
                   </div>
+                  <button
+                    className="ml-2 px-2 py-0.5 text-xs rounded bg-primary-100 dark:bg-primary-900 text-primary-700 dark:text-primary-200 hover:bg-primary-200 dark:hover:bg-primary-800 transition"
+                    title="Add context to chat"
+                    onClick={e => {
+                      e.stopPropagation();
+                      onAddContext?.(b);
+                    }}
+                  >
+                    Add context to chat
+                  </button>
                 </div>
                 <div className="mt-2 text-sm text-neutral-800 dark:text-neutral-100 whitespace-pre-wrap">
                   {String(b.text || "").trim()}
