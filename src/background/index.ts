@@ -112,4 +112,53 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     // Return true to indicate we'll send response asynchronously
     return true;
   }
+
+  if (message.type === 'CHAT_QUERY') {
+    const { query, docHash } = message.payload;
+    console.log(`[background] Received CHAT_QUERY for query: "${query.substring(0, 50)}..."`);
+    
+    (async () => {
+      try {
+        // Ensure offscreen document exists
+        let offscreenExists = false;
+        try {
+          const existingContexts = await chrome.runtime.getContexts({
+            contextTypes: ['OFFSCREEN_DOCUMENT' as chrome.runtime.ContextType],
+            documentUrls: [chrome.runtime.getURL('offscreen.html')]
+          });
+          offscreenExists = existingContexts.length > 0;
+        } catch (err) {
+          console.log('[background] Error checking offscreen context:', err);
+        }
+
+        if (!offscreenExists) {
+          console.log('[background] Creating offscreen document for chat query...');
+          await chrome.offscreen.createDocument({
+            url: 'offscreen.html',
+            reasons: ['DOM_SCRAPING' as chrome.offscreen.Reason],
+            justification: 'Generate AI chat response with document context'
+          });
+        }
+
+        // Forward to offscreen document
+        const response = await chrome.runtime.sendMessage({
+          type: 'CHAT_QUERY',
+          payload: { query, docHash }
+        });
+
+        if (response && response.success) {
+          console.log('[background] Chat query successful');
+          sendResponse({ success: true, result: response.result });
+        } else {
+          console.error('[background] Chat query failed:', response?.error);
+          sendResponse({ success: false, error: response?.error || 'Unknown error' });
+        }
+      } catch (error: any) {
+        console.error('[background] Error processing chat query:', error);
+        sendResponse({ success: false, error: error.message || 'Unknown error' });
+      }
+    })();
+    
+    return true; // Indicate async response
+  }
 });

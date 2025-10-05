@@ -1169,7 +1169,7 @@ export const ViewerApp: React.FC = () => {
         onSelect={(a) => handleContextAction(a)}
       />
 
-      <Chatbot /> 
+      <Chatbot docHash={docHash} /> 
       
     </div>
   );

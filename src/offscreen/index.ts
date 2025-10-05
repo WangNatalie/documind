@@ -153,5 +153,22 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     // Return true to indicate we'll send response asynchronously
     return true;
   }
+  
+  if (message.type === 'CHAT_QUERY') {
+    const { query, docHash } = message.payload;
+    console.log(`Received CHAT_QUERY request for query: "${query.substring(0, 50)}..."`);
+    
+    import('./chatbot.js').then(async (chatbot) => {
+      const result = await chatbot.generateChatResponse(query, docHash);
+      console.log(`Generated chat response (${result.response.length} chars) with ${result.sources.length} sources`);
+      sendResponse({ success: true, result });
+    }).catch((error: Error) => {
+      console.error('Error generating chat response:', error);
+      sendResponse({ success: false, error: error.message });
+    });
+    
+    // Return true to indicate we'll send response asynchronously
+    return true;
+  }
 });
 

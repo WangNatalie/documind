@@ -1,4 +1,5 @@
 import React, { useRef, useState, useEffect } from 'react';
+import { sendChatQuery } from '../../utils/chatbot-client';
 
 const BOT_BUTTON_SIZE = 56;
 const CHATBOX_MIN_WIDTH = 320;
@@ -6,10 +7,15 @@ const CHATBOX_MIN_HEIGHT = 400;
 const CHATBOX_MAX_WIDTH = 480;
 const CHATBOX_MAX_HEIGHT = 700;
 
-export const Chatbot: React.FC = () => {
+interface ChatbotProps {
+  docHash: string;
+}
+
+export const Chatbot: React.FC<ChatbotProps> = ({ docHash }) => {
   const [open, setOpen] = useState(false);
-  const [messages, setMessages] = useState<{ text: string; sender: 'user' }[]>([]);
+  const [messages, setMessages] = useState<{ text: string; sender: 'user' | 'bot'; sources?: Array<{ page: number }> }[]>([]);
   const [input, setInput] = useState('');
+  const [loading, setLoading] = useState(false);
   const [dimensions, setDimensions] = useState({
     width: 360,
     height: 500,
@@ -62,11 +68,44 @@ export const Chatbot: React.FC = () => {
     };
   }, [resizing]);
 
-  const handleSend = (e?: React.FormEvent) => {
+  const handleSend = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    if (input.trim() === '') return;
-    setMessages((msgs) => [...msgs, { text: input, sender: 'user' }]);
+    if (input.trim() === '' || loading) return;
+    
+    const userMessage = input.trim();
     setInput('');
+    
+    // Add user message
+    setMessages((msgs) => [...msgs, { text: userMessage, sender: 'user' }]);
+    setLoading(true);
+    
+    try {
+      // Send query to backend
+      const result = await sendChatQuery(userMessage, docHash);
+      
+      if (result.success && result.result) {
+        // Add bot response
+        setMessages((msgs) => [...msgs, { 
+          text: result.result!.response, 
+          sender: 'bot',
+          sources: result.result!.sources
+        }]);
+      } else {
+        // Add error message
+        setMessages((msgs) => [...msgs, { 
+          text: `Sorry, I encountered an error: ${result.error || 'Unknown error'}`, 
+          sender: 'bot'
+        }]);
+      }
+    } catch (error) {
+      console.error('[Chatbot] Error sending query:', error);
+      setMessages((msgs) => [...msgs, { 
+        text: 'Sorry, I encountered an error processing your question. Please try again.', 
+        sender: 'bot'
+      }]);
+    } finally {
+      setLoading(false);
+    }
   };
 
   // Keyboard shortcut: Enter to send, Shift+Enter for newline
@@ -179,7 +218,7 @@ export const Chatbot: React.FC = () => {
             {messages.map((msg, idx) => (
               <div
                 key={idx}
-                className={`flex ${msg.sender === 'user' ? 'justify-end' : 'justify-start'}`}
+                className={`flex flex-col ${msg.sender === 'user' ? 'items-end' : 'items-start'}`}
               >
                 <div
                   className={`rounded-lg px-3 py-2 max-w-[80%] ${
@@ -190,8 +229,29 @@ export const Chatbot: React.FC = () => {
                 >
                   {msg.text}
                 </div>
+                {msg.sender === 'bot' && msg.sources && msg.sources.length > 0 && (
+                  <div className="text-xs text-neutral-500 dark:text-neutral-400 mt-1 px-1">
+                    Sources: {msg.sources.map((s, i) => (
+                      <span key={i}>
+                        {i > 0 && ', '}
+                        Page {s.page}
+                      </span>
+                    ))}
+                  </div>
+                )}
               </div>
             ))}
+            {loading && (
+              <div className="flex justify-start">
+                <div className="bg-neutral-200 dark:bg-neutral-700 rounded-lg px-3 py-2">
+                  <div className="flex gap-1">
+                    <div className="w-2 h-2 rounded-full bg-neutral-400 animate-bounce" style={{ animationDelay: '0ms' }}></div>
+                    <div className="w-2 h-2 rounded-full bg-neutral-400 animate-bounce" style={{ animationDelay: '150ms' }}></div>
+                    <div className="w-2 h-2 rounded-full bg-neutral-400 animate-bounce" style={{ animationDelay: '300ms' }}></div>
+                  </div>
+                </div>
+              </div>
+            )}
             <div ref={chatEndRef} />
           </div>
 
@@ -212,10 +272,10 @@ export const Chatbot: React.FC = () => {
             <button
               type="submit"
               className="bg-blue-600 hover:bg-blue-700 text-white rounded-lg px-4 py-2 font-semibold transition disabled:opacity-60"
-              disabled={input.trim() === ''}
+              disabled={input.trim() === '' || loading}
               tabIndex={0}
             >
-              Send
+              {loading ? 'Sending...' : 'Send'}
             </button>
           </form>
 
