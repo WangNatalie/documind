@@ -67,6 +67,7 @@ export interface NoteRecord {
   color: string;
   text?: string; // Optional text for this note
   createdAt: number;
+  termSummary?: any; // Optional: stores the full term summary if this note was saved from a definition (type from term-extractor)
 }
 
 export interface CommentRecord {

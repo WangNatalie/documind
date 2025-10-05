@@ -168,7 +168,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.type === 'REQUEST_PAGE_TERMS') {
     // Viewer is requesting terms for a specific page (cache miss)
-    const { page, docHash } = message.payload;
+    const { page, docHash, pageText } = message.payload;
     const tabId = sender.tab?.id;
 
     if (tabId) {
@@ -179,19 +179,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (processedSet) {
         processedSet.delete(page);
       }
-
-      // Get the viewer state to extract text
+      
+      // Get the viewer state
       const state = viewerStates.get(tabId);
       if (state && state.docHash === docHash) {
-        // If this is the current page, process it immediately
-        if (state.currentPage === page && state.visibleText) {
-          processPageTerms(tabId, page, state);
+        // If we have page text, process it immediately
+        if (pageText && pageText.trim().length > 0) {
+          console.log(`[REQUEST_PAGE_TERMS] Processing page ${page} with provided text`);
+          // Process this specific page with its text
+          const pageSet = processedPages.get(tabId);
+          if (pageSet && !pageSet.has(page)) {
+            pageSet.add(page);
+            extractTermsFromText(pageText, state.fileName, page, state.docHash);
+          }
         } else {
-          // For other pages, we'd need to request their text
-          // For now, just re-trigger state request which will process current page
-          chrome.tabs.sendMessage(tabId, { type: 'REQUEST_VIEWER_STATE' }).catch(err => {
-            console.error('Failed to request viewer state:', err);
-          });
+          console.warn(`[REQUEST_PAGE_TERMS] No text provided for page ${page}, cannot extract terms`);
         }
       }
     }
@@ -238,17 +240,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
               processedSet.delete(page);
             }
           }
-
-          // Process current page first (priority)
+          
+          // Process current page with visible text
+          // Adjacent pages will be requested via REQUEST_PAGE_TERMS with their own text
           processPageTerms(tabId, state.currentPage, state);
-
-          // Pre-process adjacent pages (prev and next) for caching
-          if (state.currentPage > 1) {
-            processPageTerms(tabId, state.currentPage - 1, state, true);
-          }
-          if (state.currentPage < state.totalPages) {
-            processPageTerms(tabId, state.currentPage + 1, state, true);
-          }
         }
       }
     }
@@ -361,8 +356,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 });
 
-// Helper function to process terms for a specific page
-async function processPageTerms(tabId: number, pageNum: number, state: ViewerState, isAdjacentPage: boolean = false) {
+// Helper function to process terms for the current page
+async function processPageTerms(tabId: number, pageNum: number, state: ViewerState) {
   const pageSet = processedPages.get(tabId);
   if (!pageSet) return;
 
@@ -374,17 +369,13 @@ async function processPageTerms(tabId: number, pageNum: number, state: ViewerSta
 
   // Mark as processed
   pageSet.add(pageNum);
-
-  // For current page, use existing visible text
-  // For adjacent pages, we'd need to request their text - for now, we'll skip adjacent if no text
-  if (pageNum === state.currentPage && state.visibleText) {
-    const priority = isAdjacentPage ? 'adjacent' : 'current';
-    console.log(`[processPageTerms] Processing ${priority} page ${pageNum} for tab ${tabId}`);
+  
+  // Process current page with visible text
+  if (state.visibleText && state.visibleText.trim().length > 0) {
+    console.log(`[processPageTerms] Processing current page ${pageNum} for tab ${tabId}`);
     await extractTermsFromText(state.visibleText, state.fileName, pageNum, state.docHash);
-  } else if (isAdjacentPage) {
-    // For adjacent pages, we could request text from the viewer
-    // For now, we'll just log and skip
-    console.log(`[processPageTerms] Skipping adjacent page ${pageNum} (would need to request text from viewer)`);
+  } else {
+    console.warn(`[processPageTerms] No visible text for page ${pageNum}, skipping`);
   }
 }
 
