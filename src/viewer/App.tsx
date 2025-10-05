@@ -24,6 +24,7 @@ import {
 import { readOPFSFile } from "../db/opfs";
 import ContextMenu from "./ContextMenu";
 import { requestGeminiChunking, requestEmbeddings, requestTOC } from "../utils/chunker-client";
+import { Chatbot } from './chatbot/Chatbot';
 import { buildTOCTree } from "../utils/toc";
 import { TOC } from "./TOC";
 
@@ -1906,6 +1907,8 @@ Key Points:
         onSelect={(a) => handleContextAction(a)}
       />
 
+      <Chatbot docHash={docHash} /> 
+      
       {/* Term summary popup */}
       {selectedTerm && termPopupPosition && (
         <div

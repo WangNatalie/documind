@@ -154,6 +154,16 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
   
+  if (message.type === 'CHAT_QUERY') {
+    const { query, docHash } = message.payload;
+    console.log(`Received CHAT_QUERY request for query: "${query.substring(0, 50)}..."`);
+    
+    import('./chatbot.js').then(async (chatbot) => {
+      const result = await chatbot.generateChatResponse(query, docHash);
+      console.log(`Generated chat response (${result.response.length} chars) with ${result.sources.length} sources`);
+      sendResponse({ success: true, result });
+    }).catch((error: Error) => {
+      console.error('Error generating chat response:', error);
   if (message.type === 'EXTRACT_TERMS') {
     const { passage } = message.payload;
     console.log(`Received EXTRACT_TERMS request for passage (${passage.length} chars)`);
