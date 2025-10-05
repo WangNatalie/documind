@@ -1,251 +1,144 @@
-# DocuMind - AI-Powered PDF Viewer
+# DocuMind — AI‑Powered PDF Viewer (Chrome MV3 Extension)
 
-A Chrome MV3 extension that provides a modern, AI-first, feature-rich PDF viewing experience with virtualized rendering, state persistence, and local file support.
+DocuMind is a Chrome Manifest V3 extension that replaces the browser's native PDF viewing experience with a modern, AI-augmented viewer. It focuses on fast virtualized rendering, persistent local storage for uploaded files, and several AI features (term extraction, section finding, summarization, RAG-based chat) that run via an offscreen document and background service worker.
 
-## Features
+This README was updated after inspecting the source to reflect the actual architecture and developer workflow.
 
-✨ **Automatic PDF Interception**: Opens any `http(s)://...*.pdf` in the built-in viewer
-📄 **Smooth Virtualized Rendering**: IntersectionObserver-based rendering with memory management
-💾 **State Persistence**: Remembers last page and zoom level per document
-📂 **Local File Support**: Drag & drop PDFs onto the popup to view them
-🎨 **Modern UI**: Built with React + Tailwind CSS
-🌙 **Dark Mode**: Respects system color scheme preferences
-⌨️ **Keyboard Navigation**: Arrow keys, Page Up/Down, Ctrl+/- for zoom
+## High-level overview
 
-## Tech Stack
+- Browser integration: a background service worker intercepts navigations to `.pdf` files and redirects the tab to `viewer.html?file=...`.
+- Viewer (`src/viewer`) renders PDFs using PDF.js with virtualization (IntersectionObserver + scroll backup), zoom modes (fitWidth / fitPage / percentage), annotations, drawing, notes, and comments.
+- Popup (`src/popup`) lets users upload local PDFs. Uploaded files are written into the Origin Private File System (OPFS) and referenced by an `uploadId`.
+- Storage: persistent data (docs, pages, chunks, embeddings, notes, comments, drawings, TOC) are stored in IndexedDB (database `pdf_viewer_v0`) via `src/db/index.ts` (uses `idb`).
+- Background tasks: chunking, embedding generation, and TOC generation are scheduled and managed by the service worker (`src/background/index.ts`). Heavy text processing and AI calls run inside an Offscreen Document (`offscreen.html` / `src/offscreen`) so they can use DOM / IndexedDB and keep running outside visible tabs.
+- AI: term extraction, section matching, and summarization are driven by the offscreen code (term-extractor, chunker-offscreen, embedder). The chatbot uses a RAG flow that finds similar chunks (embeddings) and calls Gemini (Google GenAI) or other models.
 
-- **Build**: Vite + CRXJS (MV3 bundling) + TypeScript
-- **UI**: React 18, Tailwind CSS
-- **PDF Rendering**: PDF.js
-- **Storage**: IndexedDB (via `idb`) + OPFS for local files
-- **State Management**: React hooks + lightweight state
+## Main features
 
-## Installation
+- Automatic web PDF interception and redirect to the custom viewer.
+- Local PDF upload via popup — files are saved to OPFS and opened in viewer.
+- Fast virtualized rendering with canvas caching and a render queue.
+- Persistent document state: last page and zoom saved per document in IndexedDB.
+- Annotations: highlights/notes, comments, and ink drawings (stored and exported).
+- AI features:
+  - Term extraction and per-page summaries (sent to viewer)
+  - Find sections for terms and link them to TOC
+  - Summarize selected text (EXPLAIN_SELECTION)
+  - RAG-based chat using chunk embeddings + Gemini (background/chatbot)
+- Export: merge annotations into a downloadable PDF (`src/export/annotationsToPdf.ts`).
 
-Follow these steps to install and run DocuMind.
+## What the code maps to (key files/folders)
 
-### Step 1: Install dependencies
+- manifest.json — extension manifest (MV3). Background service worker: `src/background/index.ts`.
+- `popup/` (popup UI)
+  - `src/popup/App.tsx` — drag/drop upload flow, writes OPFS and creates DB doc records.
+- `viewer/` (main viewer UI)
+  - `src/viewer/App.tsx` — main viewer controller (load PDF, manage pages, toolbar, TOC, notes, comments, drawings, AI workflows)
+  - `src/viewer/Page.tsx`, `Toolbar.tsx`, `TOC.tsx`, etc. — UI components
+- `src/db/` — IndexedDB schema and helpers (docs, pages, chunks, chunkEmbeddings, notes, comments, tableOfContents, drawings). Database name: `pdf_viewer_v0` (versioned migrations).
+- `src/offscreen/` — offscreen document logic for chunking, embeddings, TOC generation, term extraction, summarization and long-running AI tasks. Offscreen entry: `offscreen.html`.
+- `src/utils/` — client helpers for communicating with background/offscreen, chunking and chatbot clients, narrator (ElevenLabs wrapper), hash utilities, OPFS helpers.
+- `src/export/annotationsToPdf.ts` — merges notes, comments and drawings into a PDF using pdf-lib.
 
-Open a terminal in the project directory and run:
+## Data flow (common flows)
+
+- Web PDF open: background service worker detects navigation to *.pdf -> updates tab to `viewer.html?file=<url>` -> viewer loads PDF via PDF.js -> viewer computes docHash -> viewer writes/reads doc record in IndexedDB -> background/offscreen tasks are queued (chunking, embeddings, TOC) if needed.
+- Local upload: popup reads File -> writes ArrayBuffer to OPFS with `uploadId` -> computes content-only docHash -> writes doc record in IndexedDB and opens viewer with `viewer.html?uploadId=<id>&name=<file>`.
+- Term extraction & summarization: viewer periodically sends visible text to background via messages -> background ensures offscreen document exists and forwards requests -> offscreen extracts terms, finds sections, summarizes and writes results to DB -> background sends TERM_SUMMARIES_READY to viewer to display.
+- Chat / RAG: viewer or popup calls `src/utils/chatbot-client.ts` which messages background `CHAT_QUERY` -> background ensures offscreen exists and calls chatbot generator (finds similar chunks via embeddings, calls Gemini) -> returns result.
+
+## IndexedDB schema (summary)
+
+Database: `pdf_viewer_v0` (see `src/db/index.ts`)
+
+- docs (key: docHash) — metadata and last state
+- pages (key: [docHash, page]) — extracted text/headings
+- chunks (key: id) — document chunks (content + page mapping)
+- chunkTasks (key: taskId) — background chunking jobs
+- notes (key: id) — highlights/notes with normalized rects
+- comments (key: id) — anchored comments
+- chunkEmbeddings (key: id) — vector embeddings for chunks
+- tableOfContents (key: docHash) — TOC items (pdf-outline or AI-generated)
+- drawings (key: id) — ink strokes per page
+
+This repository includes migrations and helper functions to manage those stores.
+
+## API keys & configuration
+
+- Gemini (Google GenAI) keys are used for embeddings, summaries and chatbot. See `src/offscreen/gemini-config.ts` and `src/offscreen` for where keys are read.
+- ElevenLabs key is used for text-to-speech (narration). The narrator utility (`src/utils/narrator-client.ts`) imports the ElevenLabs key from `src/offscreen/api_key.ts` (or similar internal file).
+
+Important: API key files are not checked into the repo. Inspect `src/offscreen` for placeholder files and add keys there or use environment variables during your build as appropriate.
+
+## Permissions (manifest highlights)
+
+- storage, unlimitedStorage, tabs, webNavigation, offscreen, alarms
+- host_permissions: `*://*/*` (used to open any remote PDF)
+
+## Development — quick start
+
+1. Install dependencies:
 
 ```bash
 npm install
 ```
 
-This will install all required packages:
-
-- React & React DOM
-- Vite & CRXJS
-- TypeScript
-- Tailwind CSS
-- PDF.js
-- idb (IndexedDB helper)
-- nanoid (ID generation)
-
-### Step 2: Build the Extension
-
-For development (with hot reload):
+2. Run in dev (Vite):
 
 ```bash
 npm run dev
 ```
 
-For production (optimized build):
+This starts a dev server used by the extension build tooling (CRX plugin). When building for Chrome you will use `npm run build` to emit a `dist` folder that you can load as an unpacked extension.
+
+3. Build for production:
 
 ```bash
 npm run build
 ```
 
-This creates a `dist/` folder with the compiled extension.
-
-### Step 3: Load Extension in Chrome
-
-Method 1: Chrome Extensions Page
-
-1. Open Google Chrome
-2. Navigate to: `chrome://extensions/`
-3. Enable **Developer mode** (toggle switch in top right)
-4. Click **Load unpacked** button
-5. Browse to the `dist/` folder inside your project
-6. Click **Select Folder**
-
-Method 2: Direct URL
-
-1. Type `chrome://extensions/` in address bar
-2. Follow steps 3-6 above
-
-Verification you did it right:
-
-- You should see a **DocuMind** card in the extensions list
-- Extension icon should appear in the Chrome toolbar (if icons are present)
-- Status: "Enabled"
-
-### Step 4: Test the Extension
-
-Test 1: Web PDF
-
-1. Navigate to a PDF URL, for example:
-
-```text
-https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf
-```
-
-Expected results:
-
-- URL redirects to `chrome-extension://.../viewer.html?file=...`
-- PDF renders in the custom viewer
-- Toolbar shows navigation controls
-
-Test 2: Local PDF
-
-1. Click the DocuMind extension icon in the toolbar
-2. Popup opens with a drop zone
-3. Drag any PDF file onto the zone (or click to browse)
-
-Expected results:
-
-- A new tab opens
-- Your PDF is displayed
-- File is saved locally (OPFS)
-
-## Common Setup Issues & Fixes
-
-### Issue 1: `npm install` fails
-
-Symptom: Errors during package installation
-
-Solution:
+4. Create a packaged ZIP for distribution:
 
 ```bash
-# Clear npm cache
-npm cache clean --force
-
-# Delete node_modules and package-lock.json
-
-rmdir /s node_modules & del package-lock.json
-
-# Reinstall
-npm install
-```
-
-### Issue 2: Build errors (TypeScript)
-
-Symptom: TypeScript compilation errors
-
-Solution:
-
-- These are often type-checking warnings, not critical errors
-- Run `npm run build` - extension will often still work
-- Install missing types if needed:
-
-```bash
-npm install -D @types/react @types/react-dom
-```
-
-### Issue 3: Extension doesn't load in Chrome
-
-Symptom: "Invalid manifest" or load failure
-
-Solution:
-
-1. Ensure `dist/` folder exists (run `npm run build`)
-2. Check `dist/manifest.json` is present
-3. Reload extension: Click "Reload" button in `chrome://extensions/`
-4. Check extension details and console for errors
-
-### Issue 4: PDFs don't redirect
-
-Symptom: PDFs open in Chrome's native viewer instead of DocuMind
-
-Solution:
-
-1. Check extension is **enabled** in `chrome://extensions/`
-2. Verify **DNR rules** are active:
-   - Click "Details" on extension card
-   - Look for "Declarative Net Request" section
-3. Try a different PDF URL
-4. Hard refresh the page (Ctrl+Shift+R)
-
-### Issue 5: Icons missing
-
-Symptom: Default Chrome icon shown instead of custom icons
-
-Solution:
-
-- This is expected in development if placeholder files are present
-- Icons in this repo are placeholders (.txt files) in `public/icons/`
-- To add real icons:
-  1. Create or download PNG icons: `icon16.png`, `icon48.png`, `icon128.png`
-  2. Place them in `public/icons/`
-  3. Rebuild: `npm run build`
-  4. Reload extension
-
-## Development Workflow
-
-### Making Changes
-
-1. Edit files in `src/`
-2. Save changes
-3. Extension auto-reloads (if using `npm run dev`)
-4. Refresh any open viewer tabs
-
-### Debugging
-
-1. Open DevTools in viewer tab (F12)
-2. Check Console for errors
-3. Inspect Network tab for PDF loading issues
-4. View IndexedDB: Application → IndexedDB → `pdf_viewer_v0`
-5. View OPFS: Application → Storage → Origin Private File System
-
-## Production Build & Packaging
-
-When ready to package for distribution:
-
-```bash
-# Build optimized version
-npm run build
-
-# Create ZIP file
 npm run pack
 ```
 
-This creates `documind.zip` ready for Chrome Web Store submission or manual distribution.
+Loading into Chrome (unpacked):
 
-## Next Steps & References
+1. chrome://extensions -> Enable Developer mode -> Load unpacked -> select `dist/` folder
 
-- Read docs: `README.md` (this file)
-- Learn architecture: see `ARCHITECTURE.md` (if present)
-- Quick start: see `QUICKSTART.md` (if present)
+## Debugging tips
 
-## Verification Checklist
+- Viewer runtime: open the viewer tab -> DevTools (F12) -> Console/Network to trace PDF loading or messages.
+- Background service worker logs: open the Extensions page -> Service worker (Inspect views) to view console output.
+- Offscreen document: offscreen runs as a separate context; use console logs and background to trace messages between service worker and offscreen.
+- Inspect IndexedDB: Application -> IndexedDB -> `pdf_viewer_v0` to view docs, chunks, notes, embeddings.
+- OPFS: Application -> Storage -> Origin Private File System to inspect uploaded blobs.
 
-After installation, verify:
+## How to trigger AI tasks manually (developer)
 
-- [ ] Extension appears in `chrome://extensions/`
-- [ ] Extension is enabled
-- [ ] Web PDF redirect works
-- [ ] Popup opens when clicking icon
-- [ ] Local PDF upload works
-- [ ] Zoom controls functional
-- [ ] Page navigation works
-- [ ] No console errors
+- Request chunking for a doc (viewer calls `requestGeminiChunking` or `requestChunkrChunking`): viewer sends message to background which enqueues chunking and offscreen processes it.
+- Generate missing embeddings: background/offscreen embedder uses the configured Gemini embedding model — the viewer or background triggers `GENERATE_EMBEDDINGS` messages.
+- Generate/verify TOC: `CREATE_TOC_TASK` -> background -> offscreen TOC generator.
 
-## Roadmap (Future)
+## Export & printing
 
-- [ ] AI-powered features (QA, summary, TOC extraction)
-- [ ] OCR for scanned documents
-- [ ] Text search within PDFs
-- [ ] Annotations and highlights
-- [ ] Cloud sync for state
-- [ ] Content script integration for enhanced features
+- `src/export/annotationsToPdf.ts` combines the original PDF bytes with notes, comments and drawings. It writes both flattened visual highlights and native PDF annotations (Highlight, Text (sticky), Ink) so exported PDFs retain markup in many viewers.
 
-## License
+## File map (quick)
 
-MIT
+- `manifest.json` — extension config & permissions
+- `popup.html`, `popup` folder — upload UI
+- `viewer.html`, `src/viewer` — PDF viewer app and components
+- `src/background/*` — service worker logic, message handlers, task scheduling
+- `offscreen.html`, `src/offscreen/*` — offscreen document, chunking, embedder, term extractor, TOC generator
+- `src/db` — IndexedDB schema and helpers (idb wrapper)
+- `src/utils` — helpers (chatbot-client, chunker-client, narrator, hash, opfs helpers)
+- `src/export` — export/merge annotations into a PDF
 
----
+## Troubleshooting & common issues
 
-Built with ❤️ using Vite + React + Tailwind + PDF.js
-
-**Last Updated**: 2025-10-03
-**Version**: 1.0.0
+- "Extension won't load": ensure you built (`npm run build`) and loaded the `dist/` folder, check `dist/manifest.json`.
+- "PDFs still open in Chrome": confirm extension is enabled and the webNavigation redirect worked (inspect background logs for redirect attempts).
+- "CORS / PDF loading error": remote PDFs may require CORS—viewer falls back to a CORS error UI. For local testing, host the PDF with permissive CORS or use an OPFS upload.
+- "Offscreen/AI tasks not running": confirm API keys are configured, and check background and offscreen logs for errors. Offscreen creation may fail if the browser blocks offscreen creation without justification.
