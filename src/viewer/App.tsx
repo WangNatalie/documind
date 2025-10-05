@@ -26,6 +26,8 @@ import ContextMenu from "./ContextMenu";
 import { requestGeminiChunking, requestEmbeddings, requestTOC } from "../utils/chunker-client";
 import { buildTOCTree } from "../utils/toc";
 import { TOC } from "./TOC";
+import { DrawingToolbar } from "./DrawingToolbar";
+import type { DrawingStroke } from "./DrawingCanvas";
 
 const ZOOM_LEVELS = [50, 75, 90, 100, 125, 150, 175, 200, 250, 300, 350, 400, 500];
 
@@ -90,6 +92,14 @@ export const ViewerApp: React.FC = () => {
   // Toolbar ref so we can measure its height and avoid covering it with the TOC drawer
   const toolbarRef = useRef<HTMLDivElement | null>(null);
   const [toolbarHeight, setToolbarHeight] = useState(0);
+
+  // Drawing state - all in memory, no database
+  const [isDrawingMode, setIsDrawingMode] = useState(false);
+  const [drawingColor, setDrawingColor] = useState('#000000');
+  const [drawingStrokeWidth] = useState(2);
+  const [pageDrawings, setPageDrawings] = useState<Map<number, DrawingStroke[]>>(new Map());
+  const [drawingHistory, setDrawingHistory] = useState<Map<number, DrawingStroke[][]>>(new Map());
+  const [drawingHistoryIndex, setDrawingHistoryIndex] = useState<Map<number, number>>(new Map());
 
   // Parse URL params
   const params = new URLSearchParams(window.location.search);
@@ -1030,6 +1040,16 @@ export const ViewerApp: React.FC = () => {
         return;
       }
 
+      // Drawing mode shortcuts
+      if (isDrawingMode) {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          setIsDrawingMode(false);
+          return;
+        }
+        // Note: Undo/Redo for drawings are handled per-page in DrawingToolbar
+      }
+
       if (e.key === "ArrowLeft" || e.key === "PageUp") {
         e.preventDefault();
         handlePrevPage();
@@ -1056,7 +1076,7 @@ export const ViewerApp: React.FC = () => {
         cancelAnimationFrame(pendingZoomRef.current);
       }
     };
-  }, [handlePrevPage, handleNextPage, handleZoomIn, handleZoomOut]);
+  }, [handlePrevPage, handleNextPage, handleZoomIn, handleZoomOut, isDrawingMode]);
 
     // Note handlers
     const handleNoteDelete = useCallback(async (id: string) => {
@@ -1250,6 +1270,88 @@ export const ViewerApp: React.FC = () => {
     return () => { handlePrintRef.current = null; };
   }, [handlePrint]);
 
+  // Drawing handlers
+  const handleToggleDrawing = useCallback(() => {
+    setIsDrawingMode(prev => !prev);
+  }, []);
+
+  const handleColorSelect = useCallback((color: string) => {
+    setDrawingColor(color);
+  }, []);
+
+  const handleDrawingStrokesChange = useCallback((pageNum: number, strokes: DrawingStroke[]) => {
+    setPageDrawings(prev => {
+      const updated = new Map(prev);
+      updated.set(pageNum, strokes);
+      return updated;
+    });
+
+    // Save to history for undo/redo
+    setDrawingHistory(prev => {
+      const updated = new Map(prev);
+      const pageHistory = updated.get(pageNum) || [];
+      const currentIndex = drawingHistoryIndex.get(pageNum) ?? -1;
+
+      // Trim any future history if we're not at the end
+      const trimmedHistory = pageHistory.slice(0, currentIndex + 1);
+      trimmedHistory.push(strokes);
+
+      updated.set(pageNum, trimmedHistory);
+      return updated;
+    });
+
+    setDrawingHistoryIndex(prev => {
+      const updated = new Map(prev);
+      const currentIndex = prev.get(pageNum) ?? -1;
+      updated.set(pageNum, currentIndex + 1);
+      return updated;
+    });
+  }, [drawingHistoryIndex]);
+
+  const handleDrawingUndo = useCallback((pageNum: number) => {
+    const currentIndex = drawingHistoryIndex.get(pageNum) ?? -1;
+    if (currentIndex <= 0) return;
+
+    const newIndex = currentIndex - 1;
+    setDrawingHistoryIndex(prev => {
+      const updated = new Map(prev);
+      updated.set(pageNum, newIndex);
+      return updated;
+    });
+
+    const history = drawingHistory.get(pageNum) || [];
+    const previousStrokes = history[newIndex] || [];
+    setPageDrawings(prev => {
+      const updated = new Map(prev);
+      updated.set(pageNum, previousStrokes);
+      return updated;
+    });
+  }, [drawingHistory, drawingHistoryIndex]);
+
+  const handleDrawingRedo = useCallback((pageNum: number) => {
+    const history = drawingHistory.get(pageNum) || [];
+    const currentIndex = drawingHistoryIndex.get(pageNum) ?? -1;
+    if (currentIndex >= history.length - 1) return;
+
+    const newIndex = currentIndex + 1;
+    setDrawingHistoryIndex(prev => {
+      const updated = new Map(prev);
+      updated.set(pageNum, newIndex);
+      return updated;
+    });
+
+    const nextStrokes = history[newIndex] || [];
+    setPageDrawings(prev => {
+      const updated = new Map(prev);
+      updated.set(pageNum, nextStrokes);
+      return updated;
+    });
+  }, [drawingHistory, drawingHistoryIndex]);
+
+  const handleDrawingClear = useCallback((pageNum: number) => {
+    handleDrawingStrokesChange(pageNum, []);
+  }, [handleDrawingStrokesChange]);
+
   // Ctrl+scroll zoom handler - attached to container only
   useEffect(() => {
     const container = containerRef.current;
@@ -1417,7 +1519,23 @@ export const ViewerApp: React.FC = () => {
         onPageChange={(page) => scrollToPage(page)}
         onDownload={handleDownload}
         onPrint={handlePrint}
+        isDrawingMode={isDrawingMode}
+        onToggleDrawing={handleToggleDrawing}
       />
+
+      {/* Drawing toolbar - shown when drawing mode is active */}
+      {isDrawingMode && (
+        <DrawingToolbar
+          isExpanded={isDrawingMode}
+          selectedColor={drawingColor}
+          onColorSelect={handleColorSelect}
+          onUndo={() => handleDrawingUndo(currentPage)}
+          onRedo={() => handleDrawingRedo(currentPage)}
+          onClear={() => handleDrawingClear(currentPage)}
+          canUndo={(drawingHistoryIndex.get(currentPage) ?? -1) > 0}
+          canRedo={(drawingHistoryIndex.get(currentPage) ?? -1) < ((drawingHistory.get(currentPage) || []).length - 1)}
+        />
+      )}
 
       {/* Left-edge hover target: 12px wide invisible strip to auto-open TOC when cursor hits the edge */}
       <div
@@ -1487,6 +1605,11 @@ export const ViewerApp: React.FC = () => {
                 onNoteEdit={handleNoteEdit}
                 onCommentDelete={handleCommentDelete}
                 onCommentEdit={handleCommentEdit}
+                isDrawingMode={isDrawingMode}
+                drawingColor={drawingColor}
+                drawingStrokeWidth={drawingStrokeWidth}
+                drawingStrokes={pageDrawings.get(pageNum) || []}
+                onDrawingStrokesChange={(strokes) => handleDrawingStrokesChange(pageNum, strokes)}
               />
               );
             });

@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState, useCallback } from "react";
 import type { PDFPageProxy } from "pdfjs-dist";
+import { DrawingCanvas, type DrawingStroke } from "./DrawingCanvas";
 
 interface PageProps {
   pageNum: number;
@@ -29,6 +30,12 @@ interface PageProps {
   onNoteEdit?: (id: string, newText: string) => void;
   onCommentDelete?: (id: string) => void;
   onCommentEdit?: (id: string, newText: string) => void;
+  // Drawing props
+  isDrawingMode?: boolean;
+  drawingColor?: string;
+  drawingStrokeWidth?: number;
+  drawingStrokes?: DrawingStroke[];
+  onDrawingStrokesChange?: (strokes: DrawingStroke[]) => void;
 }
 
 const ZOOM_DEBOUNCE_MS = 75;
@@ -46,6 +53,11 @@ export const Page: React.FC<PageProps> = ({
   onNoteEdit,
   onCommentDelete,
   onCommentEdit,
+  isDrawingMode = false,
+  drawingColor = '#000000',
+  drawingStrokeWidth = 2,
+  drawingStrokes = [],
+  onDrawingStrokesChange,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const textLayerRef = useRef<HTMLDivElement>(null);
@@ -360,6 +372,18 @@ export const Page: React.FC<PageProps> = ({
           ref={canvasRef}
           className={`block ${isLoading || error ? "invisible" : "visible"}`}
         />
+        {/* Drawing layer - appears above PDF canvas */}
+        {isDrawingMode && onDrawingStrokesChange && (
+          <DrawingCanvas
+            width={width}
+            height={height}
+            enabled={isDrawingMode}
+            color={drawingColor}
+            strokeWidth={drawingStrokeWidth}
+            existingStrokes={drawingStrokes}
+            onStrokesChange={onDrawingStrokesChange}
+          />
+        )}
         {/* Text layer for text selection (hidden visually but present for selection) */}
         <div
           ref={textLayerRef}
