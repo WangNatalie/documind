@@ -204,5 +204,22 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     // Return true to indicate we'll send response asynchronously
     return true;
   }
+  
+  if (message.type === 'EXPLAIN_SELECTION_TEXT') {
+    const { text, docHash } = message.payload;
+    console.log(`Received EXPLAIN_SELECTION_TEXT request for text: "${text.substring(0, 50)}..."`);
+    
+    import('./term-extractor.js').then(async (extractor) => {
+      const summary = await extractor.explainSelectedText(text, docHash);
+      console.log(`Generated summary for selected text`);
+      sendResponse({ success: true, summary });
+    }).catch((error: Error) => {
+      console.error('Error summarizing selected text:', error);
+      sendResponse({ success: false, error: error.message });
+    });
+    
+    // Return true to indicate we'll send response asynchronously
+    return true;
+  }
 });
 
