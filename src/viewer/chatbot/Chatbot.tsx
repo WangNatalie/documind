@@ -1,4 +1,5 @@
 import React, { useRef, useState, useEffect } from 'react';
+import { marked } from 'marked';
 import { sendChatQuery } from '../../utils/chatbot-client';
 
 const BOT_BUTTON_SIZE = 56;
@@ -227,7 +228,14 @@ export const Chatbot: React.FC<ChatbotProps> = ({ docHash }) => {
                       : 'bg-neutral-200 dark:bg-neutral-700 text-neutral-900 dark:text-neutral-100'
                   }`}
                 >
-                  {msg.text}
+                  {msg.sender === 'bot' ? (
+                    <div 
+                      className="prose prose-sm dark:prose-invert max-w-none prose-p:my-1 prose-ul:my-1 prose-li:my-0"
+                      dangerouslySetInnerHTML={{ __html: marked(msg.text) as string }}
+                    />
+                  ) : (
+                    msg.text
+                  )}
                 </div>
                 {msg.sender === 'bot' && msg.sources && msg.sources.length > 0 && (
                   <div className="text-xs text-neutral-500 dark:text-neutral-400 mt-1 px-1">
