@@ -16,6 +16,8 @@
     "chunkr-ai": "^0.1.0-alpha.11",
     "dotenv": "^17.2.3",
     "idb": "^8.0.0",
+    "lucide": "^0.544.0",
+    "lucide-react": "^0.544.0",
     "nanoid": "^5.0.7",
     "pdfjs-dist": "^4.0.379",
     "react": "^18.3.1",

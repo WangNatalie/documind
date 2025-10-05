@@ -1,4 +1,5 @@
 import React from 'react';
+import { Eraser, Trash2 } from 'lucide-react';
 
 interface DrawingToolbarProps {
   isExpanded: boolean;
@@ -71,7 +72,7 @@ export const DrawingToolbar: React.FC<DrawingToolbarProps> = ({
             }`}
             title="Eraser"
           >
-            🧼
+            <Eraser size={14} />
           </button>
         </div>
 
@@ -105,7 +106,7 @@ export const DrawingToolbar: React.FC<DrawingToolbarProps> = ({
         className="px-3 py-1.5 bg-red-500 text-white hover:bg-red-600 rounded transition-colors focus:outline-none focus:ring-2 focus:ring-red-500 dark:focus:ring-red-400"
         title="Clear all drawings on current page"
       >
-        🗑
+        <Trash2 size={16} />
       </button>
     </div>
   );

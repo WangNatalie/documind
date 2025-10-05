@@ -1,4 +1,5 @@
 import React from 'react';
+import { Edit, Download } from 'lucide-react';
 
 interface ToolbarProps {
   onToggleTOC?: () => void;
@@ -158,7 +159,7 @@ const ToolbarInner: React.FC<ToolbarProps & { forwardedRef?: React.Ref<HTMLDivEl
             }`}
             title="Drawing tool"
           >
-            ✏️
+            <Edit size={16} />
           </button>
 
           {/* Download & Print */}
@@ -168,7 +169,7 @@ const ToolbarInner: React.FC<ToolbarProps & { forwardedRef?: React.Ref<HTMLDivEl
             className="px-3 py-1.5 bg-neutral-100 text-neutral-800 dark:bg-neutral-800 dark:text-neutral-100 hover:bg-neutral-200 dark:hover:bg-neutral-700 rounded transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400"
             title="Download PDF"
           >
-            ⬇
+            <Download size={16} />
           </button>
 
           {/* Print button intentionally commented out — printing is handled via Ctrl/Cmd+P shortcut in-app */}
