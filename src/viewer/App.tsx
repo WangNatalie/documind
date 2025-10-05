@@ -27,13 +27,20 @@ import {
 } from "../db";
 import { readOPFSFile } from "../db/opfs";
 import ContextMenu from "./ContextMenu";
-import { requestGeminiChunking, requestEmbeddings, requestTOC } from "../utils/chunker-client";
-import { Chatbot } from './chatbot/Chatbot';
+import {
+  requestGeminiChunking,
+  requestEmbeddings,
+  requestTOC,
+} from "../utils/chunker-client";
+import { Chatbot } from "./chatbot/Chatbot";
 import { buildTOCTree } from "../utils/toc";
 import { TOC } from "./TOC";
 import { DrawingToolbar } from "./DrawingToolbar";
+import { getAudio } from "../utils/narrator-client";
 
-const ZOOM_LEVELS = [50, 75, 90, 100, 125, 150, 175, 200, 250, 300, 350, 400, 500];
+const ZOOM_LEVELS = [
+  50, 75, 90, 100, 125, 150, 175, 200, 250, 300, 350, 400, 500,
+];
 
 export const ViewerApp: React.FC = () => {
   const [pdf, setPdf] = useState<PDFDocumentProxy | null>(null);
@@ -47,7 +54,8 @@ export const ViewerApp: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [docHash, setDocHash] = useState<string>("");
   const [isInitialLoad, setIsInitialLoad] = useState(true);
-  const [tableOfContents, setTableOfContents] = useState<TableOfContentsRecord | null>(null);
+  const [tableOfContents, setTableOfContents] =
+    useState<TableOfContentsRecord | null>(null);
 
   // (nestedTOCNodes computed later for use in render)
 
@@ -55,16 +63,19 @@ export const ViewerApp: React.FC = () => {
   const observerRef = useRef<IntersectionObserver | null>(null);
   const renderQueue = useRenderQueue();
   // Protect pages currently in or near viewport from cache eviction
-  const canvasCacheRef = useRef(new CanvasCache((pageNum: number) => {
-    // visiblePages state may lag slightly; combine both refs for safety
-    if (visiblePagesRef.current.has(pageNum)) return true;
-    if ((intersectionVisiblePagesRef.current || new Set()).has(pageNum)) return true;
-    // Also protect small buffer (+/-2) around any currently visible page to reduce thrash
-    for (const vp of visiblePagesRef.current) {
-      if (Math.abs(vp - pageNum) <= 2) return true;
-    }
-    return false;
-  }));
+  const canvasCacheRef = useRef(
+    new CanvasCache((pageNum: number) => {
+      // visiblePages state may lag slightly; combine both refs for safety
+      if (visiblePagesRef.current.has(pageNum)) return true;
+      if ((intersectionVisiblePagesRef.current || new Set()).has(pageNum))
+        return true;
+      // Also protect small buffer (+/-2) around any currently visible page to reduce thrash
+      for (const vp of visiblePagesRef.current) {
+        if (Math.abs(vp - pageNum) <= 2) return true;
+      }
+      return false;
+    })
+  );
   const visiblePagesRef = useRef<Set<number>>(new Set([1]));
   const intersectionVisiblePagesRef = useRef<Set<number>>(new Set([1]));
   const pendingZoomRef = useRef<number | null>(null);
@@ -99,12 +110,18 @@ export const ViewerApp: React.FC = () => {
 
   // Drawing state - all in memory, no database
   const [isDrawingMode, setIsDrawingMode] = useState(false);
-  const [drawingColor, setDrawingColor] = useState('#000000');
+  const [drawingColor, setDrawingColor] = useState("#000000");
   const [drawingStrokeWidth] = useState(2);
   const [isEraserMode, setIsEraserMode] = useState(false);
-  const [pageDrawings, setPageDrawings] = useState<Map<number, DrawingStroke[]>>(new Map());
-  const [drawingHistory, setDrawingHistory] = useState<Map<number, DrawingStroke[][]>>(new Map());
-  const [drawingHistoryIndex, setDrawingHistoryIndex] = useState<Map<number, number>>(new Map());
+  const [pageDrawings, setPageDrawings] = useState<
+    Map<number, DrawingStroke[]>
+  >(new Map());
+  const [drawingHistory, setDrawingHistory] = useState<
+    Map<number, DrawingStroke[][]>
+  >(new Map());
+  const [drawingHistoryIndex, setDrawingHistoryIndex] = useState<
+    Map<number, number>
+  >(new Map());
   // Term summaries state
   interface TermSummary {
     term: string;
@@ -122,10 +139,17 @@ export const ViewerApp: React.FC = () => {
     summaries: TermSummary[];
     lastVisibleTime: number;
   }
-  const [termCache, setTermCache] = useState<Map<number, PageTermCache>>(new Map());
+  const [termCache, setTermCache] = useState<Map<number, PageTermCache>>(
+    new Map()
+  );
   const [selectedTerm, setSelectedTerm] = useState<TermSummary | null>(null);
-  const [termPopupPosition, setTermPopupPosition] = useState<{ x: number; y: number } | null>(null);
-  const [termSourceRects, setTermSourceRects] = useState<Array<{ top: number; left: number; width: number; height: number }>>([]);
+  const [termPopupPosition, setTermPopupPosition] = useState<{
+    x: number;
+    y: number;
+  } | null>(null);
+  const [termSourceRects, setTermSourceRects] = useState<
+    Array<{ top: number; left: number; width: number; height: number }>
+  >([]);
   const [termSourcePage, setTermSourcePage] = useState<number>(1);
 
   // Parse URL params
@@ -133,19 +157,26 @@ export const ViewerApp: React.FC = () => {
   const fileUrl = params.get("file");
   const uploadId = params.get("uploadId");
   // Keep filename in state so we can update it after reading PDF metadata
-  const [fileName, setFileName] = useState<string>(params.get("name") || "document.pdf");
+  const [fileName, setFileName] = useState<string>(
+    params.get("name") || "document.pdf"
+  );
 
   // Listen for state requests and term summaries from background
   useEffect(() => {
     const handleMessage = (message: any) => {
-      if (message.type === 'TERM_SUMMARIES_READY') {
+      if (message.type === "TERM_SUMMARIES_READY") {
         // Received term summaries from background script
         const { summaries, currentPage: summariesPage } = message.payload;
-        console.log('[VIEWER] Received term summaries:', summaries);
-        console.log('[VIEWER] Caching term summaries, count:', summaries?.length || 0, 'for page:', summariesPage);
+        console.log("[VIEWER] Received term summaries:", summaries);
+        console.log(
+          "[VIEWER] Caching term summaries, count:",
+          summaries?.length || 0,
+          "for page:",
+          summariesPage
+        );
 
         // Add to cache with current timestamp
-        setTermCache(prev => {
+        setTermCache((prev) => {
           const newCache = new Map(prev);
           newCache.set(summariesPage, {
             page: summariesPage,
@@ -157,20 +188,27 @@ export const ViewerApp: React.FC = () => {
         return;
       }
 
-      if (message.type === 'REQUEST_VIEWER_STATE') {
+      if (message.type === "REQUEST_VIEWER_STATE") {
         // Extract text from visible pages
-        let visibleText = '';
-        const visiblePages = Array.from(visiblePagesRef.current).sort((a, b) => a - b);
+        let visibleText = "";
+        const visiblePages = Array.from(visiblePagesRef.current).sort(
+          (a, b) => a - b
+        );
 
-        console.log('[VIEWER] Processing state request for visible pages:', visiblePages);
+        console.log(
+          "[VIEWER] Processing state request for visible pages:",
+          visiblePages
+        );
 
         for (const pageNum of visiblePages) {
           const pageEl = document.querySelector(`[data-page-num="${pageNum}"]`);
           if (pageEl) {
             // Try both possible class names for text layer
-            const textLayer = pageEl.querySelector('.text-layer') || pageEl.querySelector('.textLayer');
+            const textLayer =
+              pageEl.querySelector(".text-layer") ||
+              pageEl.querySelector(".textLayer");
             if (textLayer) {
-              const pageText = textLayer.textContent || '';
+              const pageText = textLayer.textContent || "";
               if (pageText.trim()) {
                 visibleText += `\n=== Page ${pageNum} ===\n${pageText}\n`;
               }
@@ -182,31 +220,33 @@ export const ViewerApp: React.FC = () => {
           }
         }
 
-        console.log('[VIEWER] Sending state to background:', {
+        console.log("[VIEWER] Sending state to background:", {
           fileName,
           currentPage,
           totalPages: pages.length,
           visiblePages,
-          textLength: visibleText.length
+          textLength: visibleText.length,
         });
 
         // Send current state to background
-        chrome.runtime.sendMessage({
-          type: 'UPDATE_VIEWER_STATE',
-          payload: {
-            docHash,
-            fileName,
-            currentPage,
-            totalPages: pages.length,
-            zoom,
-            visibleText: visibleText.trim(),
-          }
-        }).catch((error) => {
-          // Suppress "message port closed" errors - these are normal when extension reloads
-          if (!error.message?.includes('message port closed')) {
-            console.error('Failed to send viewer state:', error);
-          }
-        });
+        chrome.runtime
+          .sendMessage({
+            type: "UPDATE_VIEWER_STATE",
+            payload: {
+              docHash,
+              fileName,
+              currentPage,
+              totalPages: pages.length,
+              zoom,
+              visibleText: visibleText.trim(),
+            },
+          })
+          .catch((error) => {
+            // Suppress "message port closed" errors - these are normal when extension reloads
+            if (!error.message?.includes("message port closed")) {
+              console.error("Failed to send viewer state:", error);
+            }
+          });
       }
     };
 
@@ -234,14 +274,19 @@ export const ViewerApp: React.FC = () => {
       const now = Date.now();
       const TEN_SECONDS = 10000;
 
-      setTermCache(prev => {
+      setTermCache((prev) => {
         const newCache = new Map(prev);
         let cleaned = false;
 
         for (const [pageNum, cache] of newCache.entries()) {
           // If page is not currently visible and hasn't been for 10 seconds, remove it
-          if (!visiblePages.has(pageNum) && (now - cache.lastVisibleTime) > TEN_SECONDS) {
-            console.log(`[VIEWER] Cleaning up cache for page ${pageNum} (not visible for >10s)`);
+          if (
+            !visiblePages.has(pageNum) &&
+            now - cache.lastVisibleTime > TEN_SECONDS
+          ) {
+            console.log(
+              `[VIEWER] Cleaning up cache for page ${pageNum} (not visible for >10s)`
+            );
             newCache.delete(pageNum);
             cleaned = true;
           }
@@ -258,7 +303,7 @@ export const ViewerApp: React.FC = () => {
   // Also request terms for visible pages that don't have cache entries
   useEffect(() => {
     const now = Date.now();
-    setTermCache(prev => {
+    setTermCache((prev) => {
       const newCache = new Map(prev);
       let updated = false;
 
@@ -269,11 +314,17 @@ export const ViewerApp: React.FC = () => {
           updated = true;
         } else {
           // Cache miss - request terms for this page
-          console.log(`[VIEWER] Cache miss for page ${pageNum}, requesting terms from background`);
-          chrome.runtime.sendMessage({
-            type: 'REQUEST_PAGE_TERMS',
-            payload: { page: pageNum, docHash }
-          }).catch(err => console.error('Failed to request page terms:', err));
+          console.log(
+            `[VIEWER] Cache miss for page ${pageNum}, requesting terms from background`
+          );
+          chrome.runtime
+            .sendMessage({
+              type: "REQUEST_PAGE_TERMS",
+              payload: { page: pageNum, docHash },
+            })
+            .catch((err) =>
+              console.error("Failed to request page terms:", err)
+            );
         }
       }
 
@@ -282,32 +333,40 @@ export const ViewerApp: React.FC = () => {
   }, [visiblePages, docHash]);
 
   // Helper function to calculate popup position - always snaps to right edge
-  const calculatePopupPosition = useCallback((_x: number, _y: number): { x: number; y: number } => {
-    // Estimated popup dimensions (max-w-md = 448px, approximate height)
-    const POPUP_WIDTH = 448;
-    const POPUP_HEIGHT = 300; // Approximate based on content
-    const MARGIN = 16; // Margin from viewport edge
+  const calculatePopupPosition = useCallback(
+    (_x: number, _y: number): { x: number; y: number } => {
+      // Estimated popup dimensions (max-w-md = 448px, approximate height)
+      const POPUP_WIDTH = 448;
+      const POPUP_HEIGHT = 300; // Approximate based on content
+      const MARGIN = 16; // Margin from viewport edge
 
-    const viewportWidth = window.innerWidth;
-    const viewportHeight = window.innerHeight;
+      const viewportWidth = window.innerWidth;
+      const viewportHeight = window.innerHeight;
 
-    // Always snap to right edge
-    const adjustedX = viewportWidth - POPUP_WIDTH - MARGIN;
+      // Always snap to right edge
+      const adjustedX = viewportWidth - POPUP_WIDTH - MARGIN;
 
-    // Center vertically in viewport
-    let adjustedY = (viewportHeight - POPUP_HEIGHT) / 2;
+      // Center vertically in viewport
+      let adjustedY = (viewportHeight - POPUP_HEIGHT) / 2;
 
-    // Make sure it doesn't go off top or bottom
-    if (adjustedY < MARGIN) {
-      adjustedY = MARGIN;
-    } else if (adjustedY + POPUP_HEIGHT + MARGIN > viewportHeight) {
-      adjustedY = viewportHeight - POPUP_HEIGHT - MARGIN;
-    }
+      // Make sure it doesn't go off top or bottom
+      if (adjustedY < MARGIN) {
+        adjustedY = MARGIN;
+      } else if (adjustedY + POPUP_HEIGHT + MARGIN > viewportHeight) {
+        adjustedY = viewportHeight - POPUP_HEIGHT - MARGIN;
+      }
 
-    console.log('[calculatePopupPosition] Snapping to right edge:', { adjustedX, adjustedY }, 'Viewport:', { viewportWidth, viewportHeight });
+      console.log(
+        "[calculatePopupPosition] Snapping to right edge:",
+        { adjustedX, adjustedY },
+        "Viewport:",
+        { viewportWidth, viewportHeight }
+      );
 
-    return { x: adjustedX, y: adjustedY };
-  }, []);
+      return { x: adjustedX, y: adjustedY };
+    },
+    []
+  );
 
   // Close popup when clicking outside
   useEffect(() => {
@@ -316,8 +375,11 @@ export const ViewerApp: React.FC = () => {
     const handleClickOutside = (e: MouseEvent) => {
       const target = e.target as HTMLElement;
       // Check if click is outside the popup and not on a term highlight
-      if (!target.closest('[data-term-popup]') && !target.closest('[data-term-highlight]')) {
-        console.log('[App] Clicking outside popup, closing');
+      if (
+        !target.closest("[data-term-popup]") &&
+        !target.closest("[data-term-highlight]")
+      ) {
+        console.log("[App] Clicking outside popup, closing");
         setSelectedTerm(null);
         setTermPopupPosition(null);
       }
@@ -325,12 +387,12 @@ export const ViewerApp: React.FC = () => {
 
     // Use timeout to avoid catching the same click that opened the popup
     const timeoutId = setTimeout(() => {
-      document.addEventListener('click', handleClickOutside);
+      document.addEventListener("click", handleClickOutside);
     }, 100);
 
     return () => {
       clearTimeout(timeoutId);
-      document.removeEventListener('click', handleClickOutside);
+      document.removeEventListener("click", handleClickOutside);
     };
   }, [selectedTerm]);
 
@@ -368,7 +430,9 @@ export const ViewerApp: React.FC = () => {
               // import helper at top-level: generateLegacyUploadHash
               // (we import it below where needed)
               // eslint-disable-next-line @typescript-eslint/no-var-requires
-              const { generateLegacyUploadHash } = await import('../utils/hash');
+              const { generateLegacyUploadHash } = await import(
+                "../utils/hash"
+              );
               const legacyHash = await generateLegacyUploadHash(source, {
                 size: arrayBuffer.byteLength,
                 firstBytes,
@@ -377,7 +441,10 @@ export const ViewerApp: React.FC = () => {
 
               const legacyDoc = await getDoc(legacyHash);
               if (legacyDoc) {
-                console.log('[App] Found existing doc under legacy hash, reusing it:', legacyHash);
+                console.log(
+                  "[App] Found existing doc under legacy hash, reusing it:",
+                  legacyHash
+                );
                 // Use legacy hash so existing notes/TOC/chunks are found
                 hash = legacyHash;
                 existing = legacyDoc;
@@ -394,16 +461,22 @@ export const ViewerApp: React.FC = () => {
                     createdAt: legacyDoc.createdAt,
                     updatedAt: Date.now(),
                   });
-                  console.log('[App] Migrated doc record to new content-only hash:', newHash);
+                  console.log(
+                    "[App] Migrated doc record to new content-only hash:",
+                    newHash
+                  );
                 } catch (mErr) {
-                  console.warn('[App] Migration to new hash failed (non-fatal):', mErr);
+                  console.warn(
+                    "[App] Migration to new hash failed (non-fatal):",
+                    mErr
+                  );
                 }
               } else {
                 // No legacy record found; use newHash
                 hash = newHash;
               }
             } catch (err) {
-              console.warn('[App] Legacy hash fallback failed:', err);
+              console.warn("[App] Legacy hash fallback failed:", err);
               hash = newHash;
             }
           } else {
@@ -435,41 +508,48 @@ export const ViewerApp: React.FC = () => {
         setPdf(pdfDoc);
         // Update the browser tab title to the document name
         try {
-            document.title = fileName || 'document.pdf';
+          document.title = fileName || "document.pdf";
         } catch (e) {
           // ignore in non-browser environments
         }
 
-          // Derive a better filename synchronously (await metadata) so we can use it when persisting
-          let derivedName: string | undefined = params.get("name") || undefined;
-          if (!derivedName) {
-            try {
-              const meta = await (pdfDoc as any).getMetadata?.();
-              const title = meta?.info?.Title || meta?.info?.title || (meta?.metadata && typeof meta.metadata.get === 'function' ? meta.metadata.get('dc:title') : undefined);
-              if (title && typeof title === 'string' && title.trim().length > 0) {
-                derivedName = title.trim();
-              }
-            } catch (e) {
-              // ignore metadata errors
+        // Derive a better filename synchronously (await metadata) so we can use it when persisting
+        let derivedName: string | undefined = params.get("name") || undefined;
+        if (!derivedName) {
+          try {
+            const meta = await (pdfDoc as any).getMetadata?.();
+            const title =
+              meta?.info?.Title ||
+              meta?.info?.title ||
+              (meta?.metadata && typeof meta.metadata.get === "function"
+                ? meta.metadata.get("dc:title")
+                : undefined);
+            if (title && typeof title === "string" && title.trim().length > 0) {
+              derivedName = title.trim();
             }
+          } catch (e) {
+            // ignore metadata errors
           }
+        }
 
-          if (!derivedName && fileUrl) {
-            try {
-              const u = new URL(fileUrl);
-              const parts = u.pathname.split('/').filter(Boolean);
-              const last = parts[parts.length - 1] || '';
-              if (last) {
-                derivedName = decodeURIComponent(last.split('?')[0]) || undefined;
-              }
-            } catch (e) {
-              // ignore
+        if (!derivedName && fileUrl) {
+          try {
+            const u = new URL(fileUrl);
+            const parts = u.pathname.split("/").filter(Boolean);
+            const last = parts[parts.length - 1] || "";
+            if (last) {
+              derivedName = decodeURIComponent(last.split("?")[0]) || undefined;
             }
+          } catch (e) {
+            // ignore
           }
+        }
 
-          if (!derivedName) derivedName = 'document.pdf';
-          setFileName(derivedName);
-          try { document.title = derivedName; } catch (e) {}
+        if (!derivedName) derivedName = "document.pdf";
+        setFileName(derivedName);
+        try {
+          document.title = derivedName;
+        } catch (e) {}
 
         // Load all pages
         const pageCount = pdfDoc.numPages;
@@ -534,7 +614,7 @@ export const ViewerApp: React.FC = () => {
               // reset DB connection in case it is stale or deleted
               resetDB();
             } catch (resetErr) {
-              console.warn('resetDB failed while loading notes:', resetErr);
+              console.warn("resetDB failed while loading notes:", resetErr);
             }
             setNotes([]);
           }
@@ -549,7 +629,7 @@ export const ViewerApp: React.FC = () => {
             try {
               resetDB();
             } catch (resetErr) {
-              console.warn('resetDB failed while loading comments:', resetErr);
+              console.warn("resetDB failed while loading comments:", resetErr);
             }
             setComments([]);
           }
@@ -559,14 +639,14 @@ export const ViewerApp: React.FC = () => {
         (async () => {
           try {
             const drawings = await getDrawingsByDoc(hash);
-            console.log('[App] Loaded drawings:', drawings.length);
+            console.log("[App] Loaded drawings:", drawings.length);
 
             // Convert array of DrawingRecords to Map<pageNum, strokes[]>
             const drawingsMap = new Map<number, DrawingStroke[]>();
             const historyMap = new Map<number, DrawingStroke[][]>();
             const historyIndexMap = new Map<number, number>();
 
-            drawings.forEach(drawing => {
+            drawings.forEach((drawing) => {
               drawingsMap.set(drawing.pageNum, drawing.strokes);
               // Initialize history with current state
               historyMap.set(drawing.pageNum, [drawing.strokes]);
@@ -581,7 +661,7 @@ export const ViewerApp: React.FC = () => {
             try {
               resetDB();
             } catch (resetErr) {
-              console.warn('resetDB failed while loading drawings:', resetErr);
+              console.warn("resetDB failed while loading drawings:", resetErr);
             }
             // Keep empty maps on error
           }
@@ -602,26 +682,26 @@ export const ViewerApp: React.FC = () => {
             });
           }
         } catch (err) {
-          console.error('Failed to create/update doc record (non-fatal):', err);
+          console.error("Failed to create/update doc record (non-fatal):", err);
           // If the DB is in a bad state, reset the connection so subsequent operations can retry
           try {
             resetDB();
             // a future operation (highlights/notes) will attempt to open the DB again
           } catch (resetErr) {
-            console.warn('resetDB failed:', resetErr);
+            console.warn("resetDB failed:", resetErr);
           }
         }
 
         // Helper: check DB for chunks/TOC and generate TOC when appropriate.
         const checkAndGenerateTOC = async () => {
-          console.log('[App] checkAndGenerateTOC called for document:', hash);
+          console.log("[App] checkAndGenerateTOC called for document:", hash);
           try {
             const [chunks, toc] = await Promise.all([
               getChunksByDoc(hash),
               getTableOfContents(hash),
             ]);
 
-            console.log('[App] TOC check results:', {
+            console.log("[App] TOC check results:", {
               chunksCount: chunks.length,
               hasTOC: !!toc,
               tocItemsCount: toc?.items?.length || 0,
@@ -629,17 +709,19 @@ export const ViewerApp: React.FC = () => {
 
             if (toc) {
               setTableOfContents(toc);
-              console.log('[App] TOC already present, skipping generation');
+              console.log("[App] TOC already present, skipping generation");
               return;
             }
 
             if (chunks.length === 0) {
-              console.log('[App] No chunks found, skipping TOC generation');
+              console.log("[App] No chunks found, skipping TOC generation");
               return;
             }
 
             // There are chunks but no TOC — request TOC generation
-            console.log('[App] Document has chunks but no TOC, requesting TOC generation');
+            console.log(
+              "[App] Document has chunks but no TOC, requesting TOC generation"
+            );
             const tocResponse = await requestTOC({
               docHash: hash,
               fileUrl: fileUrl || undefined,
@@ -647,11 +729,17 @@ export const ViewerApp: React.FC = () => {
             });
 
             if (!tocResponse.success) {
-              console.warn('[App] Failed to create TOC task:', tocResponse.error);
+              console.warn(
+                "[App] Failed to create TOC task:",
+                tocResponse.error
+              );
               return;
             }
 
-            console.log('[App] TOC generation task created:', tocResponse.taskId);
+            console.log(
+              "[App] TOC generation task created:",
+              tocResponse.taskId
+            );
 
             // Poll for TOC to appear in DB (bounded retries)
             const maxAttempts = 15;
@@ -661,62 +749,94 @@ export const ViewerApp: React.FC = () => {
                 await new Promise((res) => setTimeout(res, baseDelayMs));
                 const newTOC = await getTableOfContents(hash);
                 if (newTOC) {
-                  console.log(`[App] TOC ready after ${attempt} ${attempt === 1 ? 'attempt' : 'attempts'}`);
+                  console.log(
+                    `[App] TOC ready after ${attempt} ${attempt === 1 ? "attempt" : "attempts"}`
+                  );
                   setTableOfContents(newTOC);
                   break;
                 }
               } catch (pollErr) {
-                console.warn('[App] Error while polling for TOC (non-fatal):', pollErr);
+                console.warn(
+                  "[App] Error while polling for TOC (non-fatal):",
+                  pollErr
+                );
               }
             }
           } catch (err) {
-            console.error('[App] Error checking/creating TOC (non-fatal):', err);
+            console.error(
+              "[App] Error checking/creating TOC (non-fatal):",
+              err
+            );
           }
         };
 
         // Kick off initial check
-        console.log('[App] Starting initial TOC check...');
+        console.log("[App] Starting initial TOC check...");
         checkAndGenerateTOC();
 
         // Start chunking+embedding workflow (for URL or OPFS uploadId)
         if (fileUrl) {
           requestGeminiChunking({ docHash: hash, fileUrl })
             .then((response) => {
-              if (response.success) console.log('Chunking task created:', response.taskId);
-              else console.error('Failed to create chunking task:', response.error);
+              if (response.success)
+                console.log("Chunking task created:", response.taskId);
+              else
+                console.error(
+                  "Failed to create chunking task:",
+                  response.error
+                );
               return requestEmbeddings(hash);
             })
             .then((embeddingResponse) => {
               if (embeddingResponse?.success) {
-                console.log(`Embeddings generated: ${embeddingResponse.count} new embeddings`);
+                console.log(
+                  `Embeddings generated: ${embeddingResponse.count} new embeddings`
+                );
               } else if (embeddingResponse?.error) {
-                console.warn('Failed to generate embeddings:', embeddingResponse.error);
+                console.warn(
+                  "Failed to generate embeddings:",
+                  embeddingResponse.error
+                );
               }
-              console.log('[App] Checking for TOC after embeddings complete...');
+              console.log(
+                "[App] Checking for TOC after embeddings complete..."
+              );
               return checkAndGenerateTOC();
             })
             .catch((err) => {
-              console.error('Error in chunking/embedding workflow:', err);
+              console.error("Error in chunking/embedding workflow:", err);
             });
         } else if (uploadId) {
-          console.log('[App.tsx] Requesting chunking with uploadId:', uploadId);
+          console.log("[App.tsx] Requesting chunking with uploadId:", uploadId);
           requestGeminiChunking({ docHash: hash, uploadId })
             .then((response) => {
-              if (response.success) console.log('Chunking task created:', response.taskId);
-              else console.error('Failed to create chunking task:', response.error);
+              if (response.success)
+                console.log("Chunking task created:", response.taskId);
+              else
+                console.error(
+                  "Failed to create chunking task:",
+                  response.error
+                );
               return requestEmbeddings(hash);
             })
             .then((embeddingResponse) => {
               if (embeddingResponse?.success) {
-                console.log(`Embeddings generated: ${embeddingResponse.count} new embeddings`);
+                console.log(
+                  `Embeddings generated: ${embeddingResponse.count} new embeddings`
+                );
               } else if (embeddingResponse?.error) {
-                console.warn('Failed to generate embeddings:', embeddingResponse.error);
+                console.warn(
+                  "Failed to generate embeddings:",
+                  embeddingResponse.error
+                );
               }
-              console.log('[App] Checking for TOC after embeddings complete...');
+              console.log(
+                "[App] Checking for TOC after embeddings complete..."
+              );
               return checkAndGenerateTOC();
             })
             .catch((err) => {
-              console.error('Error in chunking/embedding workflow:', err);
+              console.error("Error in chunking/embedding workflow:", err);
             });
         }
 
@@ -734,7 +854,7 @@ export const ViewerApp: React.FC = () => {
   // Keep track of TOC state changes for debugging and to ensure the value is used
   useEffect(() => {
     if (tableOfContents) {
-      console.log('[App] Table of Contents updated:', tableOfContents);
+      console.log("[App] Table of Contents updated:", tableOfContents);
     }
   }, [tableOfContents]);
 
@@ -742,26 +862,31 @@ export const ViewerApp: React.FC = () => {
     // Treat the toolbar hamburger as the "pin" toggle: clicking it toggles pinned state
     setTocPinned((prev) => {
       const next = !prev;
-      if (next) setTocOpen(true); // when pinned, ensure the TOC is open
+      if (next)
+        setTocOpen(true); // when pinned, ensure the TOC is open
       else setTocOpen(false); // when unpinned, close the TOC
       return next;
     });
   }, []);
 
-  const handleTOCSelect = useCallback((item: any) => {
-    // scroll to page when TOC entry clicked
-    if (typeof item.page === 'number') {
-      scrollToPage(item.page);
-      if (!tocPinned) setTocOpen(false);
-    }
-  }, [tocPinned]);
+  const handleTOCSelect = useCallback(
+    (item: any) => {
+      // scroll to page when TOC entry clicked
+      if (typeof item.page === "number") {
+        scrollToPage(item.page);
+        if (!tocPinned) setTocOpen(false);
+      }
+    },
+    [tocPinned]
+  );
 
   // Measure toolbar height so the TOC drawer doesn't cover it
   useEffect(() => {
     const el = toolbarRef.current;
     if (!el) return;
 
-    const update = () => setToolbarHeight(el.getBoundingClientRect().height || 0);
+    const update = () =>
+      setToolbarHeight(el.getBoundingClientRect().height || 0);
     update();
     const ro = new ResizeObserver(update);
     ro.observe(el);
@@ -781,7 +906,8 @@ export const ViewerApp: React.FC = () => {
 
   const scheduleCloseFromHover = useCallback(() => {
     if (tocPinned) return; // don't auto-close when pinned
-    if (hoverCloseTimeout.current) window.clearTimeout(hoverCloseTimeout.current);
+    if (hoverCloseTimeout.current)
+      window.clearTimeout(hoverCloseTimeout.current);
     hoverCloseTimeout.current = window.setTimeout(() => {
       setTocOpen(false);
       hoverCloseTimeout.current = null;
@@ -813,6 +939,34 @@ export const ViewerApp: React.FC = () => {
 
   // Handle context menu actions (note creation, comment, etc.)
   const handleContextAction = async (action: string) => {
+    if (action === "narrate") {
+      const sel = window.getSelection();
+      if (!sel || sel.rangeCount === 0) return;
+      const selectedText = sel.toString().trim();
+      if (!selectedText) return;
+
+      try {
+        console.log('[App] Requesting narration for selection length', selectedText.length);
+        const audioBuffer = await getAudio(selectedText);
+        if (audioBuffer) {
+          console.log('[App] Playing narration audio (ArrayBuffer length)', audioBuffer.byteLength);
+          const blob = new Blob([audioBuffer], { type: 'audio/mpeg' });
+          const url = URL.createObjectURL(blob);
+          const audioEl = new Audio(url);
+          audioEl.play().catch(e => console.error('[App] Audio playback failed', e));
+          audioEl.onended = () => {
+            URL.revokeObjectURL(url);
+          };
+        } else {
+          console.error('[App] No audio buffer received for narration');
+        }
+      } catch (err) {
+        console.error('[App] Error requesting narration:', err);
+      }
+
+      setContextVisible(false);
+      return;
+    }
     if (action === "explain") {
       // Get selected text and request summary
       const sel = window.getSelection();
@@ -848,37 +1002,52 @@ export const ViewerApp: React.FC = () => {
         height: r.height / pageBox.height,
       }));
 
-      console.log('[App] AI Explanation requested for text:', selectedText, 'on page:', pageNum);
+      console.log(
+        "[App] AI Explanation requested for text:",
+        selectedText,
+        "on page:",
+        pageNum
+      );
 
       try {
         // Send message to background script to summarize the selected text
         const response = await chrome.runtime.sendMessage({
-          type: 'EXPLAIN_SELECTION',
+          type: "EXPLAIN_SELECTION",
           payload: {
             text: selectedText,
-            docHash
-          }
+            docHash,
+          },
         });
 
-        console.log('[App] Received response from background:', response);
+        console.log("[App] Received response from background:", response);
 
         if (response && response.success && response.summary) {
-          console.log('[App] Received explanation:', response.summary);
+          console.log("[App] Received explanation:", response.summary);
 
           // Display the summary in the term popup with adjusted position
           setSelectedTerm(response.summary);
           setTermSourceRects(normalizedRects);
           setTermSourcePage(pageNum);
-          const adjustedPos = calculatePopupPosition(first.left, first.top + first.height);
+          const adjustedPos = calculatePopupPosition(
+            first.left,
+            first.top + first.height
+          );
           setTermPopupPosition(adjustedPos);
         } else {
-          console.error('[App] Failed to get explanation:', response?.error || 'No response received');
+          console.error(
+            "[App] Failed to get explanation:",
+            response?.error || "No response received"
+          );
           // Show error to user
-          alert(`Failed to generate explanation: ${response?.error || 'No response received'}`);
+          alert(
+            `Failed to generate explanation: ${response?.error || "No response received"}`
+          );
         }
       } catch (error) {
-        console.error('[App] Error requesting explanation:', error);
-        alert(`Error requesting explanation: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        console.error("[App] Error requesting explanation:", error);
+        alert(
+          `Error requesting explanation: ${error instanceof Error ? error.message : "Unknown error"}`
+        );
       }
 
       setContextVisible(false);
@@ -898,7 +1067,12 @@ export const ViewerApp: React.FC = () => {
         ?.closest("[data-page-num]") as HTMLElement | null;
       if (!pageEl) return;
       const pageNum = parseInt(pageEl.getAttribute("data-page-num") || "0", 10);
-      setCommentAnchor({ x: first.left, y: first.top - 24, page: pageNum, range });
+      setCommentAnchor({
+        x: first.left,
+        y: first.top - 24,
+        page: pageNum,
+        range,
+      });
       setCommentInput("");
       setContextVisible(false);
       return;
@@ -938,7 +1112,13 @@ export const ViewerApp: React.FC = () => {
     }));
 
     // Open input field for note text
-    setNoteAnchor({ x: first.left, y: first.top - 24, page: pageNum, color, rects: relRects });
+    setNoteAnchor({
+      x: first.left,
+      y: first.top - 24,
+      page: pageNum,
+      color,
+      rects: relRects,
+    });
     setNoteInput("");
 
     // Clear selection and close menu
@@ -1016,12 +1196,21 @@ export const ViewerApp: React.FC = () => {
           });
 
           if (nowVisible.length > 0 || nowHidden.length > 0) {
-            console.log(`[IntersectionObserver] Visible:`, nowVisible, `Hidden:`, nowHidden, `All visible:`, Array.from(visiblePagesRef.current));
+            console.log(
+              `[IntersectionObserver] Visible:`,
+              nowVisible,
+              `Hidden:`,
+              nowHidden,
+              `All visible:`,
+              Array.from(visiblePagesRef.current)
+            );
           }
 
           // Update current page if we found a visible page with decent ratio
           if (mostVisiblePage > 0 && maxRatio >= 0.3) {
-            console.log(`[IntersectionObserver] Updating current page to ${mostVisiblePage} (ratio: ${maxRatio.toFixed(2)})`);
+            console.log(
+              `[IntersectionObserver] Updating current page to ${mostVisiblePage} (ratio: ${maxRatio.toFixed(2)})`
+            );
             updateCurrentPage(mostVisiblePage);
           }
         },
@@ -1092,15 +1281,16 @@ export const ViewerApp: React.FC = () => {
       // Update visible pages set
       const newVisiblePages = new Set<number>();
 
-      const pageElements = container.querySelectorAll('[data-page-num]');
+      const pageElements = container.querySelectorAll("[data-page-num]");
       pageElements.forEach((el) => {
-        const pageNum = parseInt(el.getAttribute('data-page-num') || '0', 10);
+        const pageNum = parseInt(el.getAttribute("data-page-num") || "0", 10);
         if (pageNum === 0) return;
 
         const rect = el.getBoundingClientRect();
 
         // Check if page is visible in viewport
-        const isVisible = rect.bottom > containerTop && rect.top < containerBottom;
+        const isVisible =
+          rect.bottom > containerTop && rect.top < containerBottom;
         if (isVisible) {
           newVisiblePages.add(pageNum);
         }
@@ -1118,20 +1308,28 @@ export const ViewerApp: React.FC = () => {
       // Update visible pages ref (for IntersectionObserver compatibility)
       const oldVisibleArray = Array.from(visiblePagesRef.current).sort();
       const newVisibleArray = Array.from(newVisiblePages).sort();
-      const visibleChanged = oldVisibleArray.length !== newVisibleArray.length ||
+      const visibleChanged =
+        oldVisibleArray.length !== newVisibleArray.length ||
         oldVisibleArray.some((p, i) => p !== newVisibleArray[i]);
 
       visiblePagesRef.current = newVisiblePages;
 
       // Update visible pages state (triggers re-render)
       if (visibleChanged) {
-        console.log(`[Scroll] Visible pages changed:`, oldVisibleArray, '->', newVisibleArray);
+        console.log(
+          `[Scroll] Visible pages changed:`,
+          oldVisibleArray,
+          "->",
+          newVisibleArray
+        );
         setVisiblePages(newVisiblePages);
       }
 
       // Update current page if changed
       if (closestPage !== currentPage) {
-        console.log(`[Scroll] Updating current page from ${currentPage} to ${closestPage}`);
+        console.log(
+          `[Scroll] Updating current page from ${currentPage} to ${closestPage}`
+        );
         setCurrentPage(closestPage);
       }
     };
@@ -1147,7 +1345,7 @@ export const ViewerApp: React.FC = () => {
       });
     };
 
-    container.addEventListener('scroll', throttledScroll, { passive: true });
+    container.addEventListener("scroll", throttledScroll, { passive: true });
 
     // Initial call to set up visible pages
     // Delay if we're on initial load to allow scroll restoration to complete
@@ -1161,7 +1359,7 @@ export const ViewerApp: React.FC = () => {
     }
 
     return () => {
-      container.removeEventListener('scroll', throttledScroll);
+      container.removeEventListener("scroll", throttledScroll);
       if (rafId) cancelAnimationFrame(rafId);
     };
   }, [currentPage, pages.length, scale, isInitialLoad]); // Added scale dependency so visibility rechecks on zoom
@@ -1192,7 +1390,10 @@ export const ViewerApp: React.FC = () => {
   // options.snapToTop -> keep the current top-most page top aligned after zoom
   // Uses RAF throttling to prevent excessive updates during rapid zoom
   const changeZoom = useCallback(
-    (newZoom: string, options?: { cursorPoint?: { x: number; y: number }; snapToTop?: boolean }) => {
+    (
+      newZoom: string,
+      options?: { cursorPoint?: { x: number; y: number }; snapToTop?: boolean }
+    ) => {
       const container = containerRef.current;
       if (!container || pages.length === 0) {
         setZoom(newZoom);
@@ -1214,7 +1415,9 @@ export const ViewerApp: React.FC = () => {
         pages[0]!,
         containerWidth,
         containerHeight,
-        newZoom === "fitWidth" || newZoom === "fitPage" ? newZoom : parseInt(newZoom, 10)
+        newZoom === "fitWidth" || newZoom === "fitPage"
+          ? newZoom
+          : parseInt(newZoom, 10)
       );
 
       // Decide new scrollTop based on options
@@ -1225,10 +1428,14 @@ export const ViewerApp: React.FC = () => {
         const cursorOffset = options.cursorPoint.y - containerRect.top;
         const absoluteOffsetBefore = container.scrollTop + cursorOffset;
         // Scale the absolute offset
-        newScrollTop = absoluteOffsetBefore * (calcScale / Math.max(oldScale, 0.0001)) - cursorOffset;
+        newScrollTop =
+          absoluteOffsetBefore * (calcScale / Math.max(oldScale, 0.0001)) -
+          cursorOffset;
       } else if (options?.snapToTop) {
         // Find the current top-most visible page (use currentPage)
-        const pageEl = container.querySelector(`[data-page-num="${currentPage}"]`) as HTMLElement | null;
+        const pageEl = container.querySelector(
+          `[data-page-num="${currentPage}"]`
+        ) as HTMLElement | null;
         if (pageEl) {
           const pageOffset = pageEl.offsetTop; // offset within container
           newScrollTop = pageOffset * (calcScale / Math.max(oldScale, 0.0001));
@@ -1236,7 +1443,9 @@ export const ViewerApp: React.FC = () => {
       } else {
         // default: keep center stable
         const centerOffset = container.scrollTop + container.clientHeight / 2;
-        newScrollTop = centerOffset * (calcScale / Math.max(oldScale, 0.0001)) - container.clientHeight / 2;
+        newScrollTop =
+          centerOffset * (calcScale / Math.max(oldScale, 0.0001)) -
+          container.clientHeight / 2;
       }
 
       // Apply new scrollTop (clamped) synchronously before changing zoom
@@ -1250,10 +1459,10 @@ export const ViewerApp: React.FC = () => {
         // scrollBehavior to 'auto'.
         const prevBehavior = (container.style as any).scrollBehavior;
         try {
-          (container.style as any).scrollBehavior = 'auto';
+          (container.style as any).scrollBehavior = "auto";
           container.scrollTo({ top: clamped });
         } finally {
-          (container.style as any).scrollBehavior = prevBehavior || '';
+          (container.style as any).scrollBehavior = prevBehavior || "";
         }
       }
 
@@ -1279,16 +1488,25 @@ export const ViewerApp: React.FC = () => {
       try {
         const cw = container.clientWidth;
         const ch = container.clientHeight - 40;
-        const s = calculateScale(pages[0], cw, ch, zoom as 'fitWidth' | 'fitPage');
+        const s = calculateScale(
+          pages[0],
+          cw,
+          ch,
+          zoom as "fitWidth" | "fitPage"
+        );
         const percent = Math.round((s / DPI_ADJUSTMENT) * 100);
-        const nextZoom = ZOOM_LEVELS.find((z) => z > percent) || ZOOM_LEVELS[ZOOM_LEVELS.length - 1];
+        const nextZoom =
+          ZOOM_LEVELS.find((z) => z > percent) ||
+          ZOOM_LEVELS[ZOOM_LEVELS.length - 1];
         changeZoom(nextZoom.toString(), { snapToTop: true });
       } catch (e) {
         changeZoom("100", { snapToTop: true });
       }
     } else {
       const currentZoom = parseInt(zoom, 10);
-      const nextZoom = ZOOM_LEVELS.find((z) => z > currentZoom) || ZOOM_LEVELS[ZOOM_LEVELS.length - 1];
+      const nextZoom =
+        ZOOM_LEVELS.find((z) => z > currentZoom) ||
+        ZOOM_LEVELS[ZOOM_LEVELS.length - 1];
       changeZoom(nextZoom.toString(), { snapToTop: true });
     }
   }, [zoom, changeZoom]);
@@ -1305,7 +1523,12 @@ export const ViewerApp: React.FC = () => {
       try {
         const cw = container.clientWidth;
         const ch = container.clientHeight - 40;
-        const s = calculateScale(pages[0], cw, ch, zoom as 'fitWidth' | 'fitPage');
+        const s = calculateScale(
+          pages[0],
+          cw,
+          ch,
+          zoom as "fitWidth" | "fitPage"
+        );
         const percent = Math.round((s / DPI_ADJUSTMENT) * 100);
         const reversed = [...ZOOM_LEVELS].reverse();
         const prevZoom = reversed.find((z) => z < percent) || ZOOM_LEVELS[0];
@@ -1315,7 +1538,8 @@ export const ViewerApp: React.FC = () => {
       }
     } else {
       const currentZoom = parseInt(zoom, 10);
-      const prevZoom = [...ZOOM_LEVELS].reverse().find((z) => z < currentZoom) || 50;
+      const prevZoom =
+        [...ZOOM_LEVELS].reverse().find((z) => z < currentZoom) || 50;
       changeZoom(prevZoom.toString(), { snapToTop: true });
     }
   }, [zoom, changeZoom]);
@@ -1324,10 +1548,11 @@ export const ViewerApp: React.FC = () => {
   const handlePrintRef = useRef<(() => Promise<void>) | null>(null);
 
   // Handler to save term summary as a note
-  const handleSaveTermAsNote = useCallback(async (termSummary: TermSummary) => {
-    try {
-      // Format the note text with term definition and key points
-      const noteText = `📖 ${termSummary.term}
+  const handleSaveTermAsNote = useCallback(
+    async (termSummary: TermSummary) => {
+      try {
+        // Format the note text with term definition and key points
+        const noteText = `📖 ${termSummary.term}
 
 Definition: ${termSummary.definition}
 
@@ -1336,47 +1561,61 @@ Key Points:
 • ${termSummary.explanation2}
 • ${termSummary.explanation3}`;
 
-      // Use the page where the term was clicked/selected, not where the context is
-      const notePage = termSourcePage || currentPage;
+        // Use the page where the term was clicked/selected, not where the context is
+        const notePage = termSourcePage || currentPage;
 
-      // Use the rectangles where the term was found, or create a small indicator
-      const noteRects = termSourceRects.length > 0 ? termSourceRects : [{
-        top: 0.02,    // 2% from top
-        left: 0.02,   // 2% from left
-        width: 0.06,  // 6% of page width (small indicator)
-        height: 0.03, // 3% of page height
-      }];
+        // Use the rectangles where the term was found, or create a small indicator
+        const noteRects =
+          termSourceRects.length > 0
+            ? termSourceRects
+            : [
+                {
+                  top: 0.02, // 2% from top
+                  left: 0.02, // 2% from left
+                  width: 0.06, // 6% of page width (small indicator)
+                  height: 0.03, // 3% of page height
+                },
+              ];
 
-      // Create note with the rectangles from the term location
-      const noteId = `${docHash}:${notePage}:${Date.now()}`;
-      const newNote = {
-        id: noteId,
-        docHash,
-        page: notePage,
-        rects: noteRects,
-        color: 'yellow', // Default color
-        text: noteText,
-        createdAt: Date.now(),
-      };
+        // Create note with the rectangles from the term location
+        const noteId = `${docHash}:${notePage}:${Date.now()}`;
+        const newNote = {
+          id: noteId,
+          docHash,
+          page: notePage,
+          rects: noteRects,
+          color: "yellow", // Default color
+          text: noteText,
+          createdAt: Date.now(),
+        };
 
-      await putNote(newNote);
-      setNotes((prev) => [...prev, newNote]);
+        await putNote(newNote);
+        setNotes((prev) => [...prev, newNote]);
 
-      console.log('[App] Saved term summary as note on page', notePage, ':', termSummary.term, 'with rects:', noteRects);
+        console.log(
+          "[App] Saved term summary as note on page",
+          notePage,
+          ":",
+          termSummary.term,
+          "with rects:",
+          noteRects
+        );
 
-      // Close the popup after saving
-      setSelectedTerm(null);
-      setTermPopupPosition(null);
-      setTermSourceRects([]);
-      setTermSourcePage(1);
+        // Close the popup after saving
+        setSelectedTerm(null);
+        setTermPopupPosition(null);
+        setTermSourceRects([]);
+        setTermSourcePage(1);
 
-      // Optional: show a brief success message
-      // You could add a toast notification here if you have that component
-    } catch (err) {
-      console.error('[App] Failed to save term as note:', err);
-      alert('Failed to save note. Please try again.');
-    }
-  }, [docHash, currentPage, termSourceRects, termSourcePage]);
+        // Optional: show a brief success message
+        // You could add a toast notification here if you have that component
+      } catch (err) {
+        console.error("[App] Failed to save term as note:", err);
+        alert("Failed to save note. Please try again.");
+      }
+    },
+    [docHash, currentPage, termSourceRects, termSourcePage]
+  );
 
   // Keyboard navigation and ctrl+scroll zoom
   useEffect(() => {
@@ -1384,16 +1623,16 @@ Key Points:
       const isMod = e.ctrlKey || e.metaKey;
 
       // Intercept Ctrl/Cmd+P to use in-app printing flow
-      if (isMod && (e.key === 'p' || e.key === 'P')) {
+      if (isMod && (e.key === "p" || e.key === "P")) {
         e.preventDefault();
         // call print handler via ref (may be set after effect declared)
         (async () => {
           try {
             const fn = handlePrintRef.current;
             if (fn) await fn();
-            else console.warn('Print handler not ready');
+            else console.warn("Print handler not ready");
           } catch (err) {
-            console.error('Error running in-app print', err);
+            console.error("Error running in-app print", err);
           }
         })();
         return;
@@ -1427,42 +1666,44 @@ Key Points:
     };
   }, [handlePrevPage, handleNextPage, handleZoomIn, handleZoomOut]);
 
-    // Note handlers
-    const handleNoteDelete = useCallback(async (id: string) => {
-      try {
-        await deleteNote(id);
-        setNotes((prev) => prev.filter((n) => n.id !== id));
-      } catch (err) {
-        console.error("Failed to delete note", err);
-      }
-    }, []);
+  // Note handlers
+  const handleNoteDelete = useCallback(async (id: string) => {
+    try {
+      await deleteNote(id);
+      setNotes((prev) => prev.filter((n) => n.id !== id));
+    } catch (err) {
+      console.error("Failed to delete note", err);
+    }
+  }, []);
 
-    const handleNoteEdit = useCallback(async (id: string, newText: string) => {
+  const handleNoteEdit = useCallback(
+    async (id: string, newText: string) => {
       try {
         const note = notes.find((n) => n.id === id);
         if (!note) return;
 
         const updatedNote = { ...note, text: newText.trim() || undefined };
         await putNote(updatedNote);
-        setNotes((prev) =>
-          prev.map((n) => (n.id === id ? updatedNote : n))
-        );
+        setNotes((prev) => prev.map((n) => (n.id === id ? updatedNote : n)));
       } catch (err) {
         console.error("Failed to update note", err);
       }
-    }, [notes]);
+    },
+    [notes]
+  );
 
-    // Comment handlers
-    const handleCommentDelete = useCallback(async (id: string) => {
-      try {
-        await deleteComment(id);
-        setComments((prev) => prev.filter((c) => c.id !== id));
-      } catch (err) {
-        console.error("Failed to delete comment", err);
-      }
-    }, []);
+  // Comment handlers
+  const handleCommentDelete = useCallback(async (id: string) => {
+    try {
+      await deleteComment(id);
+      setComments((prev) => prev.filter((c) => c.id !== id));
+    } catch (err) {
+      console.error("Failed to delete comment", err);
+    }
+  }, []);
 
-    const handleCommentEdit = useCallback(async (id: string, newText: string) => {
+  const handleCommentEdit = useCallback(
+    async (id: string, newText: string) => {
       try {
         const comment = comments.find((c) => c.id === id);
         if (!comment) return;
@@ -1475,7 +1716,9 @@ Key Points:
       } catch (err) {
         console.error("Failed to update comment", err);
       }
-    }, [comments]);
+    },
+    [comments]
+  );
 
   // Download and print handlers
   const handleDownload = useCallback(async () => {
@@ -1483,9 +1726,9 @@ Key Points:
       // Prefer original URL or OPFS uploadId
       if (fileUrl) {
         // Trigger download by navigating to the URL (preserve CORS behavior)
-        const a = document.createElement('a');
+        const a = document.createElement("a");
         a.href = fileUrl;
-        a.download = fileName || 'document.pdf';
+        a.download = fileName || "document.pdf";
         document.body.appendChild(a);
         a.click();
         a.remove();
@@ -1494,11 +1737,11 @@ Key Points:
 
       if (uploadId) {
         const arrayBuffer = await readOPFSFile(uploadId);
-        const blob = new Blob([arrayBuffer], { type: 'application/pdf' });
+        const blob = new Blob([arrayBuffer], { type: "application/pdf" });
         const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
+        const a = document.createElement("a");
         a.href = url;
-        a.download = fileName || 'document.pdf';
+        a.download = fileName || "document.pdf";
         document.body.appendChild(a);
         a.click();
         a.remove();
@@ -1507,13 +1750,13 @@ Key Points:
       }
 
       // Fallback: try to get raw data from pdfjs (if supported)
-      if (pdf && typeof (pdf as any).getData === 'function') {
+      if (pdf && typeof (pdf as any).getData === "function") {
         const data = await (pdf as any).getData();
-        const blob = new Blob([data], { type: 'application/pdf' });
+        const blob = new Blob([data], { type: "application/pdf" });
         const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
+        const a = document.createElement("a");
         a.href = url;
-        a.download = fileName || 'document.pdf';
+        a.download = fileName || "document.pdf";
         document.body.appendChild(a);
         a.click();
         a.remove();
@@ -1521,9 +1764,9 @@ Key Points:
         return;
       }
 
-      console.warn('No source available for download');
+      console.warn("No source available for download");
     } catch (err) {
-      console.error('Download failed', err);
+      console.error("Download failed", err);
     }
   }, [fileUrl, uploadId, pdf, fileName]);
 
@@ -1533,46 +1776,46 @@ Key Points:
 
       if (uploadId) {
         const arrayBuffer = await readOPFSFile(uploadId);
-        blob = new Blob([arrayBuffer], { type: 'application/pdf' });
+        blob = new Blob([arrayBuffer], { type: "application/pdf" });
       } else if (fileUrl) {
         // Try to fetch the file bytes (may fail due to CORS)
         try {
-          const resp = await fetch(fileUrl, { mode: 'cors' });
+          const resp = await fetch(fileUrl, { mode: "cors" });
           if (resp.ok) {
             const ab = await resp.arrayBuffer();
-            blob = new Blob([ab], { type: 'application/pdf' });
+            blob = new Blob([ab], { type: "application/pdf" });
           } else {
             // Can't fetch; fall back to opening URL
-            const w = window.open(fileUrl, '_blank');
+            const w = window.open(fileUrl, "_blank");
             if (w) w.focus();
             return;
           }
         } catch (e) {
           // CORS or network error - fall back to opening URL
-          const w = window.open(fileUrl, '_blank');
+          const w = window.open(fileUrl, "_blank");
           if (w) w.focus();
           return;
         }
-      } else if (pdf && typeof (pdf as any).getData === 'function') {
+      } else if (pdf && typeof (pdf as any).getData === "function") {
         const data = await (pdf as any).getData();
-        blob = new Blob([data], { type: 'application/pdf' });
+        blob = new Blob([data], { type: "application/pdf" });
       }
 
       if (!blob) {
-        console.warn('No source available for print');
+        console.warn("No source available for print");
         return;
       }
 
       const url = URL.createObjectURL(blob);
 
       // Create an invisible iframe in the current document (same-origin blob URL)
-      const iframe = document.createElement('iframe');
-      iframe.style.position = 'fixed';
-      iframe.style.right = '0';
-      iframe.style.bottom = '0';
-      iframe.style.width = '0px';
-      iframe.style.height = '0px';
-      iframe.style.border = '0';
+      const iframe = document.createElement("iframe");
+      iframe.style.position = "fixed";
+      iframe.style.right = "0";
+      iframe.style.bottom = "0";
+      iframe.style.width = "0px";
+      iframe.style.height = "0px";
+      iframe.style.border = "0";
       iframe.src = url;
       document.body.appendChild(iframe);
 
@@ -1580,7 +1823,9 @@ Key Points:
         try {
           if (iframe.parentNode) iframe.parentNode.removeChild(iframe);
         } catch (e) {}
-        try { URL.revokeObjectURL(url); } catch (e) {}
+        try {
+          URL.revokeObjectURL(url);
+        } catch (e) {}
       };
 
       const onLoad = () => {
@@ -1589,9 +1834,11 @@ Key Points:
           // Trigger print in the iframe (should open print dialog)
           iframe.contentWindow?.print();
         } catch (e) {
-          console.warn('Iframe print failed', e);
+          console.warn("Iframe print failed", e);
           // Fallback: open blob URL in new tab
-          try { window.open(url, '_blank')?.focus(); } catch (err) {}
+          try {
+            window.open(url, "_blank")?.focus();
+          } catch (err) {}
         } finally {
           // cleanup after short delay to allow print dialog to start
           setTimeout(cleanup, 2000);
@@ -1599,7 +1846,7 @@ Key Points:
       };
 
       // Attach load handler
-      iframe.addEventListener('load', onLoad, { once: true });
+      iframe.addEventListener("load", onLoad, { once: true });
 
       // Safety: if load never fires, attempt print after 1s and cleanup after 5s
       setTimeout(() => {
@@ -1609,19 +1856,21 @@ Key Points:
       }, 1000);
       setTimeout(cleanup, 5000);
     } catch (err) {
-      console.error('Print failed', err);
+      console.error("Print failed", err);
     }
   }, [fileUrl, uploadId, pdf]);
 
   // Keep ref updated so keyboard handler can call print without ordering issues
   useEffect(() => {
     handlePrintRef.current = handlePrint;
-    return () => { handlePrintRef.current = null; };
+    return () => {
+      handlePrintRef.current = null;
+    };
   }, [handlePrint]);
 
   // Drawing handlers
   const handleToggleDrawing = useCallback(() => {
-    setIsDrawingMode(prev => !prev);
+    setIsDrawingMode((prev) => !prev);
   }, []);
 
   const handleColorSelect = useCallback((color: string) => {
@@ -1629,102 +1878,116 @@ Key Points:
   }, []);
 
   const handleToggleEraser = useCallback(() => {
-    setIsEraserMode(prev => !prev);
+    setIsEraserMode((prev) => !prev);
   }, []);
 
-  const handleDrawingStrokesChange = useCallback((pageNum: number, strokes: DrawingStroke[]) => {
-    setPageDrawings(prev => {
-      const updated = new Map(prev);
-      updated.set(pageNum, strokes);
-      return updated;
-    });
+  const handleDrawingStrokesChange = useCallback(
+    (pageNum: number, strokes: DrawingStroke[]) => {
+      setPageDrawings((prev) => {
+        const updated = new Map(prev);
+        updated.set(pageNum, strokes);
+        return updated;
+      });
 
-    // Save to history for undo/redo
-    setDrawingHistory(prev => {
-      const updated = new Map(prev);
-      const pageHistory = updated.get(pageNum) || [];
+      // Save to history for undo/redo
+      setDrawingHistory((prev) => {
+        const updated = new Map(prev);
+        const pageHistory = updated.get(pageNum) || [];
+        const currentIndex = drawingHistoryIndex.get(pageNum) ?? -1;
+
+        // Trim any future history if we're not at the end
+        const trimmedHistory = pageHistory.slice(0, currentIndex + 1);
+        trimmedHistory.push(strokes);
+
+        updated.set(pageNum, trimmedHistory);
+        return updated;
+      });
+
+      setDrawingHistoryIndex((prev) => {
+        const updated = new Map(prev);
+        const currentIndex = prev.get(pageNum) ?? -1;
+        updated.set(pageNum, currentIndex + 1);
+        return updated;
+      });
+
+      // Save to IndexedDB (non-blocking, error handling)
+      (async () => {
+        try {
+          const id = `${docHash}:${pageNum}`;
+          const now = Date.now();
+          const drawingRecord: DrawingRecord = {
+            id,
+            docHash,
+            pageNum,
+            strokes,
+            createdAt: now,
+            updatedAt: now,
+          };
+          await putDrawing(drawingRecord);
+          console.log(
+            `[Drawing] Saved page ${pageNum} with ${strokes.length} strokes`
+          );
+        } catch (err) {
+          console.error(`[Drawing] Failed to save page ${pageNum}:`, err);
+          // Non-fatal: drawing is still in memory
+        }
+      })();
+    },
+    [drawingHistoryIndex, docHash]
+  );
+
+  const handleDrawingUndo = useCallback(
+    (pageNum: number) => {
       const currentIndex = drawingHistoryIndex.get(pageNum) ?? -1;
+      if (currentIndex <= 0) return;
 
-      // Trim any future history if we're not at the end
-      const trimmedHistory = pageHistory.slice(0, currentIndex + 1);
-      trimmedHistory.push(strokes);
+      const newIndex = currentIndex - 1;
+      setDrawingHistoryIndex((prev) => {
+        const updated = new Map(prev);
+        updated.set(pageNum, newIndex);
+        return updated;
+      });
 
-      updated.set(pageNum, trimmedHistory);
-      return updated;
-    });
+      const history = drawingHistory.get(pageNum) || [];
+      const previousStrokes = history[newIndex] || [];
+      setPageDrawings((prev) => {
+        const updated = new Map(prev);
+        updated.set(pageNum, previousStrokes);
+        return updated;
+      });
+    },
+    [drawingHistory, drawingHistoryIndex]
+  );
 
-    setDrawingHistoryIndex(prev => {
-      const updated = new Map(prev);
-      const currentIndex = prev.get(pageNum) ?? -1;
-      updated.set(pageNum, currentIndex + 1);
-      return updated;
-    });
+  const handleDrawingRedo = useCallback(
+    (pageNum: number) => {
+      const history = drawingHistory.get(pageNum) || [];
+      const currentIndex = drawingHistoryIndex.get(pageNum) ?? -1;
+      if (currentIndex >= history.length - 1) return;
 
-    // Save to IndexedDB (non-blocking, error handling)
-    (async () => {
-      try {
-        const id = `${docHash}:${pageNum}`;
-        const now = Date.now();
-        const drawingRecord: DrawingRecord = {
-          id,
-          docHash,
-          pageNum,
-          strokes,
-          createdAt: now,
-          updatedAt: now,
-        };
-        await putDrawing(drawingRecord);
-        console.log(`[Drawing] Saved page ${pageNum} with ${strokes.length} strokes`);
-      } catch (err) {
-        console.error(`[Drawing] Failed to save page ${pageNum}:`, err);
-        // Non-fatal: drawing is still in memory
-      }
-    })();
-  }, [drawingHistoryIndex, docHash]);
+      const newIndex = currentIndex + 1;
+      setDrawingHistoryIndex((prev) => {
+        const updated = new Map(prev);
+        updated.set(pageNum, newIndex);
+        return updated;
+      });
 
-  const handleDrawingUndo = useCallback((pageNum: number) => {
-    const currentIndex = drawingHistoryIndex.get(pageNum) ?? -1;
-    if (currentIndex <= 0) return;
+      const nextStrokes = history[newIndex] || [];
+      setPageDrawings((prev) => {
+        const updated = new Map(prev);
+        updated.set(pageNum, nextStrokes);
+        return updated;
+      });
+    },
+    [drawingHistory, drawingHistoryIndex]
+  );
 
-    const newIndex = currentIndex - 1;
-    setDrawingHistoryIndex(prev => {
-      const updated = new Map(prev);
-      updated.set(pageNum, newIndex);
-      return updated;
-    });
-
-    const history = drawingHistory.get(pageNum) || [];
-    const previousStrokes = history[newIndex] || [];
-    setPageDrawings(prev => {
-      const updated = new Map(prev);
-      updated.set(pageNum, previousStrokes);
-      return updated;
-    });
-  }, [drawingHistory, drawingHistoryIndex]);
-
-  const handleDrawingRedo = useCallback((pageNum: number) => {
-    const history = drawingHistory.get(pageNum) || [];
-    const currentIndex = drawingHistoryIndex.get(pageNum) ?? -1;
-    if (currentIndex >= history.length - 1) return;
-
-    const newIndex = currentIndex + 1;
-    setDrawingHistoryIndex(prev => {
-      const updated = new Map(prev);
-      updated.set(pageNum, newIndex);
-      return updated;
-    });
-
-    const nextStrokes = history[newIndex] || [];
-    setPageDrawings(prev => {
-      const updated = new Map(prev);
-      updated.set(pageNum, nextStrokes);
-      return updated;
-    });
-  }, [drawingHistory, drawingHistoryIndex]);
-
-  const handleDrawingClear = useCallback((pageNum: number) => {
-    handleDrawingStrokesChange(pageNum, []);
-  }, [handleDrawingStrokesChange]);
+  const handleDrawingClear = useCallback(
+    (pageNum: number) => {
+      handleDrawingStrokesChange(pageNum, []);
+    },
+    [handleDrawingStrokesChange]
+  );
 
   // Keyboard navigation and shortcuts
   useEffect(() => {
@@ -1732,16 +1995,16 @@ Key Points:
       const isMod = e.ctrlKey || e.metaKey;
 
       // Intercept Ctrl/Cmd+P to use in-app printing flow
-      if (isMod && (e.key === 'p' || e.key === 'P')) {
+      if (isMod && (e.key === "p" || e.key === "P")) {
         e.preventDefault();
         // call print handler via ref (may be set after effect declared)
         (async () => {
           try {
             const fn = handlePrintRef.current;
             if (fn) await fn();
-            else console.warn('Print handler not ready');
+            else console.warn("Print handler not ready");
           } catch (err) {
-            console.error('Error running in-app print', err);
+            console.error("Error running in-app print", err);
           }
         })();
         return;
@@ -1758,7 +2021,7 @@ Key Points:
         // Toggle eraser with 'E' key
         if (e.key === "e" || e.key === "E") {
           e.preventDefault();
-          setIsEraserMode(prev => !prev);
+          setIsEraserMode((prev) => !prev);
           return;
         }
 
@@ -1803,7 +2066,16 @@ Key Points:
         cancelAnimationFrame(pendingZoomRef.current);
       }
     };
-  }, [handlePrevPage, handleNextPage, handleZoomIn, handleZoomOut, isDrawingMode, handleDrawingUndo, handleDrawingRedo, currentPage]);
+  }, [
+    handlePrevPage,
+    handleNextPage,
+    handleZoomIn,
+    handleZoomOut,
+    isDrawingMode,
+    handleDrawingUndo,
+    handleDrawingRedo,
+    currentPage,
+  ]);
 
   // Ctrl+scroll zoom handler - attached to container only
   useEffect(() => {
@@ -1837,7 +2109,9 @@ Key Points:
               changeZoom("100", { cursorPoint: cursor });
             } else {
               const currentZoom = parseInt(zoom, 10);
-              const nextZoom = ZOOM_LEVELS.find((z) => z > currentZoom) || ZOOM_LEVELS[ZOOM_LEVELS.length - 1];
+              const nextZoom =
+                ZOOM_LEVELS.find((z) => z > currentZoom) ||
+                ZOOM_LEVELS[ZOOM_LEVELS.length - 1];
               changeZoom(nextZoom.toString(), { cursorPoint: cursor });
             }
           } else if (accumulatedDelta > 10) {
@@ -1846,7 +2120,8 @@ Key Points:
               changeZoom("100", { cursorPoint: cursor });
             } else {
               const currentZoom = parseInt(zoom, 10);
-              const prevZoom = [...ZOOM_LEVELS].reverse().find((z) => z < currentZoom) || 50;
+              const prevZoom =
+                [...ZOOM_LEVELS].reverse().find((z) => z < currentZoom) || 50;
               changeZoom(prevZoom.toString(), { cursorPoint: cursor });
             }
           }
@@ -1870,7 +2145,8 @@ Key Points:
         clearTimeout(wheelTimeout);
       }
     };
-  }, [zoom, changeZoom]);  const handleRender = useCallback(
+  }, [zoom, changeZoom]);
+  const handleRender = useCallback(
     async (
       pageNum: number,
       canvas: HTMLCanvasElement,
@@ -1962,8 +2238,8 @@ Key Points:
     try {
       const cw = containerForFit.clientWidth;
       const ch = containerForFit.clientHeight - 40;
-      const sWidth = calculateScale(pages[0], cw, ch, 'fitWidth');
-      const sPage = calculateScale(pages[0], cw, ch, 'fitPage');
+      const sWidth = calculateScale(pages[0], cw, ch, "fitWidth");
+      const sPage = calculateScale(pages[0], cw, ch, "fitPage");
       // convert internal scale to user-facing percentage (account for DPI adjustment)
       fitWidthPercent = Math.round((sWidth / DPI_ADJUSTMENT) * 100);
       fitPagePercent = Math.round((sPage / DPI_ADJUSTMENT) * 100);
@@ -2003,7 +2279,10 @@ Key Points:
         onRedo={() => handleDrawingRedo(currentPage)}
         onClear={() => handleDrawingClear(currentPage)}
         canUndo={(drawingHistoryIndex.get(currentPage) ?? -1) > 0}
-        canRedo={(drawingHistoryIndex.get(currentPage) ?? -1) < ((drawingHistory.get(currentPage) || []).length - 1)}
+        canRedo={
+          (drawingHistoryIndex.get(currentPage) ?? -1) <
+          (drawingHistory.get(currentPage) || []).length - 1
+        }
         isEraserMode={isEraserMode}
         onToggleEraser={handleToggleEraser}
         toolbarTop={toolbarHeight}
@@ -2022,7 +2301,7 @@ Key Points:
           When TOC is open from hover, overlay does not block interaction (pointer-events-none).
           If pinned, we add a small clickable close area and pointer events for overlay. */}
       <div
-        className={`fixed left-0 top-0 z-50 transform transition-transform ${tocOpen ? 'translate-x-0' : '-translate-x-full'}`}
+        className={`fixed left-0 top-0 z-50 transform transition-transform ${tocOpen ? "translate-x-0" : "-translate-x-full"}`}
         style={{
           // offset by toolbar height so the drawer doesn't cover the toolbar
           top: toolbarHeight,
@@ -2033,7 +2312,10 @@ Key Points:
         onMouseLeave={() => scheduleCloseFromHover()}
       >
         <div className="relative h-full">
-          <TOC items={tableOfContents ? buildTOCTree(tableOfContents.items) : []} onSelect={handleTOCSelect} />
+          <TOC
+            items={tableOfContents ? buildTOCTree(tableOfContents.items) : []}
+            onSelect={handleTOCSelect}
+          />
         </div>
       </div>
 
@@ -2049,9 +2331,7 @@ Key Points:
               // Render visible pages + 4 pages buffer above/below
               const shouldRender =
                 isVisible ||
-                visiblePagesArray.some(
-                  (vp) => Math.abs(vp - pageNum) <= 4
-                );
+                visiblePagesArray.some((vp) => Math.abs(vp - pageNum) <= 4);
 
               if (shouldRender) {
                 renderingPages.push(pageNum);
@@ -2059,40 +2339,51 @@ Key Points:
 
               // Log after first iteration
               if (idx === pages.length - 1 && renderingPages.length > 0) {
-                console.log(`[Render] Rendering pages:`, renderingPages, `(visible: [${visiblePagesArray}])`);
+                console.log(
+                  `[Render] Rendering pages:`,
+                  renderingPages,
+                  `(visible: [${visiblePagesArray}])`
+                );
               }
 
               return (
                 <Page
-                key={pageNum}
-                pageNum={pageNum}
-                page={page}
-                scale={scale}
-                isVisible={isVisible}
-                shouldRender={shouldRender}
-                onRender={handleRender}
-                notes={notes.filter((n) => n.page === pageNum)}
-                comments={comments.filter((c) => c.page === pageNum)}
-                onNoteDelete={handleNoteDelete}
-                onNoteEdit={handleNoteEdit}
-                onCommentDelete={handleCommentDelete}
-                onCommentEdit={handleCommentEdit}
-                isDrawingMode={isDrawingMode}
-                drawingColor={drawingColor}
-                drawingStrokeWidth={drawingStrokeWidth}
-                drawingStrokes={pageDrawings.get(pageNum) || []}
-                onDrawingStrokesChange={(strokes) => handleDrawingStrokesChange(pageNum, strokes)}
-                isEraserMode={isEraserMode}
-                termSummaries={activeTermSummaries}
-                onTermClick={(term, x, y, rects) => {
-                  console.log('[App] onTermClick called:', term.term, { x, y, rects, pageNum });
-                  setSelectedTerm(term);
-                  setTermSourceRects(rects);
-                  setTermSourcePage(pageNum);
-                  const adjustedPos = calculatePopupPosition(x, y);
-                  setTermPopupPosition(adjustedPos);
-                }}
-              />
+                  key={pageNum}
+                  pageNum={pageNum}
+                  page={page}
+                  scale={scale}
+                  isVisible={isVisible}
+                  shouldRender={shouldRender}
+                  onRender={handleRender}
+                  notes={notes.filter((n) => n.page === pageNum)}
+                  comments={comments.filter((c) => c.page === pageNum)}
+                  onNoteDelete={handleNoteDelete}
+                  onNoteEdit={handleNoteEdit}
+                  onCommentDelete={handleCommentDelete}
+                  onCommentEdit={handleCommentEdit}
+                  isDrawingMode={isDrawingMode}
+                  drawingColor={drawingColor}
+                  drawingStrokeWidth={drawingStrokeWidth}
+                  drawingStrokes={pageDrawings.get(pageNum) || []}
+                  onDrawingStrokesChange={(strokes) =>
+                    handleDrawingStrokesChange(pageNum, strokes)
+                  }
+                  isEraserMode={isEraserMode}
+                  termSummaries={activeTermSummaries}
+                  onTermClick={(term, x, y, rects) => {
+                    console.log("[App] onTermClick called:", term.term, {
+                      x,
+                      y,
+                      rects,
+                      pageNum,
+                    });
+                    setSelectedTerm(term);
+                    setTermSourceRects(rects);
+                    setTermSourcePage(pageNum);
+                    const adjustedPos = calculatePopupPosition(x, y);
+                    setTermPopupPosition(adjustedPos);
+                  }}
+                />
               );
             });
           })()}
@@ -2253,15 +2544,23 @@ Key Points:
             </p>
           </div>
 
-          {(selectedTerm.explanation1 || selectedTerm.explanation2 || selectedTerm.explanation3) && (
+          {(selectedTerm.explanation1 ||
+            selectedTerm.explanation2 ||
+            selectedTerm.explanation3) && (
             <div className="mb-3">
               <p className="text-sm font-semibold text-neutral-700 dark:text-neutral-300 mb-1">
                 Key Points:
               </p>
               <ul className="list-disc list-inside text-sm text-neutral-900 dark:text-neutral-100 space-y-1">
-                {selectedTerm.explanation1 && <li>{selectedTerm.explanation1}</li>}
-                {selectedTerm.explanation2 && <li>{selectedTerm.explanation2}</li>}
-                {selectedTerm.explanation3 && <li>{selectedTerm.explanation3}</li>}
+                {selectedTerm.explanation1 && (
+                  <li>{selectedTerm.explanation1}</li>
+                )}
+                {selectedTerm.explanation2 && (
+                  <li>{selectedTerm.explanation2}</li>
+                )}
+                {selectedTerm.explanation3 && (
+                  <li>{selectedTerm.explanation3}</li>
+                )}
               </ul>
             </div>
           )}
