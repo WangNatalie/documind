@@ -164,6 +164,12 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       sendResponse({ success: true, result });
     }).catch((error: Error) => {
       console.error('Error generating chat response:', error);
+    });
+    
+    // Return true to indicate we'll send response asynchronously
+    return true;
+  }
+
   if (message.type === 'EXTRACT_TERMS') {
     const { passage } = message.payload;
     console.log(`Received EXTRACT_TERMS request for passage (${passage.length} chars)`);

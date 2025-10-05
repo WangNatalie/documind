@@ -82,7 +82,7 @@ body {
     opacity: 0;
     transform: translateY(70px) translateX(60px) scale(0.6);
   }
-/* Custom scrollbars (global) */
+}/* Custom scrollbars (global) */
 :root {
   /* stronger default for better contrast */
   --scroll-thumb: rgba(255, 255, 255, 0.452);
