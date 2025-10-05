@@ -19,6 +19,8 @@ interface PageProps {
   pageNum: number;
   page: PDFPageProxy | null;
   scale: number;
+  // Increment this when layout changes (e.g., single vs two-page) to recompute highlight positions
+  layoutVersion?: number;
   isVisible: boolean;
   shouldRender: boolean;
   onRender: (
@@ -63,6 +65,7 @@ export const Page: React.FC<PageProps> = ({
   pageNum,
   page,
   scale,
+  layoutVersion = 0,
   isVisible,
   shouldRender,
   onRender,
@@ -490,7 +493,7 @@ export const Page: React.FC<PageProps> = ({
     };
 
     checkTextLayer();
-  }, [shouldRender, isLoading, termSummaries, pageNum, page, scale, renderedScale]);
+  }, [shouldRender, isLoading, termSummaries, pageNum, page, scale, renderedScale, layoutVersion]);
 
   // Check individual highlight visibility every 0.5 second
   useEffect(() => {
@@ -546,7 +549,7 @@ export const Page: React.FC<PageProps> = ({
     const intervalId = setInterval(checkHighlightVisibility, 500);
 
     return () => clearInterval(intervalId);
-  }, [termHighlights]);
+  }, [termHighlights, layoutVersion]);
 
   // Handle clicking outside of notes to close them
   useEffect(() => {
@@ -977,7 +980,7 @@ export const Page: React.FC<PageProps> = ({
                           setEditingCommentId(c.id);
                           setEditingCommentText(c.text);
                         }}
-                        className="flex-1 px-2 py-1 text-xs bg-primary-500 hover:bg-primary-600 text-white rounded"
+                        className="flex-1 px-2 py-1 text-xs text-primary-500 hover:bg-primary-50 dark:hover:bg-primary-900/20 rounded"
                         title="Edit comment"
                       >
                         <PenLine size={16} />

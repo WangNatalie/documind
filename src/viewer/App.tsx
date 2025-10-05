@@ -38,7 +38,7 @@ import { mergeAnnotationsIntoPdf } from "../export/annotationsToPdf";
 import DocumentProperties from './DocumentProperties.tsx';
 import SaveAsModal from './SaveAsModal';
 import { getAudio } from "../utils/narrator-client";
-import { Volume2, BrainCircuit } from "lucide-react";
+import { Volume2, BrainCircuit, Book, BookOpen } from "lucide-react";
 import type { BookmarkItem } from "./TOC";
 
 const ZOOM_LEVELS = [
@@ -155,6 +155,18 @@ export const ViewerApp: React.FC = () => {
   const [savedTerms, setSavedTerms] = useState<Set<string>>(new Set()); // Track terms that have been saved as notes
   const [isNarratingTerm, setIsNarratingTerm] = useState(false); // Track if term is being narrated
   const currentAudioRef = useRef<HTMLAudioElement | null>(null); // Reference to current audio element
+
+  // Two-page mode state
+  const [isTwoPageMode, setIsTwoPageMode] = useState(false);
+  // Incremented to force highlight recompute when layout toggles
+  const [layoutVersion, setLayoutVersion] = useState(0);
+  // Wheel navigation control for two-page mode
+  const wheelAccumXRef = useRef(0);
+  const wheelAccumYRef = useRef(0);
+  const wheelCooldownRef = useRef(false);
+  // Bottom hover reveal for two-page toggle (match TOC hover behavior)
+  const [bottomControlVisible, setBottomControlVisible] = useState(false);
+  const bottomHoverTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   
   // Track last visible page for recaching logic
   const lastVisiblePageRef = useRef<number>(1);
@@ -231,6 +243,7 @@ export const ViewerApp: React.FC = () => {
       if (message.type === "REQUEST_VIEWER_STATE") {
         // Extract text from visible pages
         let visibleText = "";
+        const visibleTextByPage: Record<number, string> = {};
         const visiblePages = Array.from(visiblePagesRef.current).sort(
           (a, b) => a - b
         );
@@ -251,6 +264,7 @@ export const ViewerApp: React.FC = () => {
               const pageText = textLayer.textContent || "";
               if (pageText.trim()) {
                 visibleText += `\n=== Page ${pageNum} ===\n${pageText}\n`;
+                visibleTextByPage[pageNum] = pageText;
               }
             } else {
               console.log(`[VIEWER] No text layer found for page ${pageNum}`);
@@ -269,15 +283,27 @@ export const ViewerApp: React.FC = () => {
         });
 
         // Send current state to background
+        // Determine current pages (single or two-page spread)
+        let currentPages: number[] = [];
+        if (isTwoPageMode) {
+          const left = currentPage % 2 === 0 ? currentPage - 1 : currentPage;
+          const right = Math.min(pages.length, left + 1);
+          currentPages = right !== left ? [left, right] : [left];
+        } else {
+          currentPages = [currentPage];
+        }
+
         chrome.runtime.sendMessage({
           type: 'UPDATE_VIEWER_STATE',
           payload: {
             docHash,
             fileName,
             currentPage,
+            currentPages,
             totalPages: pages.length,
             zoom,
             visibleText: visibleText.trim(),
+            visibleTextByPage,
           }
         }).catch((error) => {
           // Suppress "message port closed" errors - these are normal when extension reloads
@@ -1528,18 +1554,22 @@ export const ViewerApp: React.FC = () => {
 
   // Handler functions
   const handlePrevPage = useCallback(() => {
-    if (currentPage > 1) {
-      scrollToPage(currentPage - 1);
-    }
-  }, [currentPage]);
+    const step = isTwoPageMode ? 2 : 1;
+    const target = Math.max(1, currentPage - step);
+    scrollToPage(target);
+  }, [currentPage, isTwoPageMode]);
 
   const handleNextPage = useCallback(() => {
-    if (currentPage < pages.length) {
-      scrollToPage(currentPage + 1);
-    }
-  }, [currentPage, pages.length]);
+    const step = isTwoPageMode ? 2 : 1;
+    const target = Math.min(pages.length, currentPage + step);
+    scrollToPage(target);
+  }, [currentPage, pages.length, isTwoPageMode]);
 
   const scrollToPage = (pageNum: number) => {
+    if (isTwoPageMode) {
+      setCurrentPage(pageNum);
+      return;
+    }
     const pageEl = containerRef.current?.querySelector(
       `[data-page-num="${pageNum}"]`
     );
@@ -1693,6 +1723,39 @@ export const ViewerApp: React.FC = () => {
       changeZoom(prevZoom.toString(), { snapToTop: true });
     }
   }, [zoom, changeZoom]);
+
+  // Toggle two-page mode
+  const toggleTwoPageMode = useCallback(() => {
+    setIsTwoPageMode((prev) => !prev);
+    // Force recompute of term highlight positions on layout change
+    setLayoutVersion((v) => v + 1);
+    // Snap to keep current page in view after layout change
+    requestAnimationFrame(() => {
+      scrollToPage(currentPage);
+    });
+    // Reset wheel gesture accumulators/cooldown
+    wheelAccumXRef.current = 0;
+    wheelAccumYRef.current = 0;
+    wheelCooldownRef.current = false;
+  }, [currentPage]);
+
+  const openBottomControlsFromHover = useCallback(() => {
+    if (bottomHoverTimeoutRef.current) {
+      clearTimeout(bottomHoverTimeoutRef.current);
+      bottomHoverTimeoutRef.current = null;
+    }
+    setBottomControlVisible(true);
+  }, []);
+
+  const scheduleCloseBottomControlsFromHover = useCallback(() => {
+    if (bottomHoverTimeoutRef.current) {
+      clearTimeout(bottomHoverTimeoutRef.current);
+    }
+    bottomHoverTimeoutRef.current = setTimeout(() => {
+      setBottomControlVisible(false);
+      bottomHoverTimeoutRef.current = null;
+    }, 500);
+  }, []);
 
   // Ref for print handler so keyboard effect can call it without ordering issues
   const handlePrintRef = useRef<(() => Promise<void>) | null>(null);
@@ -2756,11 +2819,140 @@ Key Points:
         </div>
       </div>
 
-      <div ref={containerRef} className="flex-1 overflow-auto">
-        <div className="py-4 flex flex-col items-center">
+      <div ref={containerRef} className={`flex-1 ${isTwoPageMode ? "overflow-hidden" : "overflow-auto"}`} onWheel={(e) => {
+        if (!isTwoPageMode) return;
+        // Disable native scrolling entirely in two-page mode
+        e.preventDefault();
+        e.stopPropagation();
+
+        // Cooldown prevents multiple flips per gesture
+        if (wheelCooldownRef.current) return;
+
+        // Accumulate deltas; trackpad often mixes X/Y
+        wheelAccumXRef.current += e.deltaX;
+        wheelAccumYRef.current += e.deltaY;
+
+        const THRESH_X = 80;   // horizontal swipe threshold
+        const THRESH_Y = 160;  // vertical fling threshold
+
+        const absX = Math.abs(wheelAccumXRef.current);
+        const absY = Math.abs(wheelAccumYRef.current);
+
+        if (absX >= THRESH_X || absY >= THRESH_Y) {
+          // Determine direction by dominant axis
+          const forward = absX >= absY
+            ? wheelAccumXRef.current > 0
+            : wheelAccumYRef.current > 0;
+
+          if (forward) handleNextPage(); else handlePrevPage();
+
+          // Reset accumulators and start cooldown
+          wheelAccumXRef.current = 0;
+          wheelAccumYRef.current = 0;
+          wheelCooldownRef.current = true;
+          setTimeout(() => { wheelCooldownRef.current = false; }, 350);
+        }
+      }} style={isTwoPageMode ? { overscrollBehavior: "contain" } : undefined}>
+        <div className={`${isTwoPageMode ? "py-4 flex flex-row items-start justify-center gap-4 min-w-full" : "py-4 flex flex-col items-center"}`}>
           {(() => {
             const renderingPages: number[] = [];
             const visiblePagesArray = Array.from(visiblePages);
+
+            if (isTwoPageMode) {
+              // Determine the left page of the current spread
+              const leftPageNum = currentPage % 2 === 0 ? currentPage - 1 : currentPage;
+              const rightPageNum = Math.min(pages.length, leftPageNum + 1);
+
+              const leftPage = pages[leftPageNum - 1] || null;
+              const rightPage = pages[rightPageNum - 1] || null;
+
+              const leftVisible = true;
+              const rightVisible = rightPageNum !== leftPageNum;
+
+              const hasCachedLeft = termCache.has(leftPageNum);
+              const hasCachedRight = termCache.has(rightPageNum);
+
+              const shouldRenderLeft = leftVisible || hasCachedLeft;
+              const shouldRenderRight = rightVisible || hasCachedRight;
+
+              if (shouldRenderLeft) renderingPages.push(leftPageNum);
+              if (rightVisible && shouldRenderRight) renderingPages.push(rightPageNum);
+
+              return (
+                <div key={`spread-${leftPageNum}`} className="flex flex-row items-start justify-center gap-4 w-full" data-spread-left={leftPageNum}>
+                  <Page
+                    key={leftPageNum}
+                    pageNum={leftPageNum}
+                    page={leftPage}
+                    scale={scale}
+                    layoutVersion={layoutVersion}
+                    isVisible={leftVisible}
+                    shouldRender={shouldRenderLeft}
+                    onRender={handleRender}
+                    notes={notes.filter((n) => n.page === leftPageNum)}
+                    comments={comments.filter((c) => c.page === leftPageNum)}
+                    onNoteDelete={handleNoteDelete}
+                    onNoteEdit={handleNoteEdit}
+                    onCommentDelete={handleCommentDelete}
+                    onCommentEdit={handleCommentEdit}
+                    isDrawingMode={isDrawingMode}
+                    drawingColor={drawingColor}
+                    drawingStrokeWidth={drawingStrokeWidth}
+                    drawingStrokes={pageDrawings.get(leftPageNum) || []}
+                    onDrawingStrokesChange={(strokes) => handleDrawingStrokesChange(leftPageNum, strokes)}
+                    isEraserMode={isEraserMode}
+                    termSummaries={getSummariesForPage(leftPageNum)}
+                    onTermClick={(term, x, y, rects) => {
+                      setSelectedTerm(term);
+                      setTermSourceRects(rects);
+                      setTermSourcePage(leftPageNum);
+                      setTermReturnPage(null);
+                      const adjustedPos = calculatePopupPosition(x, y);
+                      setTermPopupPosition(adjustedPos);
+                    }}
+                    highlightsVisible={highlightsVisible}
+                    onAddNoteContext={handleAddNoteContextFromPage}
+                    onAddCommentContext={handleAddCommentContextFromPage}
+                  />
+                  {rightVisible && (
+                    <Page
+                      key={rightPageNum}
+                      pageNum={rightPageNum}
+                      page={rightPage}
+                      scale={scale}
+                      layoutVersion={layoutVersion}
+                      isVisible={rightVisible}
+                      shouldRender={shouldRenderRight}
+                      onRender={handleRender}
+                      notes={notes.filter((n) => n.page === rightPageNum)}
+                      comments={comments.filter((c) => c.page === rightPageNum)}
+                      onNoteDelete={handleNoteDelete}
+                      onNoteEdit={handleNoteEdit}
+                      onCommentDelete={handleCommentDelete}
+                      onCommentEdit={handleCommentEdit}
+                      isDrawingMode={isDrawingMode}
+                      drawingColor={drawingColor}
+                      drawingStrokeWidth={drawingStrokeWidth}
+                      drawingStrokes={pageDrawings.get(rightPageNum) || []}
+                      onDrawingStrokesChange={(strokes) => handleDrawingStrokesChange(rightPageNum, strokes)}
+                      isEraserMode={isEraserMode}
+                      termSummaries={getSummariesForPage(rightPageNum)}
+                      onTermClick={(term, x, y, rects) => {
+                        setSelectedTerm(term);
+                        setTermSourceRects(rects);
+                        setTermSourcePage(rightPageNum);
+                        setTermReturnPage(null);
+                        const adjustedPos = calculatePopupPosition(x, y);
+                        setTermPopupPosition(adjustedPos);
+                      }}
+                      highlightsVisible={highlightsVisible}
+                      onAddNoteContext={handleAddNoteContextFromPage}
+                      onAddCommentContext={handleAddCommentContextFromPage}
+                    />
+                  )}
+                </div>
+              );
+            }
 
             return pages.map((page, idx) => {
               const pageNum = idx + 1;
@@ -2795,6 +2987,7 @@ Key Points:
                 pageNum={pageNum}
                 page={page}
                 scale={scale}
+                layoutVersion={layoutVersion}
                 isVisible={isVisible}
                 shouldRender={shouldRender}
                 onRender={handleRender}
@@ -2828,6 +3021,30 @@ Key Points:
             });
           })()}
         </div>
+      </div>
+      {/* Bottom-edge hover target to reveal view toggle (matches TOC behavior) */}
+      <div
+        onMouseEnter={() => openBottomControlsFromHover()}
+        onMouseLeave={() => scheduleCloseBottomControlsFromHover()}
+        style={{ height: 12 }}
+        className="fixed bottom-0 left-0 w-full z-40 bg-transparent"
+        aria-hidden
+      />
+
+      {/* Two-page mode toggle - circular button shown on bottom hover with slide-up animation */}
+      <div
+        className={`fixed bottom-3 left-1/2 -translate-x-1/2 z-50 ${bottomControlVisible ? "translate-y-0 opacity-100 pointer-events-auto" : "translate-y-6 opacity-0 pointer-events-none"} transition-all duration-200 ease-in-out`}
+        onMouseEnter={() => openBottomControlsFromHover()}
+        onMouseLeave={() => scheduleCloseBottomControlsFromHover()}
+      >
+        <button
+          onClick={toggleTwoPageMode}
+          className="h-10 w-10 rounded-full shadow-md flex items-center justify-center bg-neutral-100 text-primary-900 dark:bg-neutral-100 dark:text-neutral-900 hover:bg-primary-200 dark:hover:bg-primary-900/20"
+          title={isTwoPageMode ? "Switch to single-page view" : "Switch to two-page view"}
+          aria-label={isTwoPageMode ? "Switch to single-page view" : "Switch to two-page view"}
+        >
+          {isTwoPageMode ? <Book size={16} /> : <BookOpen size={16} />}
+        </button>
       </div>
       {/* Note input floating box */}
       {noteAnchor && (

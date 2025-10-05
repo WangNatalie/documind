@@ -10,9 +10,11 @@ interface ViewerState {
   docHash: string;
   fileName: string;
   currentPage: number;
+  currentPages?: number[]; // when in 2-page mode
   totalPages: number;
   zoom: string;
   visibleText: string;
+  visibleTextByPage?: Record<number, string>;
   lastUpdate: number;
 }
 
@@ -209,41 +211,56 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         docHash: message.payload.docHash,
         fileName: message.payload.fileName,
         currentPage: message.payload.currentPage,
+        currentPages: message.payload.currentPages,
         totalPages: message.payload.totalPages,
         zoom: message.payload.zoom,
         visibleText: message.payload.visibleText || '',
+        visibleTextByPage: message.payload.visibleTextByPage,
         lastUpdate: Date.now(),
       };
       viewerStates.set(tabId, state);
 
-      // Extract terms only when the current page changes (real page transition)
-      if (state.visibleText && state.visibleText.length > 0) {
-        const previousPage = lastExtractedPage.get(tabId);
-        if (previousPage !== state.currentPage) {
-          console.log(`[UPDATE_VIEWER_STATE] Page changed from ${previousPage || 'none'} to ${state.currentPage} for tab ${tabId}`);
-          lastExtractedPage.set(tabId, state.currentPage);
+      // Extract terms when the active visible page(s) change
+      const currentPages = state.currentPages && state.currentPages.length > 0 ? state.currentPages : [state.currentPage];
+      const previousPage = lastExtractedPage.get(tabId);
+      const primaryPage = currentPages[0];
 
-          // Initialize processed pages set if needed
-          if (!processedPages.has(tabId)) {
-            processedPages.set(tabId, new Set());
+      if (previousPage !== primaryPage) {
+        console.log(`[UPDATE_VIEWER_STATE] Page changed from ${previousPage || 'none'} to ${primaryPage} for tab ${tabId}`);
+        lastExtractedPage.set(tabId, primaryPage);
+
+        // Initialize processed pages set if needed
+        if (!processedPages.has(tabId)) {
+          processedPages.set(tabId, new Set());
+        }
+
+        // Clean up processed pages cache: only keep primary ±2 and co-pages
+        const pagesToKeep = new Set<number>();
+        for (let i = Math.max(1, primaryPage - 2); i <= Math.min(state.totalPages, primaryPage + 2); i++) {
+          pagesToKeep.add(i);
+        }
+        for (const p of currentPages) pagesToKeep.add(p);
+
+        const processedSet = processedPages.get(tabId)!;
+        for (const pg of Array.from(processedSet)) {
+          if (!pagesToKeep.has(pg)) {
+            processedSet.delete(pg);
           }
+        }
 
-          // Clean up processed pages cache: only keep current ±2 pages to save memory
-          const pagesToKeep = new Set<number>();
-          for (let i = Math.max(1, state.currentPage - 2); i <= Math.min(state.totalPages, state.currentPage + 2); i++) {
-            pagesToKeep.add(i);
-          }
-
-          const processedSet = processedPages.get(tabId)!;
-          for (const page of Array.from(processedSet)) {
-            if (!pagesToKeep.has(page)) {
-              processedSet.delete(page);
+        // Process each current page with its page-specific text if available; fallback to visibleText
+        for (const pg of currentPages) {
+          const pageText = state.visibleTextByPage?.[pg] || state.visibleText;
+          if (pageText && pageText.trim().length > 0) {
+            // Mirror REQUEST_PAGE_TERMS logic inline
+            const pageSet = processedPages.get(tabId);
+            if (pageSet && !pageSet.has(pg)) {
+              pageSet.add(pg);
+              extractTermsFromText(pageText, state.fileName, pg, state.docHash);
             }
+          } else {
+            console.warn(`[UPDATE_VIEWER_STATE] No text available for page ${pg}`);
           }
-          
-          // Process current page with visible text
-          // Adjacent pages will be requested via REQUEST_PAGE_TERMS with their own text
-          processPageTerms(tabId, state.currentPage, state);
         }
       }
     }
@@ -357,27 +374,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 // Helper function to process terms for the current page
-async function processPageTerms(tabId: number, pageNum: number, state: ViewerState) {
-  const pageSet = processedPages.get(tabId);
-  if (!pageSet) return;
-
-  // Skip if this page has already been processed
-  if (pageSet.has(pageNum)) {
-    console.log(`[processPageTerms] Page ${pageNum} already processed for tab ${tabId}, skipping`);
-    return;
-  }
-
-  // Mark as processed
-  pageSet.add(pageNum);
-  
-  // Process current page with visible text
-  if (state.visibleText && state.visibleText.trim().length > 0) {
-    console.log(`[processPageTerms] Processing current page ${pageNum} for tab ${tabId}`);
-    await extractTermsFromText(state.visibleText, state.fileName, pageNum, state.docHash);
-  } else {
-    console.warn(`[processPageTerms] No visible text for page ${pageNum}, skipping`);
-  }
-}
+// Deprecated in favor of per-page processing inside UPDATE_VIEWER_STATE (supports two-page mode)
+// removed legacy function (superseded by new two-page aware flow)
 
 // Helper function to extract terms using offscreen document
 async function extractTermsFromText(passage: string, fileName: string, currentPage: number, docHash: string) {
