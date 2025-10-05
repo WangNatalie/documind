@@ -1260,7 +1260,7 @@ export const ViewerApp: React.FC = () => {
   }, []);
 
   const handleToggleEraser = useCallback(() => {
-    setIsEraserMode(true);
+    setIsEraserMode(prev => !prev);
   }, []);
 
   const handleDrawingStrokesChange = useCallback((pageNum: number, strokes: DrawingStroke[]) => {
@@ -1607,21 +1607,20 @@ export const ViewerApp: React.FC = () => {
         onToggleDrawing={handleToggleDrawing}
       />
 
-      {/* Drawing toolbar - shown when drawing mode is active */}
-      {isDrawingMode && (
-        <DrawingToolbar
-          isExpanded={isDrawingMode}
-          selectedColor={drawingColor}
-          onColorSelect={handleColorSelect}
-          onUndo={() => handleDrawingUndo(currentPage)}
-          onRedo={() => handleDrawingRedo(currentPage)}
-          onClear={() => handleDrawingClear(currentPage)}
-          canUndo={(drawingHistoryIndex.get(currentPage) ?? -1) > 0}
-          canRedo={(drawingHistoryIndex.get(currentPage) ?? -1) < ((drawingHistory.get(currentPage) || []).length - 1)}
-          isEraserMode={isEraserMode}
-          onToggleEraser={handleToggleEraser}
-        />
-      )}
+      {/* Drawing toolbar (fixed overlay) - rendered always so it doesn't shift layout */}
+      <DrawingToolbar
+        isExpanded={isDrawingMode}
+        selectedColor={drawingColor}
+        onColorSelect={handleColorSelect}
+        onUndo={() => handleDrawingUndo(currentPage)}
+        onRedo={() => handleDrawingRedo(currentPage)}
+        onClear={() => handleDrawingClear(currentPage)}
+        canUndo={(drawingHistoryIndex.get(currentPage) ?? -1) > 0}
+        canRedo={(drawingHistoryIndex.get(currentPage) ?? -1) < ((drawingHistory.get(currentPage) || []).length - 1)}
+        isEraserMode={isEraserMode}
+        onToggleEraser={handleToggleEraser}
+        toolbarTop={toolbarHeight}
+      />
 
       {/* Left-edge hover target: 12px wide invisible strip to auto-open TOC when cursor hits the edge */}
       <div
