@@ -51,7 +51,7 @@ export const DrawingToolbar: React.FC<DrawingToolbarProps> = ({
           : "-translate-y-full opacity-0 pointer-events-none"
       }`}
     >
-  <div className="flex items-center justify-end gap-2 px-4 py-2 bg-neutral-50 dark:bg-neutral-800 border-b border-neutral-200 dark:border-neutral-700">
+      <div className="flex items-center justify-end gap-2 px-4 py-2 bg-neutral-50 dark:bg-neutral-800 border-b border-neutral-200 dark:border-neutral-700">
         {/* ...existing code (left-side toggle removed) ... */}
 
         {/* Color palette (always visible). Includes an Eraser swatch so eraser acts like a color option. */}
