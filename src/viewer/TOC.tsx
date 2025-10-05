@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { List, Bookmark as BookmarkIcon } from 'lucide-react';
+import { List, Bookmark as BookmarkIcon } from "lucide-react";
 import type { TOCItem, NoteRecord, CommentRecord } from "../db";
 import type { TOCNode } from "../utils/toc";
 
@@ -130,6 +130,39 @@ export const TOC: React.FC<TOCProps> = ({
       (a.page || 0) - (b.page || 0) || (a.createdAt || 0) - (b.createdAt || 0)
   );
 
+  // Convert arbitrary CSS color (named, hex, rgb) into an rgba() string with the given alpha.
+  // Uses canvas to normalize named colors to hex/rgb when possible.
+  const colorToRgba = (
+    color: string | undefined,
+    alpha = 0.12
+  ): string | undefined => {
+    if (!color) return undefined;
+    try {
+      const canvas = document.createElement("canvas");
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return undefined;
+      ctx.fillStyle = color;
+      const computed = ctx.fillStyle; // normalized color string (#rrggbb or rgb(...))
+      if (computed.startsWith("#")) {
+        const hex = computed.slice(1);
+        const r = parseInt(hex.substring(0, 2), 16);
+        const g = parseInt(hex.substring(2, 4), 16);
+        const b = parseInt(hex.substring(4, 6), 16);
+        return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+      }
+      const rgbMatch = computed.match(/rgb\((\d+),\s*(\d+),\s*(\d+)\)/);
+      if (rgbMatch) {
+        const r = Number(rgbMatch[1]);
+        const g = Number(rgbMatch[2]);
+        const b = Number(rgbMatch[3]);
+        return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+      }
+    } catch (e) {
+      // ignore and fall through
+    }
+    return undefined;
+  };
+
   return (
     <div className="w-96 h-full bg-white dark:bg-neutral-900 border-r border-neutral-200 dark:border-neutral-700 overflow-auto pr-6 p-3 text-neutral-800 dark:text-neutral-100 toc-container">
       {/* Inline styles to hide native marker and rotate custom chevron when details is open */}
@@ -183,41 +216,37 @@ export const TOC: React.FC<TOCProps> = ({
               No notes or comments yet.
             </div>
           )}
-          {bookmarks.map((b: BookmarkItem) => (
-            <div
-              key={b.id}
-              className="p-2 rounded border border-neutral-100 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-900 cursor-pointer"
-              onClick={() => onSelectBookmark?.(b.original)}
-              role="button"
-              tabIndex={0}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" || e.key === " ") {
-                  onSelectBookmark?.(b.original);
-                }
-              }}
-            >
-              <div className="flex items-center justify-between">
-                <div className="text-xs text-neutral-500">
-                  {b.__type === "note" ? "Note" : "Comment"} • Page {b.page}
+          {bookmarks.map((b: BookmarkItem) => {
+            const isNote = b.__type === "note";
+            const noteColor = isNote
+              ? (b.original as NoteRecord).color
+              : undefined;
+            const bg = isNote ? colorToRgba(noteColor, 0.12) : undefined;
+            return (
+              <div
+                key={b.id}
+                className="p-2 rounded border border-neutral-100 dark:border-neutral-800 cursor-pointer"
+                onClick={() => onSelectBookmark?.(b.original)}
+                role="button"
+                tabIndex={0}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    onSelectBookmark?.(b.original);
+                  }
+                }}
+                style={bg ? { backgroundColor: bg } : undefined}
+              >
+                <div className="flex items-center justify-between">
+                  <div className="text-xs text-neutral-500">
+                    {isNote ? "Note" : "Comment"} • Page {b.page}
+                  </div>
                 </div>
-                {b.__type === "note" && (
-                  // color swatch for note
-                  <div
-                    className="w-3 h-3 rounded"
-                    style={{
-                      backgroundColor:
-                        (b.original as NoteRecord).color || "transparent",
-                      border: "1px solid rgba(0,0,0,0.08)",
-                    }}
-                    aria-hidden
-                  />
-                )}
+                <div className="mt-2 text-sm text-neutral-800 dark:text-neutral-100 whitespace-pre-wrap">
+                  {String(b.text || "").trim()}
+                </div>
               </div>
-              <div className="mt-2 text-sm text-neutral-800 dark:text-neutral-100 whitespace-pre-wrap">
-                {String(b.text || "").trim()}
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>
