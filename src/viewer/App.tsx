@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef, useCallback } from "react";
 import type { PDFDocumentProxy, PDFPageProxy } from "pdfjs-dist";
-import { loadPDF, calculateScale } from "./pdf";
+import { loadPDF, calculateScale, DPI_ADJUSTMENT } from "./pdf";
 import { Page } from "./Page";
 import { Toolbar } from "./Toolbar";
 import { useRenderQueue, CanvasCache } from "./useRenderQueue";
@@ -1269,7 +1269,23 @@ export const ViewerApp: React.FC = () => {
 
   const handleZoomIn = useCallback(() => {
     if (zoom === "fitWidth" || zoom === "fitPage") {
-      changeZoom("100", { snapToTop: true });
+      // Compute current fit percent and choose the nearest higher numeric zoom
+      const container = containerRef.current;
+      if (!container || !pages[0]) {
+        changeZoom("100", { snapToTop: true });
+        return;
+      }
+
+      try {
+        const cw = container.clientWidth;
+        const ch = container.clientHeight - 40;
+        const s = calculateScale(pages[0], cw, ch, zoom as 'fitWidth' | 'fitPage');
+        const percent = Math.round((s / DPI_ADJUSTMENT) * 100);
+        const nextZoom = ZOOM_LEVELS.find((z) => z > percent) || ZOOM_LEVELS[ZOOM_LEVELS.length - 1];
+        changeZoom(nextZoom.toString(), { snapToTop: true });
+      } catch (e) {
+        changeZoom("100", { snapToTop: true });
+      }
     } else {
       const currentZoom = parseInt(zoom, 10);
       const nextZoom = ZOOM_LEVELS.find((z) => z > currentZoom) || ZOOM_LEVELS[ZOOM_LEVELS.length - 1];
@@ -1279,7 +1295,24 @@ export const ViewerApp: React.FC = () => {
 
   const handleZoomOut = useCallback(() => {
     if (zoom === "fitWidth" || zoom === "fitPage") {
-      changeZoom("100", { snapToTop: true });
+      // Compute current fit percent and choose the nearest lower numeric zoom
+      const container = containerRef.current;
+      if (!container || !pages[0]) {
+        changeZoom("100", { snapToTop: true });
+        return;
+      }
+
+      try {
+        const cw = container.clientWidth;
+        const ch = container.clientHeight - 40;
+        const s = calculateScale(pages[0], cw, ch, zoom as 'fitWidth' | 'fitPage');
+        const percent = Math.round((s / DPI_ADJUSTMENT) * 100);
+        const reversed = [...ZOOM_LEVELS].reverse();
+        const prevZoom = reversed.find((z) => z < percent) || ZOOM_LEVELS[0];
+        changeZoom(prevZoom.toString(), { snapToTop: true });
+      } catch (e) {
+        changeZoom("100", { snapToTop: true });
+      }
     } else {
       const currentZoom = parseInt(zoom, 10);
       const prevZoom = [...ZOOM_LEVELS].reverse().find((z) => z < currentZoom) || 50;
@@ -1921,6 +1954,23 @@ Key Points:
   if (!pdf || pages.length === 0) {
     return null;
   }
+  // compute fit percentages to display numeric labels when in fit mode
+  const containerForFit = containerRef.current;
+  let fitWidthPercent = 100;
+  let fitPagePercent = 100;
+  if (containerForFit && pages[0]) {
+    try {
+      const cw = containerForFit.clientWidth;
+      const ch = containerForFit.clientHeight - 40;
+      const sWidth = calculateScale(pages[0], cw, ch, 'fitWidth');
+      const sPage = calculateScale(pages[0], cw, ch, 'fitPage');
+      // convert internal scale to user-facing percentage (account for DPI adjustment)
+      fitWidthPercent = Math.round((sWidth / DPI_ADJUSTMENT) * 100);
+      fitPagePercent = Math.round((sPage / DPI_ADJUSTMENT) * 100);
+    } catch (e) {
+      // ignore
+    }
+  }
 
   return (
     <div className="h-screen flex flex-col bg-neutral-50 dark:bg-neutral-900">
@@ -1929,6 +1979,8 @@ Key Points:
         currentPage={currentPage}
         totalPages={pages.length}
         zoom={zoom}
+        fitWidthPercent={fitWidthPercent}
+        fitPagePercent={fitPagePercent}
         onToggleTOC={handleToggleTOC}
         onPrevPage={handlePrevPage}
         onNextPage={handleNextPage}
@@ -1942,7 +1994,6 @@ Key Points:
         isDrawingMode={isDrawingMode}
         onToggleDrawing={handleToggleDrawing}
       />
-
       {/* Drawing toolbar (fixed overlay) - rendered always so it doesn't shift layout */}
       <DrawingToolbar
         isExpanded={isDrawingMode}
