@@ -27,10 +27,10 @@ export async function mergeAnnotationsIntoPdf(
       const anyDoc: any = pdfDoc as any;
       if (typeof anyDoc.setProducer === "function")
         anyDoc.setProducer(
-          "DocuMind (https://github.com/WangNatalie/documind)"
+          "DocuMind (https://documind.study)"
         );
       if (typeof anyDoc.setCreator === "function")
-        anyDoc.setCreator("DocuMind (https://github.com/WangNatalie/documind)");
+        anyDoc.setCreator("DocuMind (https://documind.study)");
     } catch (e) {
       // ignore
     }
