@@ -188,7 +188,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
       }
     }
-    return false;
+    // Send acknowledgment response
+    sendResponse({ success: true });
+    return true; // Indicate async response
   }
 });
 

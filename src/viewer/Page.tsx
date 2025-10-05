@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState, useCallback } from "react";
 import type { PDFPageProxy } from "pdfjs-dist";
-import { DrawingCanvas, type DrawingStroke } from "./DrawingCanvas";
+import { DrawingCanvas } from "./DrawingCanvas";
+import type { DrawingStroke } from "../db";
 
 interface PageProps {
   pageNum: number;
@@ -372,8 +373,8 @@ export const Page: React.FC<PageProps> = ({
           ref={canvasRef}
           className={`block ${isLoading || error ? "invisible" : "visible"}`}
         />
-        {/* Drawing layer - appears above PDF canvas */}
-        {isDrawingMode && onDrawingStrokesChange && (
+        {/* Drawing layer - appears above PDF canvas, always visible but only interactive when drawing mode is active */}
+        {onDrawingStrokesChange && (
           <DrawingCanvas
             width={width}
             height={height}

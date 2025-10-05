@@ -19,7 +19,11 @@ import {
   deleteComment,
   getTableOfContents,
   getChunksByDoc,
+  getDrawingsByDoc,
+  putDrawing,
   type TableOfContentsRecord,
+  type DrawingStroke,
+  type DrawingRecord,
 } from "../db";
 import { readOPFSFile } from "../db/opfs";
 import ContextMenu from "./ContextMenu";
@@ -27,7 +31,6 @@ import { requestGeminiChunking, requestEmbeddings, requestTOC } from "../utils/c
 import { buildTOCTree } from "../utils/toc";
 import { TOC } from "./TOC";
 import { DrawingToolbar } from "./DrawingToolbar";
-import type { DrawingStroke } from "./DrawingCanvas";
 
 const ZOOM_LEVELS = [50, 75, 90, 100, 125, 150, 175, 200, 250, 300, 350, 400, 500];
 
@@ -156,7 +159,10 @@ export const ViewerApp: React.FC = () => {
             visibleText: visibleText.trim(),
           }
         }).catch((error) => {
-          console.error('Failed to send viewer state:', error);
+          // Suppress "message port closed" errors - these are normal when extension reloads
+          if (!error.message?.includes('message port closed')) {
+            console.error('Failed to send viewer state:', error);
+          }
         });
       }
     };
@@ -385,6 +391,38 @@ export const ViewerApp: React.FC = () => {
               console.warn('resetDB failed while loading comments:', resetErr);
             }
             setComments([]);
+          }
+        })();
+
+        // Load drawings for this document (non-fatal)
+        (async () => {
+          try {
+            const drawings = await getDrawingsByDoc(hash);
+            console.log('[App] Loaded drawings:', drawings.length);
+            
+            // Convert array of DrawingRecords to Map<pageNum, strokes[]>
+            const drawingsMap = new Map<number, DrawingStroke[]>();
+            const historyMap = new Map<number, DrawingStroke[][]>();
+            const historyIndexMap = new Map<number, number>();
+            
+            drawings.forEach(drawing => {
+              drawingsMap.set(drawing.pageNum, drawing.strokes);
+              // Initialize history with current state
+              historyMap.set(drawing.pageNum, [drawing.strokes]);
+              historyIndexMap.set(drawing.pageNum, 0);
+            });
+            
+            setPageDrawings(drawingsMap);
+            setDrawingHistory(historyMap);
+            setDrawingHistoryIndex(historyIndexMap);
+          } catch (err) {
+            console.error("Failed to load drawings (non-fatal)", err);
+            try {
+              resetDB();
+            } catch (resetErr) {
+              console.warn('resetDB failed while loading drawings:', resetErr);
+            }
+            // Keep empty maps on error
           }
         })();
 
@@ -1306,7 +1344,28 @@ export const ViewerApp: React.FC = () => {
       updated.set(pageNum, currentIndex + 1);
       return updated;
     });
-  }, [drawingHistoryIndex]);
+
+    // Save to IndexedDB (non-blocking, error handling)
+    (async () => {
+      try {
+        const id = `${docHash}:${pageNum}`;
+        const now = Date.now();
+        const drawingRecord: DrawingRecord = {
+          id,
+          docHash,
+          pageNum,
+          strokes,
+          createdAt: now,
+          updatedAt: now,
+        };
+        await putDrawing(drawingRecord);
+        console.log(`[Drawing] Saved page ${pageNum} with ${strokes.length} strokes`);
+      } catch (err) {
+        console.error(`[Drawing] Failed to save page ${pageNum}:`, err);
+        // Non-fatal: drawing is still in memory
+      }
+    })();
+  }, [drawingHistoryIndex, docHash]);
 
   const handleDrawingUndo = useCallback((pageNum: number) => {
     const currentIndex = drawingHistoryIndex.get(pageNum) ?? -1;

@@ -1,10 +1,5 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
-
-export interface DrawingStroke {
-  points: { x: number; y: number }[];
-  color: string;
-  width: number;
-}
+import type { DrawingStroke } from '../db';
 
 interface DrawingCanvasProps {
   width: number;

@@ -8,7 +8,8 @@ import { openDB, DBSchema, IDBPDatabase } from 'idb';
 // v5: Added comments object store
 // v6: Added chunkEmbeddings
 // v7: Added tableOfContents
-const DB_VERSION = 7;
+// v8: Added drawings
+const DB_VERSION = 8;
 
 export interface DocRecord {
   docHash: string;
@@ -104,6 +105,21 @@ export interface TableOfContentsRecord {
   createdAt: number;
 }
 
+export interface DrawingStroke {
+  points: { x: number; y: number }[];
+  color: string;
+  width: number;
+}
+
+export interface DrawingRecord {
+  id: string; // Format: "${docHash}:${pageNum}"
+  docHash: string;
+  pageNum: number;
+  strokes: DrawingStroke[];
+  createdAt: number;
+  updatedAt: number;
+}
+
 interface PDFViewerDB extends DBSchema {
   docs: {
     key: string;
@@ -144,6 +160,11 @@ interface PDFViewerDB extends DBSchema {
     key: string;
     value: TableOfContentsRecord;
     indexes: { 'by-docHash': string };
+  };
+  drawings: {
+    key: string;
+    value: DrawingRecord;
+    indexes: { 'by-docHash': string; 'by-page': [string, number] };
   };
 }
 
@@ -230,6 +251,16 @@ export async function getDB(): Promise<IDBPDatabase<PDFViewerDB>> {
           const tocStore = db.createObjectStore('tableOfContents', { keyPath: 'docHash' });
           tocStore.createIndex('by-docHash', 'docHash');
           console.log('[DB] Created tableOfContents store');
+        }
+      }
+
+      // Version 8: Add drawings
+      if (oldVersion < 8) {
+        if (!db.objectStoreNames.contains('drawings')) {
+          const drawingsStore = db.createObjectStore('drawings', { keyPath: 'id' });
+          drawingsStore.createIndex('by-docHash', 'docHash');
+          drawingsStore.createIndex('by-page', ['docHash', 'pageNum']);
+          console.log('[DB] Created drawings store');
         }
       }
     },
@@ -463,4 +494,35 @@ export async function getMissingEmbeddings(docHash: string): Promise<string[]> {
     .map(chunk => chunk.id);
   
   return missingChunkIds;
+}
+
+// Drawing operations
+export async function putDrawing(drawing: DrawingRecord): Promise<void> {
+  const db = await getDB();
+  await db.put('drawings', drawing);
+}
+
+export async function getDrawing(docHash: string, pageNum: number): Promise<DrawingRecord | undefined> {
+  const db = await getDB();
+  const id = `${docHash}:${pageNum}`;
+  return db.get('drawings', id);
+}
+
+export async function getDrawingsByDoc(docHash: string): Promise<DrawingRecord[]> {
+  const db = await getDB();
+  return db.getAllFromIndex('drawings', 'by-docHash', docHash);
+}
+
+export async function deleteDrawing(docHash: string, pageNum: number): Promise<void> {
+  const db = await getDB();
+  const id = `${docHash}:${pageNum}`;
+  await db.delete('drawings', id);
+}
+
+export async function deleteDrawingsByDoc(docHash: string): Promise<void> {
+  const db = await getDB();
+  const drawings = await getDrawingsByDoc(docHash);
+  const tx = db.transaction('drawings', 'readwrite');
+  await Promise.all(drawings.map(d => tx.store.delete(d.id)));
+  await tx.done;
 }
