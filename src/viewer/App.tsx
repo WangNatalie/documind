@@ -38,6 +38,7 @@ import { mergeAnnotationsIntoPdf } from "../export/annotationsToPdf";
 import DocumentProperties from './DocumentProperties.tsx';
 import SaveAsModal from './SaveAsModal';
 import { getAudio } from "../utils/narrator-client";
+import type { BookmarkItem } from "./TOC";
 
 const ZOOM_LEVELS = [
   50, 75, 90, 100, 125, 150, 175, 200, 250, 300, 350, 400, 500,
@@ -164,6 +165,44 @@ export const ViewerApp: React.FC = () => {
   const [fileName, setFileName] = useState<string>(
     params.get("name") || "document.pdf"
   );
+
+  const [contextBookmarks, setContextBookmarks] = useState<BookmarkItem[]>([]);
+  const [chatbotOpenTick, setChatbotOpenTick] = useState(0);
+
+  const handleAddContextBookmark = (bookmark: BookmarkItem) => {
+    setContextBookmarks((prev) => {
+      if (prev.find((b) => b.id === bookmark.id)) return prev;
+      return [...prev, bookmark];
+    });
+    setChatbotOpenTick((t) => t + 1);
+  };
+  const handleRemoveContextBookmark = (id: string) => {
+    setContextBookmarks((prev) => prev.filter((b) => b.id !== id));
+  };
+
+  const handleAddNoteContextFromPage = useCallback((note: { id: string; rects: { top: number; left: number; width: number; height: number }[]; color: string; text?: string }, page: number) => {
+    const b: BookmarkItem = {
+      id: note.id,
+      page,
+      text: note.text,
+      createdAt: Date.now(),
+      __type: "note",
+      original: { id: note.id, docHash, page, rects: note.rects, color: note.color, text: note.text, createdAt: Date.now() } as any,
+    };
+    handleAddContextBookmark(b);
+  }, [docHash]);
+
+  const handleAddCommentContextFromPage = useCallback((comment: { id: string; rects: { top: number; left: number; width: number; height: number }[]; text: string; page: number }) => {
+    const b: BookmarkItem = {
+      id: comment.id,
+      page: comment.page,
+      text: comment.text,
+      createdAt: Date.now(),
+      __type: "comment",
+      original: { id: comment.id, docHash, page: comment.page, rects: comment.rects, text: comment.text, createdAt: Date.now() } as any,
+    };
+    handleAddContextBookmark(b);
+  }, [docHash]);
 
   // Listen for state requests and term summaries from background
   useEffect(() => {
@@ -2702,14 +2741,14 @@ Key Points:
             onSelect={handleTOCSelect}
             notes={notes}
             comments={comments}
-            onSelectBookmark={(item: NoteRecord | CommentRecord) => {
-              // navigate to the page for this bookmark
+            onSelectBookmark={(item) => {
               if (typeof item.page === 'number') {
                 scrollToPage(item.page);
               } else if (item.page) {
                 scrollToPage(Number(item.page));
               }
             }}
+            onAddContext={handleAddContextBookmark}
           />
         </div>
       </div>
@@ -2779,6 +2818,8 @@ Key Points:
                   setTermPopupPosition(adjustedPos);
                 }}
                 highlightsVisible={highlightsVisible}
+                onAddNoteContext={handleAddNoteContextFromPage}
+                onAddCommentContext={handleAddCommentContextFromPage}
               />
               );
             });
@@ -2906,6 +2947,9 @@ Key Points:
         docHash={docHash}
         currentPage={currentPage}
         onPageNavigate={scrollToPage}
+        contextBookmarks={contextBookmarks}
+        onRemoveContextBookmark={handleRemoveContextBookmark}
+        openSignal={chatbotOpenTick}
       />
 
       {/* Term summary popup */}

@@ -1,6 +1,8 @@
 import React, { useRef, useState, useEffect } from 'react';
 import { marked } from 'marked';
 import { sendChatQuery } from '../utils/chatbot-client';
+import { ArrowLeft } from 'lucide-react';
+import type { BookmarkItem } from './TOC';
 
 const BOT_BUTTON_SIZE = 56;
 const CHATBOX_MIN_WIDTH = 320;
@@ -12,9 +14,12 @@ interface ChatbotProps {
   docHash: string;
   currentPage?: number;
   onPageNavigate?: (page: number) => void;
+  contextBookmarks?: BookmarkItem[];
+  onRemoveContextBookmark?: (id: string) => void;
+  openSignal?: number;
 }
 
-export const Chatbot: React.FC<ChatbotProps> = ({ docHash, currentPage, onPageNavigate }) => {
+export const Chatbot: React.FC<ChatbotProps> = ({ docHash, currentPage, onPageNavigate, contextBookmarks = [], onRemoveContextBookmark, openSignal }) => {
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState<{ text: string; sender: 'user' | 'bot'; sources?: Array<{ page: number }> }[]>([]);
   const [input, setInput] = useState('');
@@ -28,6 +33,58 @@ export const Chatbot: React.FC<ChatbotProps> = ({ docHash, currentPage, onPageNa
   const chatEndRef = useRef<HTMLDivElement>(null);
   const resizeRef = useRef<HTMLDivElement>(null);
   const startPos = useRef<{ x: number; y: number; width: number; height: number } | null>(null);
+  const [pendingContext, setPendingContext] = useState<BookmarkItem[]>([]);
+
+  // Extract an excerpt from the PDF text layer that intersects bookmark rects
+  const getExcerptForBookmark = (b: BookmarkItem): string | undefined => {
+    try {
+      const pageNum = b.page;
+      const pageEl = document.querySelector(`[data-page-num="${pageNum}"]`) as HTMLElement | null;
+      if (!pageEl) return undefined;
+      const pageBox = pageEl.getBoundingClientRect();
+      const textLayer = (pageEl.querySelector('.text-layer') || pageEl.querySelector('.textLayer')) as HTMLElement | null;
+      if (!textLayer) return undefined;
+
+      // Convert normalized rects to absolute pixel rects
+      const rects = (b.original as any)?.rects as Array<{ top: number; left: number; width: number; height: number }> | undefined;
+      if (!rects || rects.length === 0) return undefined;
+      const absRects = rects.map(r => ({
+        top: pageBox.top + r.top * pageBox.height,
+        left: pageBox.left + r.left * pageBox.width,
+        width: r.width * pageBox.width,
+        height: r.height * pageBox.height,
+      }));
+
+      const intersects = (a: DOMRect, b: { top: number; left: number; width: number; height: number }) => {
+        const ar = { x1: a.left, y1: a.top, x2: a.left + a.width, y2: a.top + a.height };
+        const br = { x1: b.left, y1: b.top, x2: b.left + b.width, y2: b.top + b.height };
+        return !(ar.x2 < br.x1 || ar.x1 > br.x2 || ar.y2 < br.y1 || ar.y1 > br.y2);
+      };
+
+      const walker = document.createTreeWalker(textLayer, NodeFilter.SHOW_TEXT, null);
+      const pieces: string[] = [];
+      while (walker.nextNode()) {
+        const node = walker.currentNode as Text;
+        const parent = node.parentElement as HTMLElement | null;
+        if (!parent) continue;
+        const rect = parent.getBoundingClientRect();
+        if (absRects.some(r => intersects(rect, r))) {
+          if (node.textContent) pieces.push(node.textContent);
+        }
+      }
+
+      const merged = pieces.join(' ').replace(/\s+/g, ' ').trim();
+      if (!merged) return undefined;
+      return merged.length > 400 ? merged.slice(0, 400) + '…' : merged;
+    } catch {
+      return undefined;
+    }
+  };
+
+  // Sync contextBookmarks from props to local pendingContext for one-time use
+  useEffect(() => {
+    setPendingContext(contextBookmarks);
+  }, [contextBookmarks]);
 
   // Scroll to bottom when messages change
   useEffect(() => {
@@ -84,9 +141,25 @@ export const Chatbot: React.FC<ChatbotProps> = ({ docHash, currentPage, onPageNa
     setLoading(true);
     
     try {
-      // Send query to backend
-      const result = await sendChatQuery(userMessage, docHash);
-      
+      // Build context string using bookmark note/comment text + extracted excerpt
+      let contextString = '';
+      if (pendingContext.length > 0) {
+        contextString = pendingContext.map((b) => {
+          const type = b.__type === 'note' ? 'Note' : 'Comment';
+          const userText = (b.text || '').trim();
+          const excerpt = getExcerptForBookmark(b);
+          const parts: string[] = [];
+          if (excerpt) parts.push(`Excerpt: "${excerpt}"`);
+          if (userText) parts.push(`User ${type.toLowerCase()} text: ${userText}`);
+          const details = parts.length > 0 ? `\n${parts.join('\n')}` : '';
+          return `[${type} • Page ${b.page}]${details}`;
+        }).join('\n---\n');
+      }
+      console.log('Sending bookmarks context:', contextString);
+      // Send query to backend, including context if present
+      const fullMessage = contextString ? `${contextString}\n\n${userMessage}` : userMessage;
+      const result = await sendChatQuery(fullMessage, docHash);
+      // Do NOT clear context after use
       if (result.success && result.result) {
         // Add bot response
         setMessages((msgs) => [...msgs, { 
@@ -145,6 +218,13 @@ export const Chatbot: React.FC<ChatbotProps> = ({ docHash, currentPage, onPageNa
       return () => clearTimeout(timeout);
     }
   }, [open]);
+
+  // Open chatbot when external openSignal changes
+  useEffect(() => {
+    if (typeof openSignal === 'number') {
+      setOpen(true);
+    }
+  }, [openSignal]);
 
   return (
     <>
@@ -294,6 +374,28 @@ export const Chatbot: React.FC<ChatbotProps> = ({ docHash, currentPage, onPageNa
             <div ref={chatEndRef} />
           </div>
 
+          {/* Context chips above input */}
+          {pendingContext.length > 0 && (
+            <div className="flex flex-wrap gap-2 px-4 pt-2 pb-1">
+              {pendingContext.map((b) => (
+                <span key={b.id} className="inline-flex items-center rounded-full bg-primary-100 dark:bg-primary-900 text-primary-800 dark:text-primary-200 px-3 py-1 text-xs font-medium mr-2 mb-1">
+                  {b.__type === 'note' ? 'Note' : 'Comment'} • Page {b.page}
+                  <button
+                    className="ml-2 text-primary-500 hover:text-primary-700 dark:hover:text-primary-300 focus:outline-none"
+                    style={{ fontSize: 12, lineHeight: 1 }}
+                    title="Remove context"
+                    onClick={e => {
+                      e.stopPropagation();
+                      if (onRemoveContextBookmark) onRemoveContextBookmark(b.id);
+                      setPendingContext((prev) => prev.filter((x) => x.id !== b.id));
+                    }}
+                  >
+                    ×
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
           {/* Input area */}
           <form
             className="px-4 py-3 border-t border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 flex gap-2"

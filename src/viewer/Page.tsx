@@ -3,6 +3,7 @@ import type { PDFPageProxy } from "pdfjs-dist";
 import { DrawingCanvas } from "./DrawingCanvas";
 import type { DrawingStroke } from "../db";
 import { PenLine, Trash2 } from "lucide-react";
+import { BrainCircuit } from "lucide-react";
 
 interface TermSummary {
   term: string;
@@ -42,6 +43,8 @@ interface PageProps {
   onNoteEdit?: (id: string, newText: string) => void;
   onCommentDelete?: (id: string) => void;
   onCommentEdit?: (id: string, newText: string) => void;
+  onAddNoteContext?: (note: { id: string; rects: { top: number; left: number; width: number; height: number }[]; color: string; text?: string }, page: number) => void;
+  onAddCommentContext?: (comment: { id: string; rects: { top: number; left: number; width: number; height: number }[]; text: string; page: number }) => void;
   // Drawing props
   isDrawingMode?: boolean;
   drawingColor?: string;
@@ -69,6 +72,8 @@ export const Page: React.FC<PageProps> = ({
   onNoteEdit,
   onCommentDelete,
   onCommentEdit,
+  onAddNoteContext,
+  onAddCommentContext,
   isDrawingMode = false,
   drawingColor = '#000000',
   drawingStrokeWidth = 2,
@@ -713,6 +718,16 @@ export const Page: React.FC<PageProps> = ({
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
+                        onAddNoteContext?.({ id: n.id, rects: n.rects, color: n.color, text: n.text }, pageNum);
+                      }}
+                      className="p-1 text-purple-600 hover:bg-purple-50 dark:hover:bg-purple-900/20 rounded"
+                      title="Add note to chat context"
+                    >
+                      <BrainCircuit size={16} />
+                    </button>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
                         setEditingNoteId(n.id);
                         setEditingNoteText(n.text || "");
                       }}
@@ -854,6 +869,16 @@ export const Page: React.FC<PageProps> = ({
                   <>
                     {/* Edit and Delete buttons in top right corner */}
                     <div className="absolute top-1 right-1 flex gap-1">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onAddCommentContext?.({ id: c.id, rects: c.rects, text: c.text, page: c.page });
+                        }}
+                        className="p-1 text-purple-600 hover:bg-purple-50 dark:hover:bg-purple-900/20 rounded"
+                        title="Add comment to chat context"
+                      >
+                        <BrainCircuit size={16} />
+                      </button>
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
