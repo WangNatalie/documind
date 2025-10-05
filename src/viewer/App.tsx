@@ -33,6 +33,7 @@ import { buildTOCTree } from "../utils/toc";
 import { TOC } from "./TOC";
 import { DrawingToolbar } from "./DrawingToolbar";
 import { getAudio } from "../utils/narrator-client";
+import { Volume2 } from "lucide-react";
 
 const ZOOM_LEVELS = [
   50, 75, 90, 100, 125, 150, 175, 200, 250, 300, 350, 400, 500,
@@ -145,6 +146,8 @@ export const ViewerApp: React.FC = () => {
   const [termSourcePage, setTermSourcePage] = useState<number>(1);
   const [termReturnPage, setTermReturnPage] = useState<number | null>(null); // Track page to return to after "Go to Context"
   const [savedTerms, setSavedTerms] = useState<Set<string>>(new Set()); // Track terms that have been saved as notes
+  const [isNarratingTerm, setIsNarratingTerm] = useState(false); // Track if term is being narrated
+  const currentAudioRef = useRef<HTMLAudioElement | null>(null); // Reference to current audio element
   
   // Track last visible page for recaching logic
   const lastVisiblePageRef = useRef<number>(1);
@@ -2615,9 +2618,69 @@ Key Points:
           onClick={(e) => e.stopPropagation()}
         >
           <div className="flex justify-between items-start mb-3">
-            <h3 className="text-lg font-bold text-neutral-900 dark:text-neutral-100">
-              {selectedTerm.term}
-            </h3>
+            <div className="flex items-center gap-2">
+              <h3 className="text-lg font-bold text-neutral-900 dark:text-neutral-100">
+                {selectedTerm.term}
+              </h3>
+              <button
+                onClick={async () => {
+                  // If currently playing, stop it
+                  if (isNarratingTerm && currentAudioRef.current) {
+                    currentAudioRef.current.pause();
+                    currentAudioRef.current.currentTime = 0;
+                    currentAudioRef.current = null;
+                    setIsNarratingTerm(false);
+                    return;
+                  }
+                  
+                  try {
+                    setIsNarratingTerm(true);
+                    
+                    // Create narration text with term definition and key points
+                    const narrationText = `${selectedTerm.term}. ${selectedTerm.definition}`;
+                    
+                    console.log('[App] Requesting narration for term:', selectedTerm.term);
+                    const audioBuffer = await getAudio(narrationText);
+                    
+                    if (audioBuffer) {
+                      console.log('[App] Playing term narration audio');
+                      const blob = new Blob([audioBuffer], { type: 'audio/mpeg' });
+                      const url = URL.createObjectURL(blob);
+                      const audioEl = new Audio(url);
+                      currentAudioRef.current = audioEl;
+                      
+                      audioEl.onended = () => {
+                        URL.revokeObjectURL(url);
+                        currentAudioRef.current = null;
+                        setIsNarratingTerm(false);
+                      };
+                      
+                      audioEl.onerror = () => {
+                        URL.revokeObjectURL(url);
+                        currentAudioRef.current = null;
+                        setIsNarratingTerm(false);
+                        console.error('[App] Audio playback error');
+                      };
+                      
+                      await audioEl.play();
+                    } else {
+                      console.error('[App] No audio buffer received for term narration');
+                      setIsNarratingTerm(false);
+                    }
+                  } catch (err) {
+                    console.error('[App] Error requesting term narration:', err);
+                    currentAudioRef.current = null;
+                    setIsNarratingTerm(false);
+                  }
+                }}
+                className={`p-1 rounded hover:bg-primary-100 dark:hover:bg-primary-700 transition ${
+                  isNarratingTerm ? 'text-primary-500 animate-pulse' : 'text-neutral-600 dark:text-neutral-400'
+                }`}
+                title={isNarratingTerm ? "Stop narration" : "Listen to term definition"}
+              >
+                <Volume2 size={18} />
+              </button>
+            </div>
             <button
               onClick={() => {
                 setSelectedTerm(null);
@@ -2671,7 +2734,7 @@ Key Points:
           <div className="mt-3 pt-3 border-t border-neutral-200 dark:border-neutral-700 flex gap-2">
             <button
               onClick={() => handleSaveTermAsNote(selectedTerm)}
-              className="px-3 py-1.5 text-sm bg-green-500 hover:bg-green-600 text-white rounded"
+              className="px-3 py-1.5 text-sm bg-primary-100 hover:bg-primary-200 text-black rounded"
               title="Save this explanation as a note"
             >
               Save as Note

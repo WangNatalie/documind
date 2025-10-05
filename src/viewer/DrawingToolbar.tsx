@@ -67,7 +67,7 @@ export const DrawingToolbar: React.FC<DrawingToolbarProps> = ({
                 }}
                 className={`w-7 h-7 rounded-full border-2 transition-all hover:scale-110 ${
                   !isEraserMode && selectedColor === color.value
-                    ? "border-primary-500 ring-2 ring-blue-300 dark:ring-blue-700"
+                    ? "border-primary-500"
                     : "border-neutral-300 dark:border-neutral-600"
                 }`}
                 style={{ backgroundColor: color.value }}
@@ -80,7 +80,7 @@ export const DrawingToolbar: React.FC<DrawingToolbarProps> = ({
               onClick={onToggleEraser}
               className={`w-7 h-7 rounded-full border-2 flex items-center justify-center text-sm transition-all hover:scale-110 ${
                 isEraserMode
-                  ? "border-primary-500 ring-2 ring-blue-300 dark:ring-blue-700 bg-white text-neutral-900"
+                  ? "border-primary-500 bg-white text-neutral-900"
                   : "border-neutral-300 dark:border-neutral-600 bg-white text-neutral-800"
               }`}
               title="Eraser"

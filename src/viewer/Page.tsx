@@ -83,7 +83,7 @@ export const Page: React.FC<PageProps> = ({
   const textLayerRef = useRef<HTMLDivElement>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const renderedScaleRef = useRef<number>(0);
+  const [renderedScale, setRenderedScale] = useState<number>(0);
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
   const [editingNoteText, setEditingNoteText] = useState("");
   const [editingCommentId, setEditingCommentId] = useState<string | null>(null);
@@ -182,7 +182,7 @@ export const Page: React.FC<PageProps> = ({
       // Reset rendered scale when page is not being rendered
       if (!shouldRender) {
         // Page moved outside render buffer, reset state
-        renderedScaleRef.current = 0;
+        setRenderedScale(0);
         targetScaleRef.current = 0;
         // Clear any pending render timeouts
         if (renderTimeoutRef.current) {
@@ -201,7 +201,7 @@ export const Page: React.FC<PageProps> = ({
     const canvas = canvasRef.current!;
 
     // If we've never rendered this page, do a full render
-    if (!renderedScaleRef.current || renderedScaleRef.current === 0) {
+    if (!renderedScale || renderedScale === 0) {
       const doFullRender = async () => {
         try {
           setIsLoading(true);
@@ -210,7 +210,7 @@ export const Page: React.FC<PageProps> = ({
           const priority = isVisible ? 1 : 10;
           await onRender(pageNum, canvas, textLayerRef.current, priority);
 
-          renderedScaleRef.current = scale;
+          setRenderedScale(scale);
           // ensure any CSS transform is reset after drawing
           canvas.style.transform = "";
           canvas.style.transformOrigin = "top left";
@@ -232,7 +232,7 @@ export const Page: React.FC<PageProps> = ({
     // 1. Immediately CSS-scale the existing canvas (instant feedback, may be blurry)
     // 2. Debounce and trigger a background re-render at the new scale for crisp quality
     // This matches PDF.js behavior where zoom is instant but quality improves after a moment
-    const prevScale = renderedScaleRef.current;
+    const prevScale = renderedScale;
     if (Math.abs(prevScale - scale) < 0.01) {
       // effectively same, no-op
       setIsLoading(false);
@@ -253,7 +253,7 @@ export const Page: React.FC<PageProps> = ({
             setError(null);
             const priority = isVisible ? 1 : 10;
             await onRender(pageNum, canvas, textLayerRef.current, priority);
-            renderedScaleRef.current = scale;
+            setRenderedScale(scale);
             canvas.style.transform = "";
             canvas.style.transformOrigin = "top left";
             setIsLoading(false);
@@ -299,16 +299,16 @@ export const Page: React.FC<PageProps> = ({
         }
 
         // Skip if we've already rendered at this exact scale
-        if (Math.abs(renderedScaleRef.current - scaleToRender) < 0.01) {
+        if (Math.abs(renderedScale - scaleToRender) < 0.01) {
           return;
         }
 
         try {
           await onRender(pageNum, canvas, textLayerRef.current, isVisible ? 1 : 10);
 
-          // Only update renderedScaleRef if we're still at the same target scale
+          // Only update renderedScale if we're still at the same target scale
           if (Math.abs(targetScaleRef.current - scaleToRender) < 0.01) {
-            renderedScaleRef.current = scaleToRender;
+            setRenderedScale(scaleToRender);
             canvas.style.transform = "";
             canvas.style.transformOrigin = "top left";
           }
@@ -326,7 +326,7 @@ export const Page: React.FC<PageProps> = ({
         try {
           setIsLoading(true);
           await onRender(pageNum, canvas, textLayerRef.current, isVisible ? 1 : 10);
-          renderedScaleRef.current = scale;
+          setRenderedScale(scale);
           canvas.style.transform = "";
           canvas.style.transformOrigin = "top left";
           setIsLoading(false);
@@ -338,7 +338,7 @@ export const Page: React.FC<PageProps> = ({
 
       fallback();
     }
-  }, [page, scale, pageNum, onRender, isVisible, shouldRender]);
+  }, [page, scale, pageNum, onRender, isVisible, shouldRender, renderedScale]);
 
   // Cleanup timeout on unmount
   useEffect(() => {
@@ -363,18 +363,33 @@ export const Page: React.FC<PageProps> = ({
       return;
     }
 
+    // Wait for text layer to be fully rendered at the current scale before calculating highlights
+    // This ensures highlight positions are accurate after zoom/scale changes
+    if (Math.abs(renderedScale - scale) > 0.01) {
+      console.log(`[Page ${pageNum}] Waiting for text layer to render at scale ${scale} (currently ${renderedScale})`);
+      // Text layer hasn't been fully re-rendered at the new scale yet, clear highlights for now
+      setTermHighlights([]);
+      return;
+    }
+
     const textLayer = textLayerRef.current;
     const highlights: Array<{
       term: TermSummary;
       rect: { top: number; left: number; width: number; height: number };
     }> = [];
 
-    // Wait for text layer to be populated
+    // Wait for text layer to be populated and positioned
     const checkTextLayer = () => {
       const textContent = textLayer.textContent || '';
       if (textContent.trim().length === 0) {
         // Text layer not ready yet, try again
         setTimeout(checkTextLayer, 100);
+        return;
+      }
+
+      // Double-check that we're still at the right scale
+      if (Math.abs(renderedScale - scale) > 0.01) {
+        console.log(`[Page ${pageNum}] Scale changed during highlight calculation, aborting`);
         return;
       }
 
@@ -465,7 +480,7 @@ export const Page: React.FC<PageProps> = ({
     };
 
     checkTextLayer();
-  }, [textLayerRef.current, shouldRender, isLoading, termSummaries, pageNum, page, scale]);
+  }, [shouldRender, isLoading, termSummaries, pageNum, page, scale, renderedScale]);
 
   // Check individual highlight visibility every 0.5 second
   useEffect(() => {
@@ -683,7 +698,7 @@ export const Page: React.FC<PageProps> = ({
                         }
                         setEditingNoteId(null);
                       }}
-                      className="px-3 py-1 text-xs bg-blue-500 hover:bg-blue-600 text-white rounded"
+                      className="px-3 py-1 text-xs bg-primary-500 hover:bg-primary-600 text-white rounded"
                       title="Save (Ctrl+Enter)"
                     >
                       Save
@@ -716,7 +731,7 @@ export const Page: React.FC<PageProps> = ({
                         setEditingNoteId(n.id);
                         setEditingNoteText(n.text || "");
                       }}
-                      className="p-1 text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded"
+                      className="p-1 text-primary-500 hover:bg-primary-50 dark:hover:bg-primary-900/20 rounded"
                       title="Edit note"
                     >
                       <PenLine size={16} />
@@ -899,14 +914,14 @@ export const Page: React.FC<PageProps> = ({
               width: highlight.rect.width,
               height: highlight.rect.height,
               pointerEvents: "auto",
-              borderBottom: "1px dashed rgb(147, 51, 234)",
+              borderBottom: "3px dashed rgb(147, 51, 234)",
               boxSizing: "border-box",
             }}
             onMouseEnter={(e) => {
-              e.currentTarget.style.borderBottom = "1px dashed rgb(217, 180, 255)";
+              e.currentTarget.style.borderBottom = "3px dashed rgb(217, 180, 255)";
             }}
             onMouseLeave={(e) => {
-              e.currentTarget.style.borderBottom = "1px dashed rgb(147, 51, 234)";
+              e.currentTarget.style.borderBottom = "3px dashed rgb(147, 51, 234)";
             }}
             onClick={(e) => {
               e.preventDefault();

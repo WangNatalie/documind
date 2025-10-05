@@ -185,9 +185,9 @@ export const Chatbot: React.FC<ChatbotProps> = ({ docHash, currentPage, onPageNa
                   setChatbotReturnPage(null);
                 }
               }}
-              className="fixed z-50 bg-blue-600 hover:bg-blue-700 text-white px-3 py-2 rounded-lg shadow-lg flex items-center gap-2 text-sm font-medium transition"
+              className="fixed z-50 bg-primary-600 hover:bg-primary-800 text-white px-3 py-2 rounded-lg shadow-lg flex items-center gap-2 text-sm font-medium transition"
               style={{
-                bottom: `${dimensions.height-12}px`, // Beside chatbot
+                bottom: `${dimensions.height-16}px`, // Beside chatbot
                 right: `${dimensions.width + 16}px`, // Align with left edge of chatbot
               }}
               title="Return to previous page"
@@ -275,7 +275,7 @@ export const Chatbot: React.FC<ChatbotProps> = ({ docHash, currentPage, onPageNa
                               onPageNavigate(s.page);
                             }
                           }}
-                          className="text-blue-600 dark:text-blue-400 hover:underline cursor-pointer"
+                          className="text-primary-600 dark:text-primary-400 hover:underline cursor-pointer"
                           title={`Go to page ${s.page}`}
                         >
                           Page {s.page}

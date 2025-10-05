@@ -174,10 +174,10 @@ const ToolbarInner: React.FC<ToolbarProps & { forwardedRef?: React.Ref<HTMLDivEl
           {/* Highlights Toggle */}
           <button
             onClick={onToggleHighlights}
-            className={`px-3 py-1.5 rounded transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400 ${
+            className={`px-3 py-1.5 rounded transition-colors focus:outline-none ${
               highlightsVisible
-                ? 'bg-purple-600 text-white hover:bg-purple-700'
-                : 'bg-neutral-100 text-neutral-800 dark:bg-neutral-800 dark:text-neutral-100 hover:bg-neutral-200 dark:hover:bg-neutral-700'
+                ? 'bg-primary-600 text-white'
+                : 'bg-transparent text-neutral-800 dark:bg-transparent dark:text-neutral-100 hover:bg-neutral-200 dark:hover:bg-neutral-700'
             }`}
             title={highlightsVisible ? "Hide highlights" : "Show highlights"}
           >
