@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState, useCallback } from "react";
 import type { PDFPageProxy } from "pdfjs-dist";
 import { DrawingCanvas } from "./DrawingCanvas";
 import type { DrawingStroke } from "../db";
+import { PenLine, Trash2 } from "lucide-react";
 
 interface TermSummary {
   term: string;
@@ -87,6 +88,7 @@ export const Page: React.FC<PageProps> = ({
   const [editingNoteText, setEditingNoteText] = useState("");
   const [editingCommentId, setEditingCommentId] = useState<string | null>(null);
   const [editingCommentText, setEditingCommentText] = useState("");
+  const [visibleNoteId, setVisibleNoteId] = useState<string | null>(null);
   const targetScaleRef = useRef<number>(0);
   const renderTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const lastCSSScaleRef = useRef<number>(0);
@@ -521,6 +523,22 @@ export const Page: React.FC<PageProps> = ({
     return () => clearInterval(intervalId);
   }, [termHighlights]);
 
+  // Handle clicking outside of notes to close them
+  useEffect(() => {
+    if (!visibleNoteId) return;
+
+    const handleClickOutside = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      // Check if click is outside note popup
+      if (!target.closest('.note-popup') && !target.closest('[data-note-highlight]')) {
+        setVisibleNoteId(null);
+      }
+    };
+
+    document.addEventListener('click', handleClickOutside);
+    return () => document.removeEventListener('click', handleClickOutside);
+  }, [visibleNoteId]);
+
   // Get approximate dimensions for skeleton
   const viewport = page?.getViewport({ scale: scale || 1 });
   const width = viewport?.width || 800;
@@ -592,11 +610,12 @@ export const Page: React.FC<PageProps> = ({
           className="absolute top-0 left-0 text-layer z-10 text-transparent"
           style={{ width: `${width}px`, height: `${height}px` }}
         />
-        {/* Notes overlays - just colored highlights with hover tooltips */}
+        {/* Notes overlays - just colored highlights with click-to-show tooltips */}
         {notes.map((n) => {
           const mergedLines = mergeRectsIntoLines(n.rects, width, height);
           const hasText = n.text && n.text.trim().length > 0;
           const isEditing = editingNoteId === n.id;
+          const isVisible = visibleNoteId === n.id;
 
           // Skip rendering if note has no rectangles (e.g., page-level notes)
           if (mergedLines.length === 0) {
@@ -604,16 +623,17 @@ export const Page: React.FC<PageProps> = ({
           }
 
           return (
-            <div key={n.id} className="group">
+            <div key={n.id}>
               {mergedLines.map((line, i) => (
                 <div
                   key={`${n.id}-${i}`}
-                  className={`absolute rounded-md z-20 ${
+                  data-note-highlight
+                  className={`absolute rounded-md z-20 cursor-pointer transition-colors ${
                     n.color === "yellow"
-                      ? "bg-yellow-300/30"
+                      ? "bg-yellow-300/30 hover:bg-yellow-300/50"
                       : n.color === "green"
-                        ? "bg-emerald-200/30"
-                        : "bg-sky-200/30"
+                        ? "bg-emerald-200/30 hover:bg-emerald-200/50"
+                        : "bg-sky-200/30 hover:bg-sky-200/50"
                   }`}
                   style={{
                     top: line.top,
@@ -622,98 +642,112 @@ export const Page: React.FC<PageProps> = ({
                     height: line.height,
                     pointerEvents: "auto",
                   }}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setVisibleNoteId(isVisible ? null : n.id);
+                  }}
                 />
               ))}
-              {/* Invisible bridge to connect highlight to tooltip - prevents gap */}
-              <div
-                className="absolute z-40 pointer-events-auto"
-                style={{
-                  top: mergedLines[0].top - 40,
-                  left: mergedLines[0].left,
-                  width: Math.max(mergedLines[0].width, 200),
-                  height: 40 + mergedLines[0].height,
-                }}
-              />
-              {/* Show tooltip/edit interface on hover if note has text or when editing */}
+              {/* Show tooltip/edit interface on click if note has text or when editing */}
               {isEditing ? (
                 <div
-                  className="absolute bg-white dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-600 rounded-md p-1 shadow-lg z-40 flex gap-2"
+                  className="note-popup absolute bg-white dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-600 rounded-md p-3 shadow-lg z-40"
                   style={{
-                    top: mergedLines[0].top - 30,
+                    top: mergedLines[0].top - 35,
                     left: mergedLines[0].left,
-                    minWidth: "200px",
+                    minWidth: "250px",
+                    maxWidth: "400px",
                   }}
                 >
-                  <input
+                  <textarea
                     autoFocus
-                    type="text"
                     value={editingNoteText}
                     onChange={(e) => setEditingNoteText(e.target.value)}
                     onKeyDown={(e) => {
-                      if (e.key === "Enter" && onNoteEdit) {
+                      if (e.key === "Enter" && e.ctrlKey && onNoteEdit) {
                         onNoteEdit(n.id, editingNoteText);
                         setEditingNoteId(null);
                       } else if (e.key === "Escape") {
                         setEditingNoteId(null);
                       }
                     }}
-                    className="flex-1 px-2 py-1 text-xs bg-white dark:bg-neutral-700 border border-neutral-300 dark:border-neutral-600 rounded text-neutral-900 dark:text-neutral-100"
+                    className="w-full px-2 py-1 text-sm bg-white dark:bg-neutral-700 border border-neutral-300 dark:border-neutral-600 rounded text-neutral-900 dark:text-neutral-100 resize-y min-h-[2.5rem]"
+                    rows={Math.max(1, Math.ceil(editingNoteText.length / 40))}
+                    placeholder="Enter note text..."
                   />
-                  <button
-                    onClick={() => {
-                      if (onNoteEdit) {
-                        onNoteEdit(n.id, editingNoteText);
-                      }
-                      setEditingNoteId(null);
-                    }}
-                    className="px-2 py-1 text-xs bg-blue-500 hover:bg-blue-600 text-white rounded"
-                    title="Save"
-                  >
-                    ✓
-                  </button>
-                  <button
-                    onClick={() => setEditingNoteId(null)}
-                    className="px-2 py-1 text-xs bg-neutral-200 hover:bg-neutral-300 dark:bg-neutral-700 dark:hover:bg-neutral-600 rounded"
-                    title="Cancel"
-                  >
-                    ✕
-                  </button>
+                  <div className="flex gap-2 mt-2 justify-end">
+                    <button
+                      onClick={() => {
+                        if (onNoteEdit) {
+                          onNoteEdit(n.id, editingNoteText);
+                        }
+                        setEditingNoteId(null);
+                      }}
+                      className="px-3 py-1 text-xs bg-blue-500 hover:bg-blue-600 text-white rounded"
+                      title="Save (Ctrl+Enter)"
+                    >
+                      Save
+                    </button>
+                    <button
+                      onClick={() => setEditingNoteId(null)}
+                      className="px-3 py-1 text-xs bg-neutral-200 hover:bg-neutral-300 dark:bg-neutral-700 dark:hover:bg-neutral-600 text-neutral-900 dark:text-neutral-100 rounded"
+                      title="Cancel (Esc)"
+                    >
+                      Cancel
+                    </button>
+                  </div>
                 </div>
-              ) : (
+              ) : isVisible ? (
                 <div
-                  className="invisible group-hover:visible absolute bg-white dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-600 rounded-md shadow-lg z-40 flex items-center gap-2 pointer-events-auto p-2"
+                  className="note-popup absolute bg-white dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-600 rounded-md shadow-lg z-40 pointer-events-auto p-3"
                   style={{
-                    top: mergedLines[0].top - 25,
+                    top: mergedLines[0].top - 35,
                     left: mergedLines[0].left,
-                    width: '300px',
+                    minWidth: '250px',
+                    maxWidth: '400px',
+                    width: hasText ? `${Math.min(400, Math.max(250, n.text!.length * 8))}px` : '250px',
                   }}
                 >
-                  {hasText && (
-                    <span className="flex-1 text-xs text-neutral-900 dark:text-neutral-100 whitespace-pre-wrap break-words">
-                      {n.text}
-                    </span>
-                  )}
-                  <button
-                    onClick={() => {
-                      setEditingNoteId(n.id);
-                      setEditingNoteText(n.text || "");
-                    }}
-                    className="p-0.5 text-xs bg-blue-500 hover:bg-blue-600 text-white rounded"
-                    title="Edit note"
-                  >
-                    ✎
-                  </button>
-                  {onNoteDelete && (
+                  {/* Edit and Delete buttons in top right corner */}
+                  <div className="absolute top-2 right-2 flex gap-1">
                     <button
-                      onClick={() => onNoteDelete(n.id)}
-                      className="px-2 py-1 text-xs bg-red-500 hover:bg-red-600 text-white rounded mr-1"
-                      title="Delete note"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setEditingNoteId(n.id);
+                        setEditingNoteText(n.text || "");
+                      }}
+                      className="p-1 text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded"
+                      title="Edit note"
                     >
-                      🗑
+                      <PenLine size={16} />
                     </button>
+                    {onNoteDelete && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onNoteDelete(n.id);
+                          setVisibleNoteId(null);
+                        }}
+                        className="p-1 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded"
+                        title="Delete note"
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    )}
+                  </div>
+                  {/* Note text with proper spacing for buttons */}
+                  {hasText && (
+                    <div className="pr-14 text-sm text-neutral-900 dark:text-neutral-100 whitespace-pre-wrap break-words">
+                      {n.text}
+                    </div>
+                  )}
+                  {!hasText && (
+                    <div className="pr-14 text-sm text-neutral-400 dark:text-neutral-500 italic">
+                      No text
+                    </div>
                   )}
                 </div>
-              )}
+              ) : null}
             </div>
           );
         })}
@@ -769,8 +803,11 @@ export const Page: React.FC<PageProps> = ({
                 style={{
                   top: mergedLines[0].top,
                   left: width + 16,
-                  width: "200px",
-                  maxWidth: "200px",
+                  minWidth: "200px",
+                  maxWidth: "300px",
+                  width: isEditing 
+                    ? `${Math.min(300, Math.max(200, editingCommentText.length * 6.5))}px`
+                    : `${Math.min(300, Math.max(200, c.text.length * 6.5))}px`,
                 }}
               >
                 {isEditing ? (
@@ -787,8 +824,9 @@ export const Page: React.FC<PageProps> = ({
                           setEditingCommentId(null);
                         }
                       }}
-                      className="w-full px-2 py-1 text-xs bg-white dark:bg-neutral-700 border border-neutral-300 dark:border-neutral-600 rounded text-neutral-900 dark:text-neutral-100 resize-y"
-                      rows={5}
+                      className="w-full px-2 py-1 text-xs bg-white dark:bg-neutral-700 border border-neutral-300 dark:border-neutral-600 rounded text-neutral-900 dark:text-neutral-100 resize-y min-h-[3rem]"
+                      rows={Math.max(2, Math.ceil(editingCommentText.length / 35))}
+                      placeholder="Enter comment text..."
                     />
                     <div className="flex gap-1">
                       <button
@@ -814,28 +852,34 @@ export const Page: React.FC<PageProps> = ({
                   </div>
                 ) : (
                   <>
-                    <div className="break-words mb-2">{c.text}</div>
-                    <div className="flex gap-1 border-t border-yellow-200 dark:border-yellow-800 pt-2">
+                    {/* Edit and Delete buttons in top right corner */}
+                    <div className="absolute top-1 right-1 flex gap-1">
                       <button
-                        onClick={() => {
+                        onClick={(e) => {
+                          e.stopPropagation();
                           setEditingCommentId(c.id);
                           setEditingCommentText(c.text);
                         }}
-                        className="flex-1 px-2 py-1 text-xs bg-blue-500 hover:bg-blue-600 text-white rounded"
+                        className="p-1 text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded"
                         title="Edit comment"
                       >
-                        Edit
+                        <PenLine size={16} />
                       </button>
                       {onCommentDelete && (
                         <button
-                          onClick={() => onCommentDelete(c.id)}
-                          className="flex-1 px-2 py-1 text-xs bg-red-500 hover:bg-red-600 text-white rounded"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onCommentDelete(c.id);
+                          }}
+                          className="p-1 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded"
                           title="Delete comment"
                         >
-                          Delete
+                          <Trash2 size={16} />
                         </button>
                       )}
                     </div>
+                    {/* Comment text with proper spacing for buttons */}
+                    <div className="pr-14 break-words text-xs">{c.text}</div>
                   </>
                 )}
               </div>

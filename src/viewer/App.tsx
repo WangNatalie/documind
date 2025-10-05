@@ -1004,6 +1004,7 @@ export const ViewerApp: React.FC = () => {
           setSelectedTerm(response.summary);
           setTermSourceRects(normalizedRects);
           setTermSourcePage(pageNum);
+          setTermReturnPage(null); // Reset return page when opening a new explanation
           const adjustedPos = calculatePopupPosition(first.left, first.top + first.height);
           setTermPopupPosition(adjustedPos);
         } else {
@@ -2240,6 +2241,7 @@ Key Points:
                   setSelectedTerm(term);
                   setTermSourceRects(rects);
                   setTermSourcePage(pageNum);
+                  setTermReturnPage(null); // Reset return page when opening a new term
                   const adjustedPos = calculatePopupPosition(x, y);
                   setTermPopupPosition(adjustedPos);
                 }}
