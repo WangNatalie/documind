@@ -5,7 +5,7 @@ import { getChunksByDoc, getChunkEmbeddingsByDoc } from '../db/index';
 import { generateEmbedding } from './embedder';
 
 // Configuration
-const GEMINI_MODEL = 'gemini-2.0-flash-exp';
+const GEMINI_MODEL = 'gemini-2.5-pro';
 const TOP_K_CHUNKS = 3;
 
 // Initialize Google GenAI client
@@ -106,7 +106,8 @@ async function findSimilarChunks(
  */
 export async function generateChatResponse(
   query: string,
-  docHash: string
+  docHash: string,
+  bookmarksContext?: string
 ): Promise<{ response: string; sources: Array<{ page: number; similarity: number }> }> {
   console.log(`[Chatbot] Generating response for query: "${query.substring(0, 50)}..."`);
 
@@ -114,30 +115,24 @@ export async function generateChatResponse(
     // Find relevant chunks
     const similarChunks = await findSimilarChunks(query, docHash);
     
-    if (similarChunks.length === 0) {
-      return {
-        response: "I couldn't find any relevant information in this document to answer your question. Please try rephrasing your question or ask about a different topic covered in the document.",
-        sources: []
-      };
-    }
-    
     // Build context from chunks
-    const context = similarChunks
-      .map((chunk, idx) => `[Context ${idx + 1} - Page ${chunk.page}]\n${chunk.content}`)
-      .join('\n\n---\n\n');
-    
-    // Create prompt with context
-    const prompt = `You are a helpful assistant that answers questions about a document. Use the provided context from the document to answer the user's question. If the context doesn't contain enough information to fully answer the question, say so clearly.
+    let chunkContext = '';
+    if (similarChunks.length > 0) {
+      chunkContext = similarChunks
+        .map((chunk, idx) => `[Context ${idx + 1} - Page ${chunk.page}]\n${chunk.content}`)
+        .join('\n\n---\n\n');
+    }
 
-Context from document:
-${context}
+    // Compose prompt with bookmarks context (if any) and chunk context
+    let prompt = `You are a helpful AI assistant. Use the provided context from the document to answer the user's question. If the context doesn't contain enough information to fully answer the question, use critical thinking to supplement the context and indicate that they are your own reasoning.\n\n`;
+    if (bookmarksContext && bookmarksContext.trim()) {
+      prompt += `\n${bookmarksContext}\n\n`;
+    }
+    if (chunkContext) {
+      prompt += `\n${chunkContext}\n\n`;
+    }
+    prompt += `User question: ${query}\n\nPlease provide a clear and concise answer based on the context above. If you reference specific information, mention which page it comes from.`;
 
-User question: ${query}
-
-Please provide a clear and concise answer based on the context above. If you reference specific information, mention which page it comes from.`;
-
-    console.log(`[Chatbot] Sending request to Gemini with ${similarChunks.length} context chunks...`);
-    
     // Generate response using Gemini
     const response = await ai.models.generateContent({
       model: GEMINI_MODEL,
@@ -152,8 +147,6 @@ Please provide a clear and concise answer based on the context above. If you ref
     if (!responseText) {
       throw new Error('No text in Gemini response');
     }
-
-    console.log(`[Chatbot] Generated response (${responseText.length} chars)`);
 
     return {
       response: responseText,

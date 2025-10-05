@@ -24,6 +24,8 @@ import {
   type TableOfContentsRecord,
   type DrawingStroke,
   type DrawingRecord,
+  type NoteRecord,
+  type CommentRecord,
 } from "../db";
 import { readOPFSFile } from "../db/opfs";
 import ContextMenu from "./ContextMenu";
@@ -32,8 +34,12 @@ import { Chatbot } from './Chatbot';
 import { buildTOCTree } from "../utils/toc";
 import { TOC } from "./TOC";
 import { DrawingToolbar } from "./DrawingToolbar";
+import { mergeAnnotationsIntoPdf } from "../export/annotationsToPdf";
+import DocumentProperties from './DocumentProperties.tsx';
+import SaveAsModal from './SaveAsModal';
 import { getAudio } from "../utils/narrator-client";
 import { Volume2 } from "lucide-react";
+import type { BookmarkItem } from "./TOC";
 
 const ZOOM_LEVELS = [
   50, 75, 90, 100, 125, 150, 175, 200, 250, 300, 350, 400, 500,
@@ -82,8 +88,9 @@ export const ViewerApp: React.FC = () => {
     x: 0,
     y: 0,
   });
-  const [notes, setNotes] = useState<Array<any>>([]);
-  const [comments, setComments] = useState<Array<any>>([]);
+  const [notes, setNotes] = useState<NoteRecord[]>([]);
+  const [comments, setComments] = useState<CommentRecord[]>([]);
+
   const [commentInput, setCommentInput] = useState<string>("");
   const [commentAnchor, setCommentAnchor] = useState<{
     x: number;
@@ -161,6 +168,44 @@ export const ViewerApp: React.FC = () => {
   const [fileName, setFileName] = useState<string>(
     params.get("name") || "document.pdf"
   );
+
+  const [contextBookmarks, setContextBookmarks] = useState<BookmarkItem[]>([]);
+  const [chatbotOpenTick, setChatbotOpenTick] = useState(0);
+
+  const handleAddContextBookmark = (bookmark: BookmarkItem) => {
+    setContextBookmarks((prev) => {
+      if (prev.find((b) => b.id === bookmark.id)) return prev;
+      return [...prev, bookmark];
+    });
+    setChatbotOpenTick((t) => t + 1);
+  };
+  const handleRemoveContextBookmark = (id: string) => {
+    setContextBookmarks((prev) => prev.filter((b) => b.id !== id));
+  };
+
+  const handleAddNoteContextFromPage = useCallback((note: { id: string; rects: { top: number; left: number; width: number; height: number }[]; color: string; text?: string }, page: number) => {
+    const b: BookmarkItem = {
+      id: note.id,
+      page,
+      text: note.text,
+      createdAt: Date.now(),
+      __type: "note",
+      original: { id: note.id, docHash, page, rects: note.rects, color: note.color, text: note.text, createdAt: Date.now() } as any,
+    };
+    handleAddContextBookmark(b);
+  }, [docHash]);
+
+  const handleAddCommentContextFromPage = useCallback((comment: { id: string; rects: { top: number; left: number; width: number; height: number }[]; text: string; page: number }) => {
+    const b: BookmarkItem = {
+      id: comment.id,
+      page: comment.page,
+      text: comment.text,
+      createdAt: Date.now(),
+      __type: "comment",
+      original: { id: comment.id, docHash, page: comment.page, rects: comment.rects, text: comment.text, createdAt: Date.now() } as any,
+    };
+    handleAddContextBookmark(b);
+  }, [docHash]);
 
   // Listen for state requests and term summaries from background
   useEffect(() => {
@@ -1878,6 +1923,268 @@ Key Points:
     }
   }, [fileUrl, uploadId, pdf, fileName]);
 
+  // Document properties modal state
+  const [docPropsOpen, setDocPropsOpen] = useState(false);
+  const [docProps, setDocProps] = useState<any>(null);
+  const [saveAsOpen, setSaveAsOpen] = useState(false);
+  const [saveAsBlob, setSaveAsBlob] = useState<Blob | null>(null);
+
+  const handleDocumentProperties = useCallback(async () => {
+    try {
+      // File size: prefer OPFS uploadId, then HEAD on fileUrl, then pdf.getData()
+      let fileSize: number | null = null;
+
+      if (uploadId) {
+        try {
+          const ab = await readOPFSFile(uploadId);
+          fileSize = (ab && ab.byteLength) || null;
+        } catch (e) {
+          console.warn('Failed to read OPFS file for size', e);
+        }
+      } else if (fileUrl) {
+        try {
+          // Try HEAD first to avoid fetching entire file
+          const head = await fetch(fileUrl, { method: 'HEAD' });
+          const cl = head.headers.get('content-length');
+          if (cl) fileSize = parseInt(cl, 10);
+          else {
+            const resp = await fetch(fileUrl);
+            if (resp.ok) {
+              const ab = await resp.arrayBuffer();
+              fileSize = ab.byteLength;
+            }
+          }
+        } catch (e) {
+          console.warn('HEAD/GET for fileUrl failed when computing size', e);
+        }
+      }
+
+      if (fileSize == null && pdf && typeof (pdf as any).getData === 'function') {
+        try {
+          const data = await (pdf as any).getData();
+          fileSize = data?.byteLength ?? data?.length ?? null;
+        } catch (e) {
+          console.warn('pdf.getData failed when computing size', e);
+        }
+      }
+
+      // PDF metadata
+      let meta: any = null;
+      try {
+        meta = await (pdf as any).getMetadata?.();
+      } catch (e) {
+        console.warn('getMetadata failed', e);
+      }
+
+      const info = meta?.info || {};
+      const metadata = meta?.metadata;
+
+      const title = info.Title || info.title || (metadata && typeof metadata.get === 'function' ? metadata.get('dc:title') : undefined);
+      const author = info.Author || info.author;
+      const subject = info.Subject || info.subject;
+      const keywords = info.Keywords || info.keywords;
+      const creationDate = info.CreationDate || info.Creation || info['CreationDate'];
+      const modDate = info.ModDate || info.ModificationDate || info['ModDate'];
+      const creator = info.Creator || info.creator;
+      const producer = info.Producer || info.producer;
+
+      // PDF version detection (best-effort)
+      const pdfInfo = (pdf as any)?.pdfInfo || (pdf as any)?._pdfInfo || {};
+      const pdfVersion = pdfInfo?.PDFFormatVersion || pdfInfo?.pdfFormatVersion || info.PDFFormatVersion || meta?.pdfFormatVersion || undefined;
+
+      // Page count & page sizes (use loaded pages state)
+      const pageCount = (pdf && (pdf as any).numPages) || pages.length;
+      const pageSizes = pages.map((p, idx) => {
+        if (!p) return null;
+        try {
+          // PDFPageProxy.view is usually [xMin, yMin, xMax, yMax]
+          const w = Math.round((p as any).view?.[2] ?? (p.getViewport({ scale: 1 }).width ?? 0));
+          const h = Math.round((p as any).view?.[3] ?? (p.getViewport({ scale: 1 }).height ?? 0));
+          return { page: idx + 1, width: w, height: h };
+        } catch (e) {
+          return { page: idx + 1, width: 0, height: 0 };
+        }
+      });
+
+      const fastWebView = Boolean((pdf as any)?.linearized || pdfInfo?.isLinearized || info?.Linearized);
+
+      const result = {
+        fileName,
+        fileSize,
+        title,
+        author,
+        subject,
+        keywords,
+        creationDate,
+        modDate,
+        creator,
+        producer,
+        pdfVersion,
+        pageCount,
+        pageSizes,
+        fastWebView,
+      };
+
+      setDocProps(result);
+      setDocPropsOpen(true);
+    } catch (err) {
+      console.error('Failed to gather document properties', err);
+      alert('Failed to read document properties');
+    }
+  }, [pdf, pages, fileUrl, uploadId, fileName]);
+
+  const handleDownloadWithAnnotations = useCallback(async () => {
+    try {
+      // Obtain original PDF bytes similar to handleDownload
+      let arrayBuffer: ArrayBuffer | null = null;
+
+      if (uploadId) {
+        arrayBuffer = await readOPFSFile(uploadId);
+      } else if (fileUrl) {
+        try {
+          const resp = await fetch(fileUrl, { mode: 'cors' });
+          if (resp.ok) arrayBuffer = await resp.arrayBuffer();
+        } catch (e) {
+          // ignore - fall back to pdf.getData below
+        }
+      } else if (pdf && typeof (pdf as any).getData === 'function') {
+        arrayBuffer = await (pdf as any).getData();
+      }
+
+      if (!arrayBuffer) {
+        console.warn('No source available for annotated download');
+        return;
+      }
+
+      // Collect annotations from DB/state
+      const ns = await getNotesByDoc(docHash).catch(() => notes);
+      const cs = await getCommentsByDoc(docHash).catch(() => comments);
+      const drawings = await getDrawingsByDoc(docHash).catch(async () => {
+        // fallback to pageDrawings map
+        const arr: any[] = [];
+        for (const [pageNum, strokes] of pageDrawings.entries()) {
+          arr.push({ pageNum, strokes });
+        }
+        return arr;
+      });
+
+      // Build page render sizes using DOM page elements
+      const pageRenderSizes: Record<number, { width: number; height: number }> = {};
+      for (let p = 1; p <= pages.length; p++) {
+        const el = document.querySelector(`[data-page-num="${p}"]`) as HTMLElement | null;
+        if (el) {
+          const r = el.getBoundingClientRect();
+          pageRenderSizes[p] = { width: r.width, height: r.height };
+        }
+      }
+
+      const modified = await mergeAnnotationsIntoPdf(arrayBuffer, {
+        notes: ns || [],
+        comments: cs || [],
+        drawings: drawings || [],
+        pageRenderSizes,
+      });
+
+  const blob = new Blob([modified as any], { type: 'application/pdf' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = (fileName || 'document.pdf').replace(/\.pdf$/i, '') + '-annotated.pdf';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+
+    } catch (err) {
+      console.error('Annotated download failed', err);
+    }
+  }, [uploadId, fileUrl, pdf, fileName, docHash, notes, comments, pageDrawings, pages]);
+
+  // Save as (open OS save dialog and write annotated PDF)
+  const handleSaveAs = useCallback(async () => {
+    try {
+      // Build annotated PDF bytes (similar to handleDownloadWithAnnotations)
+      let arrayBuffer: ArrayBuffer | null = null;
+
+      if (uploadId) {
+        arrayBuffer = await readOPFSFile(uploadId);
+      } else if (fileUrl) {
+        try {
+          const resp = await fetch(fileUrl, { mode: 'cors' });
+          if (resp.ok) arrayBuffer = await resp.arrayBuffer();
+        } catch (e) {
+          // ignore - fall back to pdf.getData below
+        }
+      } else if (pdf && typeof (pdf as any).getData === 'function') {
+        arrayBuffer = await (pdf as any).getData();
+      }
+
+      if (!arrayBuffer) {
+        console.warn('No source available for Save as');
+        return;
+      }
+
+      // Collect annotations from DB/state
+      const ns = await getNotesByDoc(docHash).catch(() => notes);
+      const cs = await getCommentsByDoc(docHash).catch(() => comments);
+      const drawings = await getDrawingsByDoc(docHash).catch(async () => {
+        const arr: any[] = [];
+        for (const [pageNum, strokes] of pageDrawings.entries()) {
+          arr.push({ pageNum, strokes });
+        }
+        return arr;
+      });
+
+      const pageRenderSizes: Record<number, { width: number; height: number }> = {};
+      for (let p = 1; p <= pages.length; p++) {
+        const el = document.querySelector(`[data-page-num="${p}"]`) as HTMLElement | null;
+        if (el) {
+          const r = el.getBoundingClientRect();
+          pageRenderSizes[p] = { width: r.width, height: r.height };
+        }
+      }
+
+      const modified = await mergeAnnotationsIntoPdf(arrayBuffer, {
+        notes: ns || [],
+        comments: cs || [],
+        drawings: drawings || [],
+        pageRenderSizes,
+      });
+
+      const blob = new Blob([modified as any], { type: 'application/pdf' });
+
+      // If the File System Access API is available, open native save dialog
+      const hasPicker = typeof (window as any).showSaveFilePicker === 'function';
+      if (hasPicker) {
+        try {
+          const suggested = ((fileName || 'document').replace(/\.pdf$/i, '') + '-annotated.pdf');
+          const handle = await (window as any).showSaveFilePicker({
+            suggestedName: suggested,
+            types: [
+              {
+                description: 'PDF Document',
+                accept: { 'application/pdf': ['.pdf'] },
+              },
+            ],
+          });
+          const writable = await handle.createWritable();
+          await writable.write(blob);
+          await writable.close();
+          return;
+        } catch (err) {
+          // If the user cancels or API fails, fall back to SaveAsModal
+          console.warn('showSaveFilePicker failed or cancelled', err);
+        }
+      }
+
+      // Fallback: open our Save As modal so the user can provide a filename
+      setSaveAsBlob(blob);
+      setSaveAsOpen(true);
+    } catch (err) {
+      console.error('Save as failed', err);
+    }
+  }, [uploadId, fileUrl, pdf, fileName, docHash, notes, comments, pageDrawings, pages]);
+
   const handlePrint = useCallback(async () => {
     try {
       let blob: Blob | null = null;
@@ -1948,21 +2255,32 @@ Key Points:
             window.open(url, "_blank")?.focus();
           } catch (err) {}
         } finally {
-          // cleanup after short delay to allow print dialog to start
-          setTimeout(cleanup, 2000);
+          // Attach afterprint listener so we cleanup when printing completes in supporting browsers
+          try {
+            const win = iframe.contentWindow as Window | null;
+            if (win && typeof (win as any).addEventListener === 'function') {
+              // Use afterprint event to cleanup when the print dialog finishes
+              win.addEventListener('afterprint', cleanup, { once: true });
+            }
+          } catch (e) {
+            // ignore
+          }
+
+          // Fallback: schedule cleanup after a generous delay in case afterprint isn't supported
+          setTimeout(cleanup, 60000); // 60s
         }
       };
 
       // Attach load handler
       iframe.addEventListener("load", onLoad, { once: true });
 
-      // Safety: if load never fires, attempt print after 1s and cleanup after 5s
+      // Safety: if load never fires, attempt print after 1s. Keep a long fallback cleanup so we don't
+      // revoke the blob/iframe too early and accidentally close the print dialog.
       setTimeout(() => {
         try {
           if (iframe.contentWindow) iframe.contentWindow.print();
         } catch (e) {}
       }, 1000);
-      setTimeout(cleanup, 5000);
     } catch (err) {
       console.error("Print failed", err);
     }
@@ -2108,6 +2426,19 @@ Key Points:
             else console.warn('Print handler not ready');
           } catch (err) {
             console.error('Error running in-app print', err);
+          }
+        })();
+        return;
+      }
+
+      // Intercept Ctrl/Cmd+S to save PDF (in-app Save As)
+      if (isMod && (e.key === 's' || e.key === 'S')) {
+        e.preventDefault();
+        (async () => {
+          try {
+            await handleSaveAs();
+          } catch (err) {
+            console.error('Save as shortcut failed', err);
           }
         })();
         return;
@@ -2343,7 +2674,7 @@ Key Points:
   }
 
   return (
-    <div className="h-screen flex flex-col bg-neutral-100 dark:bg-neutral-900">
+    <div className="h-screen flex flex-col bg-neutral-100 dark:bg-neutral-850">
       <Toolbar
         ref={toolbarRef}
         currentPage={currentPage}
@@ -2359,8 +2690,11 @@ Key Points:
         onFitWidth={() => changeZoom("fitWidth", { snapToTop: true })}
         onFitPage={() => changeZoom("fitPage", { snapToTop: true })}
         onPageChange={(page) => scrollToPage(page)}
-        onDownload={handleDownload}
+    onDownload={handleDownload}
+  onDownloadWithAnnotations={handleDownloadWithAnnotations}
         onPrint={handlePrint}
+    onDocumentProperties={handleDocumentProperties}
+    onSaveAs={handleSaveAs}
         highlightsVisible={highlightsVisible}
         onToggleHighlights={handleToggleHighlights}
         isDrawingMode={isDrawingMode}
@@ -2408,6 +2742,16 @@ Key Points:
           <TOC
             items={tableOfContents ? buildTOCTree(tableOfContents.items) : []}
             onSelect={handleTOCSelect}
+            notes={notes}
+            comments={comments}
+            onSelectBookmark={(item) => {
+              if (typeof item.page === 'number') {
+                scrollToPage(item.page);
+              } else if (item.page) {
+                scrollToPage(Number(item.page));
+              }
+            }}
+            onAddContext={handleAddContextBookmark}
           />
         </div>
       </div>
@@ -2422,7 +2766,7 @@ Key Points:
               const pageNum = idx + 1;
               const isVisible = visiblePages.has(pageNum);
               const hasCachedSummaries = termCache.has(pageNum);
-              
+
               // Render visible pages + 4 pages buffer above/below
               // Also render any page with cached summaries so highlights are ready
               const shouldRender =
@@ -2477,6 +2821,8 @@ Key Points:
                   setTermPopupPosition(adjustedPos);
                 }}
                 highlightsVisible={highlightsVisible}
+                onAddNoteContext={handleAddNoteContextFromPage}
+                onAddCommentContext={handleAddCommentContextFromPage}
               />
               );
             });
@@ -2588,7 +2934,7 @@ Key Points:
               }
             }}
             placeholder="Type comment and press Ctrl+Enter"
-            className="px-2 py-1 rounded border bg-white dark:bg-neutral-800 text-neutral-900 dark:text-neutral-100 resize-y"
+            className="text-xs px-2 py-1 rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-900 dark:text-neutral-100 resize-y focus:outline-none focus:ring-0"
             rows={3}
           />
         </div>
@@ -2600,10 +2946,13 @@ Key Points:
         onSelect={(a) => handleContextAction(a)}
       />
 
-      <Chatbot 
-        docHash={docHash} 
+      <Chatbot
+        docHash={docHash}
         currentPage={currentPage}
         onPageNavigate={scrollToPage}
+        contextBookmarks={contextBookmarks}
+        onRemoveContextBookmark={handleRemoveContextBookmark}
+        openSignal={chatbotOpenTick}
       />
 
       {/* Term summary popup */}
@@ -2752,7 +3101,7 @@ Key Points:
                     scrollToPage(selectedTerm.tocItem.page);
                   }
                 }}
-                className="px-3 py-1.5 text-sm bg-primary-500 hover:bg-primary-600 text-white rounded"
+                className="font-semibold px-3 py-1.5 text-sm bg-primary-600 hover:bg-primary-600 text-white rounded"
               >
                 {termReturnPage !== null ? '← Return' : 'Go to Context'}
               </button>
@@ -2772,6 +3121,34 @@ Key Points:
           {highlightsVisible ? 'Smart reader mode on' : 'Smart reader mode off'}
         </div>
       )}
+  {/* Document properties modal */}
+  <DocumentProperties open={docPropsOpen} onClose={() => setDocPropsOpen(false)} propsData={docProps} />
+  {/* Save As fallback modal */}
+  <SaveAsModal
+    open={saveAsOpen}
+    initialName={(fileName || 'document').replace(/\.pdf$/i, '') + '-annotated.pdf'}
+    blob={saveAsBlob}
+    onClose={() => {
+      setSaveAsOpen(false);
+      setSaveAsBlob(null);
+    }}
+    onSave={async (name: string) => {
+      try {
+        if (!saveAsBlob) return;
+        const url = URL.createObjectURL(saveAsBlob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = name;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+      } finally {
+        setSaveAsOpen(false);
+        setSaveAsBlob(null);
+      }
+    }}
+  />
     </div>
   );
 };

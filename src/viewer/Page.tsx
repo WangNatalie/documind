@@ -3,6 +3,7 @@ import type { PDFPageProxy } from "pdfjs-dist";
 import { DrawingCanvas } from "./DrawingCanvas";
 import type { DrawingStroke } from "../db";
 import { PenLine, Trash2 } from "lucide-react";
+import { BrainCircuit } from "lucide-react";
 
 interface TermSummary {
   term: string;
@@ -42,6 +43,8 @@ interface PageProps {
   onNoteEdit?: (id: string, newText: string) => void;
   onCommentDelete?: (id: string) => void;
   onCommentEdit?: (id: string, newText: string) => void;
+  onAddNoteContext?: (note: { id: string; rects: { top: number; left: number; width: number; height: number }[]; color: string; text?: string }, page: number) => void;
+  onAddCommentContext?: (comment: { id: string; rects: { top: number; left: number; width: number; height: number }[]; text: string; page: number }) => void;
   // Drawing props
   isDrawingMode?: boolean;
   drawingColor?: string;
@@ -69,6 +72,8 @@ export const Page: React.FC<PageProps> = ({
   onNoteEdit,
   onCommentDelete,
   onCommentEdit,
+  onAddNoteContext,
+  onAddCommentContext,
   isDrawingMode = false,
   drawingColor = '#000000',
   drawingStrokeWidth = 2,
@@ -371,6 +376,11 @@ export const Page: React.FC<PageProps> = ({
       setTermHighlights([]);
       return;
     }
+    
+    // If page isn't rendered yet, we can't process highlights
+    if (!shouldRender) {
+      return;
+    }
 
     const textLayer = textLayerRef.current;
     const highlights: Array<{
@@ -481,6 +491,78 @@ export const Page: React.FC<PageProps> = ({
 
     checkTextLayer();
   }, [shouldRender, isLoading, termSummaries, pageNum, page, scale, renderedScale]);
+
+  // Check individual highlight visibility every 0.5 second
+  useEffect(() => {
+    if (!textLayerRef.current || termHighlights.length === 0) {
+      setVisibleHighlights([]);
+      return;
+    }
+
+    const checkHighlightVisibility = () => {
+      const textLayer = textLayerRef.current;
+      if (!textLayer) {
+        setVisibleHighlights([]);
+        return;
+      }
+
+      const textLayerRect = textLayer.getBoundingClientRect();
+      
+      // Get viewport bounds
+      const viewportTop = 0;
+      const viewportBottom = window.innerHeight;
+      const viewportLeft = 0;
+      const viewportRight = window.innerWidth;
+
+      const visible = termHighlights.filter(highlight => {
+        // Calculate absolute position of highlight
+        const highlightTop = textLayerRect.top + highlight.rect.top;
+        const highlightBottom = highlightTop + highlight.rect.height;
+        const highlightLeft = textLayerRect.left + highlight.rect.left;
+        const highlightRight = highlightLeft + highlight.rect.width;
+
+        // Check if highlight is in viewport
+        const inViewport = 
+          highlightBottom > viewportTop &&
+          highlightTop < viewportBottom &&
+          highlightRight > viewportLeft &&
+          highlightLeft < viewportRight;
+
+        return inViewport;
+      });
+
+      // Only update if changed to avoid unnecessary re-renders
+      setVisibleHighlights(prev => {
+        if (prev.length !== visible.length) return visible;
+        const changed = prev.some((p, i) => p.term.term !== visible[i]?.term.term);
+        return changed ? visible : prev;
+      });
+    };
+
+    // Check immediately
+    checkHighlightVisibility();
+
+    // Check every 0.5 seconds
+    const intervalId = setInterval(checkHighlightVisibility, 500);
+
+    return () => clearInterval(intervalId);
+  }, [termHighlights]);
+
+  // Handle clicking outside of notes to close them
+  useEffect(() => {
+    if (!visibleNoteId) return;
+
+    const handleClickOutside = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      // Check if click is outside note popup
+      if (!target.closest('.note-popup') && !target.closest('[data-note-highlight]')) {
+        setVisibleNoteId(null);
+      }
+    };
+
+    document.addEventListener('click', handleClickOutside);
+    return () => document.removeEventListener('click', handleClickOutside);
+  }, [visibleNoteId]);
 
   // Check individual highlight visibility every 0.5 second
   useEffect(() => {
@@ -728,6 +810,16 @@ export const Page: React.FC<PageProps> = ({
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
+                        onAddNoteContext?.({ id: n.id, rects: n.rects, color: n.color, text: n.text }, pageNum);
+                      }}
+                      className="p-1 text-purple-600 hover:bg-purple-50 dark:hover:bg-purple-900/20 rounded"
+                      title="Add note to chat context"
+                    >
+                      <BrainCircuit size={16} />
+                    </button>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
                         setEditingNoteId(n.id);
                         setEditingNoteText(n.text || "");
                       }}
@@ -869,6 +961,16 @@ export const Page: React.FC<PageProps> = ({
                   <>
                     {/* Edit and Delete buttons in top right corner */}
                     <div className="absolute top-1 right-1 flex gap-1">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onAddCommentContext?.({ id: c.id, rects: c.rects, text: c.text, page: c.page });
+                        }}
+                        className="p-1 text-purple-600 hover:bg-purple-50 dark:hover:bg-purple-900/20 rounded"
+                        title="Add comment to chat context"
+                      >
+                        <BrainCircuit size={16} />
+                      </button>
                       <button
                         onClick={(e) => {
                           e.stopPropagation();

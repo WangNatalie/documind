@@ -6,7 +6,7 @@ export default {
     "./popup.html",
     "./src/**/*.{js,ts,jsx,tsx}",
   ],
-  darkMode: 'class',
+  darkMode: 'media',
   theme: {
     extend: {
       colors: {
@@ -24,6 +24,8 @@ export default {
         },
         neutral: {
           25: '#FCFCFD',
+          825: '#27272A',
+          850: '#18181B',
         }
       },
     },
