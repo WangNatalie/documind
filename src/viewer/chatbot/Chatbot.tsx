@@ -1,6 +1,7 @@
 import React, { useRef, useState, useEffect } from 'react';
 import { marked } from 'marked';
 import { sendChatQuery } from '../../utils/chatbot-client';
+import { ArrowLeft } from 'lucide-react';
 
 const BOT_BUTTON_SIZE = 56;
 const CHATBOX_MIN_WIDTH = 320;
@@ -10,9 +11,11 @@ const CHATBOX_MAX_HEIGHT = 700;
 
 interface ChatbotProps {
   docHash: string;
+  currentPage?: number;
+  onPageNavigate?: (page: number) => void;
 }
 
-export const Chatbot: React.FC<ChatbotProps> = ({ docHash }) => {
+export const Chatbot: React.FC<ChatbotProps> = ({ docHash, currentPage, onPageNavigate }) => {
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState<{ text: string; sender: 'user' | 'bot'; sources?: Array<{ page: number }> }[]>([]);
   const [input, setInput] = useState('');
@@ -22,6 +25,7 @@ export const Chatbot: React.FC<ChatbotProps> = ({ docHash }) => {
     height: 500,
   });
   const [resizing, setResizing] = useState(false);
+  const [chatbotReturnPage, setChatbotReturnPage] = useState<number | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const resizeRef = useRef<HTMLDivElement>(null);
   const startPos = useRef<{ x: number; y: number; width: number; height: number } | null>(null);
@@ -171,22 +175,44 @@ export const Chatbot: React.FC<ChatbotProps> = ({ docHash }) => {
 
       {/* Animated Chatbox */}
       {showBox && (
-        <div
-          className={`fixed z-50 bottom-6 right-6 bg-white dark:bg-neutral-900 rounded-xl shadow-2xl flex flex-col border border-neutral-200 dark:border-neutral-700
-            ${open ? 'chatbot-animate-in' : 'chatbot-animate-out'}`}
-          style={{
-            width: dimensions.width,
-            height: dimensions.height,
-            minWidth: CHATBOX_MIN_WIDTH,
-            minHeight: CHATBOX_MIN_HEIGHT,
-            maxWidth: CHATBOX_MAX_WIDTH,
-            maxHeight: CHATBOX_MAX_HEIGHT,
-            transition: 'box-shadow 0.2s',
-            boxShadow: '0 8px 32px rgba(0,0,0,0.22)',
-            resize: 'none',
-            overflow: 'hidden',
-          }}
-        >
+        <>
+          {/* Return button - positioned outside chatbot at top left */}
+          {chatbotReturnPage !== null && open && (
+            <button
+              onClick={() => {
+                if (onPageNavigate && chatbotReturnPage !== null) {
+                  onPageNavigate(chatbotReturnPage);
+                  setChatbotReturnPage(null);
+                }
+              }}
+              className="fixed z-50 bg-blue-600 hover:bg-blue-700 text-white px-3 py-2 rounded-lg shadow-lg flex items-center gap-2 text-sm font-medium transition"
+              style={{
+                bottom: `${dimensions.height-12}px`, // Beside chatbot
+                right: `${dimensions.width + 16}px`, // Align with left edge of chatbot
+              }}
+              title="Return to previous page"
+            >
+              <ArrowLeft size={16} />
+              Return to last page
+            </button>
+          )}
+          
+          <div
+            className={`fixed z-50 bottom-6 right-6 bg-white dark:bg-neutral-900 rounded-xl shadow-2xl flex flex-col border border-neutral-200 dark:border-neutral-700
+              ${open ? 'chatbot-animate-in' : 'chatbot-animate-out'}`}
+            style={{
+              width: dimensions.width,
+              height: dimensions.height,
+              minWidth: CHATBOX_MIN_WIDTH,
+              minHeight: CHATBOX_MIN_HEIGHT,
+              maxWidth: CHATBOX_MAX_WIDTH,
+              maxHeight: CHATBOX_MAX_HEIGHT,
+              transition: 'box-shadow 0.2s',
+              boxShadow: '0 8px 32px rgba(0,0,0,0.22)',
+              resize: 'none',
+              overflow: 'hidden',
+            }}
+          >
           {/* Header */}
           <div className="flex items-center justify-between px-4 py-3 border-b border-neutral-200 dark:border-neutral-700 bg-blue-600 rounded-t-xl">
             <div className="flex items-center gap-2">
@@ -242,7 +268,18 @@ export const Chatbot: React.FC<ChatbotProps> = ({ docHash }) => {
                     Sources: {msg.sources.map((s, i) => (
                       <span key={i}>
                         {i > 0 && ', '}
-                        Page {s.page}
+                        <button
+                          onClick={() => {
+                            if (onPageNavigate && currentPage) {
+                              setChatbotReturnPage(currentPage);
+                              onPageNavigate(s.page);
+                            }
+                          }}
+                          className="text-blue-600 dark:text-blue-400 hover:underline cursor-pointer"
+                          title={`Go to page ${s.page}`}
+                        >
+                          Page {s.page}
+                        </button>
                       </span>
                     ))}
                   </div>
@@ -314,6 +351,7 @@ export const Chatbot: React.FC<ChatbotProps> = ({ docHash }) => {
             </svg>
           </div>
         </div>
+        </>
       )}
     </>
   );

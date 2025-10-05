@@ -119,7 +119,6 @@ export const ViewerApp: React.FC = () => {
     tocItem: { title: string; page: number; chunkId?: string } | null;
     matchedChunkId?: string;
   }
-  
   // Cache term summaries for current, prev, and next pages
   interface PageTermCache {
     page: number;
@@ -131,6 +130,7 @@ export const ViewerApp: React.FC = () => {
   const [termSourceRects, setTermSourceRects] = useState<Array<{ top: number; left: number; width: number; height: number }>>([]);
   const [termSourcePage, setTermSourcePage] = useState<number>(1);
   const [termReturnPage, setTermReturnPage] = useState<number | null>(null); // Track page to return to after "Go to Context"
+  const [savedTerms, setSavedTerms] = useState<Set<string>>(new Set()); // Track terms that have been saved as notes
   
   // Track last visible page for recaching logic
   const lastVisiblePageRef = useRef<number>(1);
@@ -226,8 +226,10 @@ export const ViewerApp: React.FC = () => {
   // Helper to get summaries for a specific page from cache
   const getSummariesForPage = useCallback((pageNum: number): TermSummary[] => {
     const cached = termCache.get(pageNum);
-    return cached?.summaries || [];
-  }, [termCache]);
+    const summaries = cached?.summaries || [];
+    // Filter out terms that have been saved as notes
+    return summaries.filter(summary => !savedTerms.has(summary.term));
+  }, [termCache, savedTerms]);
 
   // Cache management: maintain current ±10 pages in cache (21 pages total)
   // When current page changes, wait 15 seconds before recaching if it becomes completely invisible
@@ -641,6 +643,15 @@ export const ViewerApp: React.FC = () => {
           try {
             const ns = await getNotesByDoc(hash);
             setNotes(ns || []);
+            
+            // Extract saved term names from notes using full metadata to hide their highlights
+            const termNames = new Set<string>();
+            (ns || []).forEach(note => {
+              if (note.termSummary) {
+                termNames.add(note.termSummary.term);
+              }
+            });
+            setSavedTerms(termNames);
           } catch (err) {
             console.error("Failed to load notes (non-fatal)", err);
             try {
@@ -650,6 +661,7 @@ export const ViewerApp: React.FC = () => {
               console.warn('resetDB failed while loading notes:', resetErr);
             }
             setNotes([]);
+            setSavedTerms(new Set());
           }
         })();
         // Load comments for this document (non-fatal)
@@ -1493,10 +1505,14 @@ Key Points:
         color: 'yellow', // Default color
         text: noteText,
         createdAt: Date.now(),
+        termSummary: termSummary, // Store full term summary metadata for restoration
       };
 
       await putNote(newNote);
       setNotes((prev) => [...prev, newNote]);
+
+      // Add term to saved terms set to hide its highlight
+      setSavedTerms((prev) => new Set(prev).add(termSummary.term));
 
       console.log('[App] Saved term summary as note on page', notePage, ':', termSummary.term, 'with rects:', noteRects);
 
@@ -1567,12 +1583,24 @@ Key Points:
     // Note handlers
     const handleNoteDelete = useCallback(async (id: string) => {
       try {
+        // Find the note before deleting to check if it's a saved term note
+        const noteToDelete = notes.find((n) => n.id === id);
+        
         await deleteNote(id);
         setNotes((prev) => prev.filter((n) => n.id !== id));
+        
+        // If this was a saved term note, restore its highlight using full metadata
+        if (noteToDelete?.termSummary) {
+          setSavedTerms((prev) => {
+            const newSet = new Set(prev);
+            newSet.delete(noteToDelete.termSummary!.term);
+            return newSet;
+          });
+        }
       } catch (err) {
         console.error("Failed to delete note", err);
       }
-    }, []);
+    }, [notes]);
 
     const handleNoteEdit = useCallback(async (id: string, newText: string) => {
       try {
@@ -2369,7 +2397,11 @@ Key Points:
         onSelect={(a) => handleContextAction(a)}
       />
 
-      <Chatbot docHash={docHash} />
+      <Chatbot 
+        docHash={docHash} 
+        currentPage={currentPage}
+        onPageNavigate={scrollToPage}
+      />
 
       {/* Term summary popup */}
       {selectedTerm && termPopupPosition && (
