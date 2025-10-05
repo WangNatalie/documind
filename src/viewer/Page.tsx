@@ -448,7 +448,7 @@ export const Page: React.FC<PageProps> = ({
     checkTextLayer();
   }, [textLayerRef.current, shouldRender, isLoading, termSummaries, pageNum, page, scale]);
 
-  // Check individual highlight visibility every 1 second
+  // Check individual highlight visibility every 0.5 second
   useEffect(() => {
     if (!textLayerRef.current || termHighlights.length === 0) {
       setVisibleHighlights([]);
@@ -499,7 +499,7 @@ export const Page: React.FC<PageProps> = ({
     checkHighlightVisibility();
 
     // Check every 0.5 seconds
-    const intervalId = setInterval(checkHighlightVisibility, 1000);
+    const intervalId = setInterval(checkHighlightVisibility, 500);
 
     return () => clearInterval(intervalId);
   }, [termHighlights]);
