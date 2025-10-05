@@ -36,6 +36,7 @@ import { TOC } from "./TOC";
 import { DrawingToolbar } from "./DrawingToolbar";
 import { mergeAnnotationsIntoPdf } from "../export/annotationsToPdf";
 import DocumentProperties from './DocumentProperties.tsx';
+import SaveAsModal from './SaveAsModal';
 import { getAudio } from "../utils/narrator-client";
 
 const ZOOM_LEVELS = [
@@ -1883,6 +1884,8 @@ Key Points:
   // Document properties modal state
   const [docPropsOpen, setDocPropsOpen] = useState(false);
   const [docProps, setDocProps] = useState<any>(null);
+  const [saveAsOpen, setSaveAsOpen] = useState(false);
+  const [saveAsBlob, setSaveAsBlob] = useState<Blob | null>(null);
 
   const handleDocumentProperties = useCallback(async () => {
     try {
@@ -2052,6 +2055,91 @@ Key Points:
 
     } catch (err) {
       console.error('Annotated download failed', err);
+    }
+  }, [uploadId, fileUrl, pdf, fileName, docHash, notes, comments, pageDrawings, pages]);
+
+  // Save as (open OS save dialog and write annotated PDF)
+  const handleSaveAs = useCallback(async () => {
+    try {
+      // Build annotated PDF bytes (similar to handleDownloadWithAnnotations)
+      let arrayBuffer: ArrayBuffer | null = null;
+
+      if (uploadId) {
+        arrayBuffer = await readOPFSFile(uploadId);
+      } else if (fileUrl) {
+        try {
+          const resp = await fetch(fileUrl, { mode: 'cors' });
+          if (resp.ok) arrayBuffer = await resp.arrayBuffer();
+        } catch (e) {
+          // ignore - fall back to pdf.getData below
+        }
+      } else if (pdf && typeof (pdf as any).getData === 'function') {
+        arrayBuffer = await (pdf as any).getData();
+      }
+
+      if (!arrayBuffer) {
+        console.warn('No source available for Save as');
+        return;
+      }
+
+      // Collect annotations from DB/state
+      const ns = await getNotesByDoc(docHash).catch(() => notes);
+      const cs = await getCommentsByDoc(docHash).catch(() => comments);
+      const drawings = await getDrawingsByDoc(docHash).catch(async () => {
+        const arr: any[] = [];
+        for (const [pageNum, strokes] of pageDrawings.entries()) {
+          arr.push({ pageNum, strokes });
+        }
+        return arr;
+      });
+
+      const pageRenderSizes: Record<number, { width: number; height: number }> = {};
+      for (let p = 1; p <= pages.length; p++) {
+        const el = document.querySelector(`[data-page-num="${p}"]`) as HTMLElement | null;
+        if (el) {
+          const r = el.getBoundingClientRect();
+          pageRenderSizes[p] = { width: r.width, height: r.height };
+        }
+      }
+
+      const modified = await mergeAnnotationsIntoPdf(arrayBuffer, {
+        notes: ns || [],
+        comments: cs || [],
+        drawings: drawings || [],
+        pageRenderSizes,
+      });
+
+      const blob = new Blob([modified as any], { type: 'application/pdf' });
+
+      // If the File System Access API is available, open native save dialog
+      const hasPicker = typeof (window as any).showSaveFilePicker === 'function';
+      if (hasPicker) {
+        try {
+          const suggested = ((fileName || 'document').replace(/\.pdf$/i, '') + '-annotated.pdf');
+          const handle = await (window as any).showSaveFilePicker({
+            suggestedName: suggested,
+            types: [
+              {
+                description: 'PDF Document',
+                accept: { 'application/pdf': ['.pdf'] },
+              },
+            ],
+          });
+          const writable = await handle.createWritable();
+          await writable.write(blob);
+          await writable.close();
+          return;
+        } catch (err) {
+          // If the user cancels or API fails, fall back to SaveAsModal
+          console.warn('showSaveFilePicker failed or cancelled', err);
+        }
+      }
+
+      // Fallback: open our Save As modal so the user can provide a filename
+      setSaveAsBlob(blob);
+      setSaveAsOpen(true);
+    } catch (err) {
+      console.error('Save as failed', err);
     }
   }, [uploadId, fileUrl, pdf, fileName, docHash, notes, comments, pageDrawings, pages]);
 
@@ -2296,6 +2384,19 @@ Key Points:
             else console.warn('Print handler not ready');
           } catch (err) {
             console.error('Error running in-app print', err);
+          }
+        })();
+        return;
+      }
+
+      // Intercept Ctrl/Cmd+S to save PDF (in-app Save As)
+      if (isMod && (e.key === 's' || e.key === 'S')) {
+        e.preventDefault();
+        (async () => {
+          try {
+            await handleSaveAs();
+          } catch (err) {
+            console.error('Save as shortcut failed', err);
           }
         })();
         return;
@@ -2551,6 +2652,7 @@ Key Points:
   onDownloadWithAnnotations={handleDownloadWithAnnotations}
         onPrint={handlePrint}
     onDocumentProperties={handleDocumentProperties}
+    onSaveAs={handleSaveAs}
         highlightsVisible={highlightsVisible}
         onToggleHighlights={handleToggleHighlights}
         isDrawingMode={isDrawingMode}
@@ -2914,6 +3016,32 @@ Key Points:
       )}
   {/* Document properties modal */}
   <DocumentProperties open={docPropsOpen} onClose={() => setDocPropsOpen(false)} propsData={docProps} />
+  {/* Save As fallback modal */}
+  <SaveAsModal
+    open={saveAsOpen}
+    initialName={(fileName || 'document').replace(/\.pdf$/i, '') + '-annotated.pdf'}
+    blob={saveAsBlob}
+    onClose={() => {
+      setSaveAsOpen(false);
+      setSaveAsBlob(null);
+    }}
+    onSave={async (name: string) => {
+      try {
+        if (!saveAsBlob) return;
+        const url = URL.createObjectURL(saveAsBlob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = name;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+      } finally {
+        setSaveAsOpen(false);
+        setSaveAsBlob(null);
+      }
+    }}
+  />
     </div>
   );
 };
