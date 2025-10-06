@@ -3169,7 +3169,7 @@ Key Points:
         onPageNavigate={scrollToPage}
         contextBookmarks={contextBookmarks}
         onRemoveContextBookmark={handleRemoveContextBookmark}
-        openSignal={chatbotOpenTick}
+        openSignal={chatbotOpenTick > 0 ? chatbotOpenTick : undefined}
       />
 
       {/* Term summary popup */}

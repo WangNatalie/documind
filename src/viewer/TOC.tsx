@@ -178,9 +178,16 @@ export const TOC: React.FC<TOCProps> = ({
       `}</style>
 
       <div className="flex items-center justify-between mb-2">
-        <div className="text-sm font-semibold text-neutral-700 dark:text-neutral-200">
-          {items.length ? "Table of contents" : "Loading table of contents..."}
-        </div>
+        {mode === "toc" && (
+          <div className="text-sm font-semibold text-neutral-700 dark:text-neutral-200">
+            {items.length ? "Table of contents" : "Loading table of contents..."}
+          </div>
+        )}
+        {mode === "bookmarks" && (
+          <div className="text-sm font-semibold text-neutral-700 dark:text-neutral-200">
+            {"Bookmarks"}
+          </div>
+        )}
         <div className="flex items-center gap-2">
           <button
             onClick={() => setMode("toc")}

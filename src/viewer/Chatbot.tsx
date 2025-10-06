@@ -219,9 +219,9 @@ export const Chatbot: React.FC<ChatbotProps> = ({ docHash, currentPage, onPageNa
     }
   }, [open]);
 
-  // Open chatbot when external openSignal changes
+  // Open chatbot when external openSignal changes (ignore undefined/zero on initial render)
   useEffect(() => {
-    if (typeof openSignal === 'number') {
+    if (typeof openSignal === 'number' && openSignal > 0) {
       setOpen(true);
     }
   }, [openSignal]);

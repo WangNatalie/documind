@@ -921,7 +921,7 @@ export const Page: React.FC<PageProps> = ({
                 }}
               >
                 {isEditing ? (
-                  <div className="flex flex-col gap-2">
+                  <div className="flex flex-col gap-2 pr-16">
                     <textarea
                       autoFocus
                       value={editingCommentText}
@@ -998,8 +998,8 @@ export const Page: React.FC<PageProps> = ({
                         </button>
                       )}
                     </div>
-                    {/* Comment text with proper spacing for buttons */}
-                    <div className="pr-14 break-words text-xs">{c.text}</div>
+                    {/* Comment text with extra right padding to avoid intersecting top-right buttons */}
+                    <div className="pr-20 break-words text-xs">{c.text}</div>
                   </>
                 )}
               </div>
