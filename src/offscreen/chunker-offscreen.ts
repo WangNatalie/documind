@@ -44,6 +44,19 @@ export async function processChunkingTaskInOffscreen(taskData: ChunkingTaskData)
   console.log('Chunking task data:', taskData);
 
   try {
+    const { getAISettings } = await import('./ai-settings.js');
+    const settings = await getAISettings();
+    if (!settings.chunkrEnabled) {
+      const msg = 'Chunkr processing disabled by settings';
+      console.error(msg);
+      await safeDBOperation(
+        () => updateChunkTask(taskId, { status: 'failed', error: msg }),
+        'updateChunkTask-missing-api-key'
+      );
+      throw new Error(msg);
+    }
+  } catch (e) {}
+  try {
     // Fail fast if API key is not configured to avoid opaque "Failed to fetch" errors
     if (!CHUNKR_API_KEY) {
       const msg = 'Chunkr AI API key not configured. Set CHUNKR_API_KEY in the offscreen chunker.';
@@ -325,6 +338,18 @@ export async function processChunkingTaskInOffscreenWithGemini(taskData: Chunkin
   console.log('[Gemini Chunking] Task data:', taskData);
 
   try {
+    const { getAISettings } = await import('./ai-settings.js');
+    const settings = await getAISettings();
+    if (!settings.gemini?.chunkingEnabled) {
+      const msg = 'Gemini processing disabled by settings.';
+      console.error(msg);
+      await safeDBOperation(
+        () => updateChunkTask(taskId, { status: 'failed', error: msg }),
+        'updateChunkTask-missing-api-key'
+      );
+      throw new Error(msg);
+    }
+
     // Fail fast if API key is not configured
     const { getGeminiApiKey } = await import('./gemini-config.js');
     const geminiKey = getGeminiApiKey();

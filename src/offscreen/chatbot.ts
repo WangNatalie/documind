@@ -112,6 +112,17 @@ export async function generateChatResponse(
   console.log(`[Chatbot] Generating response for query: "${query.substring(0, 50)}..."`);
 
   try {
+    const { getAISettings } = await import('./ai-settings.js');
+    const settings = await getAISettings();
+    if (!settings.gemini?.chatEnabled) {
+      console.log('[Chatbot] Gemini/chat disabled by settings');
+      return { response: 'AI chat disabled in settings', sources: [] };
+    }
+  } catch (e) {
+    // ignore settings errors and proceed
+  }
+
+  try {
     // Find relevant chunks
     const similarChunks = await findSimilarChunks(query, docHash);
     

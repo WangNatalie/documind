@@ -30,6 +30,13 @@ interface GeminiEmbeddingResponse {
 export async function generateMissingEmbeddings(docHash: string): Promise<number> {
   console.log(`[Embedder] Checking for missing embeddings for document ${docHash}`);
 
+  const { getAISettings } = await import('./ai-settings');
+  const settings = await getAISettings();
+  if (!settings.gemini?.embeddingsEnabled) {
+    console.log('[Embedder] Gemini embeddings disabled by settings');
+    return 0;
+  }
+
   // Get chunks that need embeddings
   const missingChunkIds = await getMissingEmbeddings(docHash);
 

@@ -1,14 +1,16 @@
 // Browser-friendly narrator client using ElevenLabs SDK `convert` and returning an ArrayBuffer.
 // We DO NOT call the SDK's `play()` helper because it relies on Node-only APIs.
 
-import { ELEVEN_LABS_API_KEY } from "../offscreen/api_key";
 import { ElevenLabsClient } from '@elevenlabs/elevenlabs-js';
 
 const MODEL_ID = "eleven_flash_v2_5";
 const VOICE_ID = "21m00Tcm4TlvDq8ikWAM";
 
 let client: ElevenLabsClient | null = null;
-function getClient(): ElevenLabsClient {
+async function getClient(): Promise<ElevenLabsClient> {
+  // Dynamic import to avoid compile-time coupling with the private api_key file
+  const keys = await import('../offscreen/api_key');
+  const ELEVEN_LABS_API_KEY = (keys as any)?.ELEVEN_LABS_API_KEY;
   if (!ELEVEN_LABS_API_KEY) throw new Error("Missing ElevenLabs API key");
   if (!client) client = new ElevenLabsClient({ apiKey: ELEVEN_LABS_API_KEY });
   return client;
@@ -52,7 +54,17 @@ async function toArrayBuffer(audio: unknown): Promise<ArrayBuffer> {
 }
 
 export const getAudio = async (text: string): Promise<ArrayBuffer> => {
-  const sdk = getClient();
+  try {
+    const { getAISettings } = await import('../offscreen/ai-settings.js');
+    const settings = await getAISettings();
+    if (!settings.elevenLabsEnabled) {
+      console.log('[narrator-client] ElevenLabs TTS disabled by settings');
+      throw new Error('ElevenLabs disabled by settings');
+    }
+  } catch (e) {
+    // If storage isn't available, continue and let key checks handle errors
+  }
+  const sdk = await getClient();
   const result = await sdk.textToSpeech.convert(VOICE_ID, {
     text,
     modelId: MODEL_ID,

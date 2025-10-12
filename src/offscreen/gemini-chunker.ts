@@ -588,6 +588,15 @@ export async function processWithGeminiChunking(
   console.log('[Gemini Chunker] Multimodal parsing enabled:', USE_MULTIMODAL_PDF_PARSING);
 
   try {
+    const { getAISettings } = await import('./ai-settings.js');
+    const settings = await getAISettings();
+    if (!settings.gemini?.chunkingEnabled) {
+      console.log('[Gemini Chunker] Gemini chunking disabled by settings');
+      throw new Error('Gemini chunking disabled by settings');
+    }
+  } catch (e) {}
+
+  try {
     if (!ai) {
       const msg = 'Gemini API key not configured; cannot run Gemini chunking.';
       console.error('[Gemini Chunker] ' + msg);

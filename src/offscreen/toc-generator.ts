@@ -265,6 +265,15 @@ async function generateAITableOfContents(
     return [];
   }
 
+  try {
+    const { getAISettings } = await import('./ai-settings.js');
+    const settings = await getAISettings();
+    if (!settings.gemini?.tocEnabled) {
+      console.log('[TOC] Gemini TOC generation disabled by settings');
+      return [];
+    }
+  } catch (e) {}
+
   // Get first N chunks
   const firstChunks = chunks.slice(0, MAX_FIRST_CHUNKS);
 

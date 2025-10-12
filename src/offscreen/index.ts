@@ -2,6 +2,7 @@
 // This runs in a DOM context where IndexedDB is available
 
 import { processChunkingTaskInOffscreen } from "./chunker-offscreen";
+import { getAISettings } from './ai-settings';
 
 console.log("DocuMind offscreen document loaded at", new Date().toISOString());
 
@@ -33,17 +34,40 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     // Start keepalive during processing
     startKeepalive();
 
-    processChunkingTaskInOffscreen({ taskId, docHash, fileUrl, uploadId })
-      .then(() => {
-        console.log(`Task ${taskId} completed successfully`);
-        stopKeepalive();
-        sendResponse({ success: true });
-      })
-      .catch((error: Error) => {
-        console.error("Failed to process chunking task in offscreen:", error);
-        stopKeepalive();
-        sendResponse({ success: false, error: error.message });
-      });
+    // Check settings: if Chunkr is disabled, return failure immediately
+    getAISettings().then((settings) => {
+      if (!settings.chunkrEnabled) {
+        console.log('[offscreen/index] Chunkr processing is disabled by settings');
+        sendResponse({ success: false, error: 'Chunkr disabled in settings' });
+        return;
+      }
+
+      processChunkingTaskInOffscreen({ taskId, docHash, fileUrl, uploadId })
+        .then(() => {
+          console.log(`Task ${taskId} completed successfully`);
+          stopKeepalive();
+          sendResponse({ success: true });
+        })
+        .catch((error: Error) => {
+          console.error("Failed to process chunking task in offscreen:", error);
+          stopKeepalive();
+          sendResponse({ success: false, error: error.message });
+        });
+    }).catch((err) => {
+      console.error('[offscreen/index] Error reading settings, proceeding:', err);
+      processChunkingTaskInOffscreen({ taskId, docHash, fileUrl, uploadId })
+        .then(() => {
+          console.log(`Task ${taskId} completed successfully`);
+          stopKeepalive();
+          sendResponse({ success: true });
+        })
+        .catch((error: Error) => {
+          console.error("Failed to process chunking task in offscreen:", error);
+          stopKeepalive();
+          sendResponse({ success: false, error: error.message });
+        });
+    });
+    
 
     // Return true to indicate we'll send response asynchronously
     return true;
@@ -58,26 +82,57 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     // Start keepalive during processing
     startKeepalive();
 
-    import("./chunker-offscreen.js")
-      .then(async (chunker) => {
-        await chunker.processChunkingTaskInOffscreenWithGemini({
-          taskId,
-          docHash,
-          fileUrl,
-          uploadId,
+    // Respect AI settings: if Gemini chunking disabled, return early
+    getAISettings().then((settings2) => {
+      if (!settings2.gemini?.chunkingEnabled) {
+        console.log('[offscreen/index] Gemini chunking is disabled by settings');
+        sendResponse({ success: false, error: 'Gemini chunking disabled in settings' });
+        return;
+      }
+
+      import("./chunker-offscreen.js")
+        .then(async (chunker) => {
+          await chunker.processChunkingTaskInOffscreenWithGemini({
+            taskId,
+            docHash,
+            fileUrl,
+            uploadId,
+          });
+          console.log(`Gemini chunking task ${taskId} completed successfully`);
+          stopKeepalive();
+          sendResponse({ success: true });
+        })
+        .catch((error: Error) => {
+          console.error(
+            "Failed to process Gemini chunking task in offscreen:",
+            error
+          );
+          stopKeepalive();
+          sendResponse({ success: false, error: error.message });
         });
-        console.log(`Gemini chunking task ${taskId} completed successfully`);
-        stopKeepalive();
-        sendResponse({ success: true });
-      })
-      .catch((error: Error) => {
-        console.error(
-          "Failed to process Gemini chunking task in offscreen:",
-          error
-        );
-        stopKeepalive();
-        sendResponse({ success: false, error: error.message });
-      });
+    }).catch((err) => {
+      console.error('[offscreen/index] Error reading settings, proceeding:', err);
+      import("./chunker-offscreen.js")
+        .then(async (chunker) => {
+          await chunker.processChunkingTaskInOffscreenWithGemini({
+            taskId,
+            docHash,
+            fileUrl,
+            uploadId,
+          });
+          console.log(`Gemini chunking task ${taskId} completed successfully`);
+          stopKeepalive();
+          sendResponse({ success: true });
+        })
+        .catch((error: Error) => {
+          console.error(
+            "Failed to process Gemini chunking task in offscreen:",
+            error
+          );
+          stopKeepalive();
+          sendResponse({ success: false, error: error.message });
+        });
+    });
 
     // Return true to indicate we'll send response asynchronously
     return true;
@@ -115,6 +170,16 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
     import("./embedder.js")
       .then(async (embedder) => {
+        // Respect settings: embeddings may be disabled
+        const { getAISettings } = await import('./ai-settings.js');
+        const settings = await getAISettings();
+        if (!settings.gemini?.embeddingsEnabled) {
+          console.log('[offscreen/index] Gemini embeddings generation disabled by settings');
+          stopKeepalive();
+          sendResponse({ success: true, count: 0 });
+          return;
+        }
+
         const count = await embedder.generateMissingEmbeddings(docHash);
         console.log(`Generated ${count} embeddings for document ${docHash}`);
         stopKeepalive();
@@ -139,6 +204,16 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
     import("./toc-generator.js")
       .then(async (toc) => {
+        // Respect settings: TOC generation may be disabled
+        const { getAISettings } = await import('./ai-settings.js');
+        const settings = await getAISettings();
+        if (!settings.gemini?.tocEnabled) {
+          console.log('[offscreen/index] Gemini TOC generation disabled by settings');
+          stopKeepalive();
+          sendResponse({ success: true });
+          return;
+        }
+
         await toc.generateTableOfContents(docHash, fileUrl, uploadId);
         console.log(`TOC task ${taskId} completed successfully`);
         stopKeepalive();
@@ -183,6 +258,15 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
     import("./chatbot.js")
       .then(async (chatbot) => {
+        // Respect settings: chat may be disabled earlier in module, but check here to avoid work
+        const { getAISettings } = await import('./ai-settings.js');
+        const settings = await getAISettings();
+        if (!settings.gemini?.chatEnabled) {
+          console.log('[offscreen/index] Gemini chat disabled by settings');
+          sendResponse({ success: true, result: { response: 'AI chat disabled in settings', sources: [] } });
+          return;
+        }
+
         const result = await chatbot.generateChatResponse(query, docHash);
         console.log(
           `Generated chat response (${result.response.length} chars) with ${result.sources.length} sources`
@@ -205,6 +289,14 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
     import("./term-extractor.js")
       .then(async (extractor) => {
+        const { getAISettings } = await import('./ai-settings.js');
+        const settings = await getAISettings();
+        if (!settings.gemini?.termsEnabled) {
+          console.log('[offscreen/index] Gemini term extraction disabled by settings');
+          sendResponse({ success: true, result: { terms: [], passage: passage.substring(0,500), timestamp: Date.now() } });
+          return;
+        }
+
         const result = await extractor.extractTerms(passage);
         console.log(`Extracted ${result.terms.length} terms`);
         sendResponse({ success: true, result });
@@ -226,6 +318,14 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
     import("./term-extractor.js")
       .then(async (extractor) => {
+        const { getAISettings } = await import('./ai-settings.js');
+        const settings = await getAISettings();
+        if (!settings.gemini?.termsEnabled) {
+          console.log('[offscreen/index] Gemini term-section matching disabled by settings');
+          sendResponse({ success: true, results: terms.map((t: string) => ({ term: t, tocItem: null })) });
+          return;
+        }
+
         const results = await extractor.findSectionsForTerms(terms, docHash);
         console.log(
           `Found sections for ${results.filter((r) => r.tocItem).length}/${results.length} terms`
@@ -249,6 +349,15 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
     import("./term-extractor.js")
       .then(async (extractor) => {
+        const { getAISettings } = await import('./ai-settings.js');
+        const settings = await getAISettings();
+        if (!settings.gemini?.termsEnabled) {
+          console.log('[offscreen/index] Gemini term summarization disabled by settings');
+          const summaries = termsWithSections.map((t: any) => ({ term: t.term, definition: 'Disabled', explanation1: '', explanation2: '', explanation3: '', tocItem: t.tocItem, matchedChunkId: t.matchedChunkId }));
+          sendResponse({ success: true, summaries });
+          return;
+        }
+
         const summaries = await extractor.summarizeTerms(
           termsWithSections,
           docHash
@@ -273,6 +382,14 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
     import("./term-extractor.js")
       .then(async (extractor) => {
+        const { getAISettings } = await import('./ai-settings.js');
+        const settings = await getAISettings();
+        if (!settings.gemini?.termsEnabled) {
+          console.log('[offscreen/index] Gemini explain selection disabled by settings');
+          sendResponse({ success: true, summary: { term: text, definition: 'Disabled', explanation1: '', explanation2: '', explanation3: '', tocItem: null } });
+          return;
+        }
+
         const summary = await extractor.explainSelectedText(text, docHash);
         console.log(`Generated summary for selected text`);
         sendResponse({ success: true, summary });

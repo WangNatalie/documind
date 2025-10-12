@@ -21,6 +21,7 @@ export default defineConfig({
         viewer: 'viewer.html',
         popup: 'popup.html',
         offscreen: 'offscreen.html',
+        options: 'options.html',
       },
     },
     target: 'esnext',

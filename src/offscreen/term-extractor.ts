@@ -121,6 +121,17 @@ async function findMostSimilarChunk(
 export async function extractTerms(passage: string): Promise<TermExtractionResult> {
   console.log('[TermExtractor] Extracting terms from passage:', passage.substring(0, 100) + '...');
 
+  try {
+    const { getAISettings } = await import('./ai-settings.js');
+    const settings = await getAISettings();
+    if (!settings.gemini?.termsEnabled) {
+      console.log('[TermExtractor] Gemini term extraction disabled by settings');
+      return { terms: [], passage: passage.substring(0, 500), timestamp: Date.now() };
+    }
+  } catch (e) {
+    // ignore
+  }
+
   if (!passage || passage.trim().length === 0) {
     console.log('[TermExtractor] Empty passage, returning empty result');
     return {
@@ -263,6 +274,15 @@ export async function findSectionsForTerms(
   docHash: string
 ): Promise<TermWithSection[]> {
   console.log(`[SectionFinder] Finding sections for ${terms.length} terms`);
+
+  try {
+    const { getAISettings } = await import('./ai-settings.js');
+    const settings = await getAISettings();
+    if (!settings.gemini?.termsEnabled) {
+      console.log('[SectionFinder] Gemini term-section matching disabled by settings; returning null toc items');
+      return terms.map(term => ({ term, tocItem: null }));
+    }
+  } catch (e) {}
 
   // Get table of contents for this document
   const toc = await getTableOfContents(docHash);
@@ -544,6 +564,15 @@ export async function summarizeTerms(
   docHash: string
 ): Promise<TermSummary[]> {
   console.log(`[Summarizer] Generating summaries for ${termsWithSections.length} terms`);
+
+  try {
+    const { getAISettings } = await import('./ai-settings.js');
+    const settings = await getAISettings();
+    if (!settings.gemini?.termsEnabled) {
+      console.log('[Summarizer] Gemini summarization disabled by settings');
+      return termsWithSections.map(t => ({ term: t.term, definition: 'Disabled', explanation1: '', explanation2: '', explanation3: '', tocItem: t.tocItem, matchedChunkId: t.matchedChunkId }));
+    }
+  } catch (e) {}
 
   if (termsWithSections.length === 0) {
     return [];
