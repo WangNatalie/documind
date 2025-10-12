@@ -185,13 +185,20 @@ export const ViewerApp: React.FC = () => {
   const [contextBookmarks, setContextBookmarks] = useState<BookmarkItem[]>([]);
   const [chatbotOpenTick, setChatbotOpenTick] = useState(0);
   const [chatEnabled, setChatEnabled] = useState(true);
+  const [elevenEnabled, setElevenEnabled] = useState(true);
 
   useEffect(() => {
     let mounted = true;
     getAISettings().then((s) => {
-      if (mounted) setChatEnabled(!!s?.gemini?.chatEnabled);
+      if (mounted) {
+        setChatEnabled(!!s?.gemini?.chatEnabled);
+        setElevenEnabled(!!s?.elevenLabsEnabled);
+      }
     });
-    onAISettingsChanged((s) => setChatEnabled(!!s?.gemini?.chatEnabled));
+    onAISettingsChanged((s) => {
+      setChatEnabled(!!s?.gemini?.chatEnabled);
+      setElevenEnabled(!!s?.elevenLabsEnabled);
+    });
     return () => { mounted = false; };
   }, []);
 
@@ -3203,6 +3210,7 @@ Key Points:
               <h3 className="text-lg font-bold text-neutral-900 dark:text-neutral-100">
                 {selectedTerm.term}
               </h3>
+            {elevenEnabled && (
               <button
                 onClick={async () => {
                   // If currently playing, stop it
@@ -3261,6 +3269,7 @@ Key Points:
               >
                 <Volume2 size={18} />
               </button>
+            )}
             </div>
             <button
               onClick={() => {
