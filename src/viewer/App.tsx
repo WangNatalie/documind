@@ -6,6 +6,7 @@ import { Toolbar } from "./Toolbar";
 import { useRenderQueue, CanvasCache } from "./useRenderQueue";
 import { parseHash, updateHash } from "../utils/hash";
 import { generateDocHash } from "../utils/hash";
+import { generateLegacyUploadHash } from '../utils/hash';
 import {
   getDoc,
   putDoc,
@@ -609,13 +610,7 @@ export const ViewerApp: React.FC = () => {
 
           if (!existing) {
             // Fallback: attempt legacy uploadId-including hash for compatibility
-            try {
-              // import helper at top-level: generateLegacyUploadHash
-              // (we import it below where needed)
-              // eslint-disable-next-line @typescript-eslint/no-var-requires
-              const { generateLegacyUploadHash } = await import(
-                "../utils/hash"
-              );
+              try {
               const legacyHash = await generateLegacyUploadHash(source, {
                 size: arrayBuffer.byteLength,
                 firstBytes,

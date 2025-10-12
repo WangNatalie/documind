@@ -1,80 +1,52 @@
-// Central helper to read AI settings from chrome.storage.local
-export interface GeminiSettings {
-  chatEnabled: boolean;
-  chunkingEnabled: boolean;
-  embeddingsEnabled: boolean;
-  termsEnabled: boolean;
-  tocEnabled: boolean;
-}
+// Offscreen shim that re-exports the canonical implementation from utils but
+// also supports a runtime-synced in-memory cache. Background/service-worker
+// will send a SYNC_AI_SETTINGS message to the offscreen document before
+// delegating work so the offscreen context doesn't need to rely on
+// chrome.storage.local being available in all executions.
 
-export interface AISettings {
-  gemini: GeminiSettings;
-  chunkrEnabled: boolean; // legacy chunkr pipeline
-  elevenLabsEnabled: boolean;
-  apiKeys?: {
-    geminiApiKey?: string;
-    chunkrApiKey?: string;
-    elevenLabsApiKey?: string;
-  };
-}
+import {
+	getAISettings as _getAISettings,
+	setAISettings as _setAISettings,
+	onAISettingsChanged as _onAISettingsChanged,
+} from '../utils/ai-settings';
+import type { AISettings } from '../utils/ai-settings';
 
-const DEFAULT_SETTINGS: AISettings = {
-  gemini: {
-    chatEnabled: true,
-    chunkingEnabled: true,
-    embeddingsEnabled: true,
-    termsEnabled: true,
-    tocEnabled: true,
-  },
-  chunkrEnabled: true,
-  elevenLabsEnabled: true,
-  apiKeys: {
-    geminiApiKey: '',
-    chunkrApiKey: '',
-    elevenLabsApiKey: '',
-  },
-};
+let cachedSettings: AISettings | null = null;
+
+export function syncAISettings(settings: AISettings | null) {
+	console.log('[offscreen/ai-settings] syncAISettings called, hasSettings=', !!settings);
+	cachedSettings = settings || null;
+}
 
 export async function getAISettings(): Promise<AISettings> {
-  try {
-    const result = await chrome.storage.local.get(['aiSettings']);
-    if (result && result.aiSettings) {
-      const g = result.aiSettings.gemini || {};
-      return {
-        gemini: {
-          chatEnabled: !!g.chatEnabled,
-          chunkingEnabled: !!g.chunkingEnabled,
-          embeddingsEnabled: !!g.embeddingsEnabled,
-          termsEnabled: !!g.termsEnabled,
-          tocEnabled: !!g.tocEnabled,
-        },
-        chunkrEnabled: !!result.aiSettings.chunkrEnabled,
-        elevenLabsEnabled: !!result.aiSettings.elevenLabsEnabled,
-        apiKeys: {
-          geminiApiKey: result.aiSettings.apiKeys?.geminiApiKey || '',
-          chunkrApiKey: result.aiSettings.apiKeys?.chunkrApiKey || '',
-          elevenLabsApiKey: result.aiSettings.apiKeys?.elevenLabsApiKey || '',
-        },
-      };
-    }
-  } catch (e) {
-    console.error('[AI Settings] Error reading settings:', e);
-  }
-  return DEFAULT_SETTINGS;
+	if (cachedSettings) {
+		// Return the cached copy if available (fast, avoids storage access in offscreen)
+		return cachedSettings;
+	}
+	// Fall back to canonical implementation which reads from chrome.storage.local
+	return _getAISettings();
 }
 
 export async function setAISettings(settings: Partial<AISettings>): Promise<void> {
-  try {
-    const current = await getAISettings();
-    // Deep merge for gemini sub-object and apiKeys
-    const merged = {
-      ...current,
-      ...settings,
-      gemini: { ...current.gemini, ...(settings.gemini || {}) },
-      apiKeys: { ...((current as any).apiKeys || {}), ...((settings as any).apiKeys || {}) },
-    } as AISettings;
-    await chrome.storage.local.set({ aiSettings: merged });
-  } catch (e) {
-    console.error('[AI Settings] Error saving settings:', e);
-  }
+	// Update cache optimistically (merge with existing values)
+	try {
+		const current = cachedSettings || (await _getAISettings());
+		const merged = {
+			...current,
+			...settings,
+			gemini: { ...current.gemini, ...(settings.gemini || {}) },
+			apiKeys: { ...(current as any).apiKeys || {}, ...((settings as any).apiKeys || {}) },
+		} as AISettings;
+		cachedSettings = merged;
+	} catch (e) {
+		console.warn('[offscreen/ai-settings] Could not merge into cache before set:', e);
+	}
+
+	return _setAISettings(settings);
 }
+
+export function onAISettingsChanged(cb: (s: AISettings) => void) {
+	return _onAISettingsChanged(cb);
+}
+
+export default { getAISettings, setAISettings, onAISettingsChanged, syncAISettings };

@@ -1,8 +1,13 @@
 // Offscreen document for chunking operations
 // This runs in a DOM context where IndexedDB is available
 
-import { processChunkingTaskInOffscreen } from "./chunker-offscreen";
-import { getAISettings } from './ai-settings';
+import { processChunkingTaskInOffscreen, processChunkingTaskInOffscreenWithGemini } from "./chunker-offscreen";
+import { getAISettings, syncAISettings } from './ai-settings';
+import { generateMissingEmbeddings } from './embedder';
+import { generateTableOfContents } from './toc-generator';
+import { generateChatResponse } from './chatbot';
+import { extractTerms, findSectionsForTerms, summarizeTerms, explainSelectedText } from './term-extractor';
+import { getChunksByDoc, getTableOfContents } from '../db/index';
 
 console.log("DocuMind offscreen document loaded at", new Date().toISOString());
 
@@ -27,6 +32,21 @@ function stopKeepalive() {
 
 // Handle messages from the service worker
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  // Allow the background/service-worker to push settings into this offscreen
+  // document. This is used because some offscreen contexts may not have
+  // chrome.storage.local available immediately.
+  if (message.type === 'SYNC_AI_SETTINGS') {
+    try {
+      syncAISettings(message.payload || null);
+      console.log('[offscreen/index] SYNC_AI_SETTINGS applied');
+      sendResponse({ success: true });
+    } catch (e) {
+      console.error('[offscreen/index] Failed to apply SYNC_AI_SETTINGS', e);
+      sendResponse({ success: false, error: String(e) });
+    }
+    return true;
+  }
+
   if (message.type === "PROCESS_CHUNKING_TASK") {
     const { taskId, docHash, fileUrl, uploadId } = message.payload;
     console.log(`Received PROCESS_CHUNKING_TASK message for task ${taskId}`);
@@ -90,48 +110,33 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         return;
       }
 
-      import("./chunker-offscreen.js")
-        .then(async (chunker) => {
-          await chunker.processChunkingTaskInOffscreenWithGemini({
-            taskId,
-            docHash,
-            fileUrl,
-            uploadId,
-          });
+      (async () => {
+        try {
+          await processChunkingTaskInOffscreenWithGemini({ taskId, docHash, fileUrl, uploadId });
           console.log(`Gemini chunking task ${taskId} completed successfully`);
           stopKeepalive();
           sendResponse({ success: true });
-        })
-        .catch((error: Error) => {
-          console.error(
-            "Failed to process Gemini chunking task in offscreen:",
-            error
-          );
+        } catch (error: any) {
+          console.error("Failed to process Gemini chunking task in offscreen:", error);
           stopKeepalive();
-          sendResponse({ success: false, error: error.message });
-        });
+          sendResponse({ success: false, error: error?.message || String(error) });
+        }
+      })();
     }).catch((err) => {
       console.error('[offscreen/index] Error reading settings, proceeding:', err);
-      import("./chunker-offscreen.js")
-        .then(async (chunker) => {
-          await chunker.processChunkingTaskInOffscreenWithGemini({
-            taskId,
-            docHash,
-            fileUrl,
-            uploadId,
-          });
+      // Fallback: call the statically imported function directly
+      (async () => {
+        try {
+          await processChunkingTaskInOffscreenWithGemini({ taskId, docHash, fileUrl, uploadId });
           console.log(`Gemini chunking task ${taskId} completed successfully`);
           stopKeepalive();
           sendResponse({ success: true });
-        })
-        .catch((error: Error) => {
-          console.error(
-            "Failed to process Gemini chunking task in offscreen:",
-            error
-          );
+        } catch (error: any) {
+          console.error("Failed to process Gemini chunking task in offscreen:", error);
           stopKeepalive();
-          sendResponse({ success: false, error: error.message });
-        });
+          sendResponse({ success: false, error: error?.message || String(error) });
+        }
+      })();
     });
 
     // Return true to indicate we'll send response asynchronously
@@ -143,19 +148,17 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     console.log(`Verifying chunks exist for document ${docHash}`);
 
     // Import getChunksByDoc dynamically
-    import("../db/index.js")
-      .then(async (db) => {
-        const chunks = await db.getChunksByDoc(docHash);
+    (async () => {
+      try {
+        const chunks = await getChunksByDoc(docHash);
         const exists = chunks.length > 0;
-        console.log(
-          `Document ${docHash} has ${chunks.length} chunks (exists: ${exists})`
-        );
+        console.log(`Document ${docHash} has ${chunks.length} chunks (exists: ${exists})`);
         sendResponse({ exists });
-      })
-      .catch((error: Error) => {
-        console.error("Error verifying chunks:", error);
+      } catch (error: any) {
+        console.error('Error verifying chunks:', error);
         sendResponse({ exists: false });
-      });
+      }
+    })();
 
     // Return true to indicate we'll send response asynchronously
     return true;
@@ -168,10 +171,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     // Start keepalive during processing
     startKeepalive();
 
-    import("./embedder.js")
-      .then(async (embedder) => {
-        // Respect settings: embeddings may be disabled
-        const { getAISettings } = await import('./ai-settings.js');
+    (async () => {
+      try {
         const settings = await getAISettings();
         if (!settings.gemini?.embeddingsEnabled) {
           console.log('[offscreen/index] Gemini embeddings generation disabled by settings');
@@ -180,16 +181,16 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           return;
         }
 
-        const count = await embedder.generateMissingEmbeddings(docHash);
+        const count = await generateMissingEmbeddings(docHash);
         console.log(`Generated ${count} embeddings for document ${docHash}`);
         stopKeepalive();
         sendResponse({ success: true, count });
-      })
-      .catch((error: Error) => {
-        console.error("Error generating embeddings:", error);
+      } catch (error: any) {
+        console.error('Error generating embeddings:', error);
         stopKeepalive();
-        sendResponse({ success: false, error: error.message });
-      });
+        sendResponse({ success: false, error: error?.message || String(error) });
+      }
+    })();
 
     // Return true to indicate we'll send response asynchronously
     return true;
@@ -202,10 +203,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     // Start keepalive during processing
     startKeepalive();
 
-    import("./toc-generator.js")
-      .then(async (toc) => {
-        // Respect settings: TOC generation may be disabled
-        const { getAISettings } = await import('./ai-settings.js');
+    (async () => {
+      try {
         const settings = await getAISettings();
         if (!settings.gemini?.tocEnabled) {
           console.log('[offscreen/index] Gemini TOC generation disabled by settings');
@@ -214,16 +213,16 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           return;
         }
 
-        await toc.generateTableOfContents(docHash, fileUrl, uploadId);
+        await generateTableOfContents(docHash, fileUrl, uploadId);
         console.log(`TOC task ${taskId} completed successfully`);
         stopKeepalive();
         sendResponse({ success: true });
-      })
-      .catch((error: Error) => {
-        console.error("Failed to process TOC task in offscreen:", error);
+      } catch (error: any) {
+        console.error('Failed to process TOC task in offscreen:', error);
         stopKeepalive();
-        sendResponse({ success: false, error: error.message });
-      });
+        sendResponse({ success: false, error: error?.message || String(error) });
+      }
+    })();
 
     // Return true to indicate we'll send response asynchronously
     return true;
@@ -234,17 +233,17 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     console.log(`Verifying TOC exists for document ${docHash}`);
 
     // Import getTableOfContents dynamically
-    import("../db/index.js")
-      .then(async (db) => {
-        const toc = await db.getTableOfContents(docHash);
+    (async () => {
+      try {
+        const toc = await getTableOfContents(docHash);
         const exists = !!toc;
         console.log(`Document ${docHash} has TOC: ${exists}`);
         sendResponse({ exists });
-      })
-      .catch((error: Error) => {
-        console.error("Error verifying TOC:", error);
+      } catch (error: any) {
+        console.error('Error verifying TOC:', error);
         sendResponse({ exists: false });
-      });
+      }
+    })();
 
     // Return true to indicate we'll send response asynchronously
     return true;
@@ -256,10 +255,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       `Received CHAT_QUERY request for query: "${query.substring(0, 50)}..."`
     );
 
-    import("./chatbot.js")
-      .then(async (chatbot) => {
-        // Respect settings: chat may be disabled earlier in module, but check here to avoid work
-        const { getAISettings } = await import('./ai-settings.js');
+    (async () => {
+      try {
         const settings = await getAISettings();
         if (!settings.gemini?.chatEnabled) {
           console.log('[offscreen/index] Gemini chat disabled by settings');
@@ -267,15 +264,13 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           return;
         }
 
-        const result = await chatbot.generateChatResponse(query, docHash);
-        console.log(
-          `Generated chat response (${result.response.length} chars) with ${result.sources.length} sources`
-        );
+        const result = await generateChatResponse(query, docHash);
+        console.log(`Generated chat response (${result.response.length} chars) with ${result.sources.length} sources`);
         sendResponse({ success: true, result });
-      })
-      .catch((error: Error) => {
-        console.error("Error generating chat response:", error);
-      });
+      } catch (error: any) {
+        console.error('Error generating chat response:', error);
+      }
+    })();
 
     // Return true to indicate we'll send response asynchronously
     return true;
@@ -287,9 +282,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       `Received EXTRACT_TERMS request for passage (${passage.length} chars)`
     );
 
-    import("./term-extractor.js")
-      .then(async (extractor) => {
-        const { getAISettings } = await import('./ai-settings.js');
+    (async () => {
+      try {
         const settings = await getAISettings();
         if (!settings.gemini?.termsEnabled) {
           console.log('[offscreen/index] Gemini term extraction disabled by settings');
@@ -297,14 +291,14 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           return;
         }
 
-        const result = await extractor.extractTerms(passage);
+        const result = await extractTerms(passage);
         console.log(`Extracted ${result.terms.length} terms`);
         sendResponse({ success: true, result });
-      })
-      .catch((error: Error) => {
-        console.error("Error extracting terms:", error);
-        sendResponse({ success: false, error: error.message });
-      });
+      } catch (error: any) {
+        console.error('Error extracting terms:', error);
+        sendResponse({ success: false, error: error?.message || String(error) });
+      }
+    })();
 
     // Return true to indicate we'll send response asynchronously
     return true;
@@ -316,9 +310,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       `Received FIND_SECTIONS_FOR_TERMS request for ${terms.length} terms`
     );
 
-    import("./term-extractor.js")
-      .then(async (extractor) => {
-        const { getAISettings } = await import('./ai-settings.js');
+    (async () => {
+      try {
         const settings = await getAISettings();
         if (!settings.gemini?.termsEnabled) {
           console.log('[offscreen/index] Gemini term-section matching disabled by settings');
@@ -326,16 +319,14 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           return;
         }
 
-        const results = await extractor.findSectionsForTerms(terms, docHash);
-        console.log(
-          `Found sections for ${results.filter((r) => r.tocItem).length}/${results.length} terms`
-        );
+        const results = await findSectionsForTerms(terms, docHash);
+        console.log(`Found sections for ${results.filter((r) => r.tocItem).length}/${results.length} terms`);
         sendResponse({ success: true, results });
-      })
-      .catch((error: Error) => {
+      } catch (error: any) {
         console.error("Error finding sections for terms:", error);
-        sendResponse({ success: false, error: error.message });
-      });
+        sendResponse({ success: false, error: error?.message || String(error) });
+      }
+    })();
 
     // Return true to indicate we'll send response asynchronously
     return true;
@@ -347,9 +338,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       `Received SUMMARIZE_TERMS request for ${termsWithSections.length} terms`
     );
 
-    import("./term-extractor.js")
-      .then(async (extractor) => {
-        const { getAISettings } = await import('./ai-settings.js');
+    (async () => {
+      try {
         const settings = await getAISettings();
         if (!settings.gemini?.termsEnabled) {
           console.log('[offscreen/index] Gemini term summarization disabled by settings');
@@ -358,17 +348,14 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           return;
         }
 
-        const summaries = await extractor.summarizeTerms(
-          termsWithSections,
-          docHash
-        );
+        const summaries = await summarizeTerms(termsWithSections, docHash);
         console.log(`Generated ${summaries.length} summaries`);
         sendResponse({ success: true, summaries });
-      })
-      .catch((error: Error) => {
+      } catch (error: any) {
         console.error("Error summarizing terms:", error);
-        sendResponse({ success: false, error: error.message });
-      });
+        sendResponse({ success: false, error: error?.message || String(error) });
+      }
+    })();
 
     // Return true to indicate we'll send response asynchronously
     return true;
@@ -380,9 +367,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       `Received EXPLAIN_SELECTION_TEXT request for text: "${text.substring(0, 50)}..."`
     );
 
-    import("./term-extractor.js")
-      .then(async (extractor) => {
-        const { getAISettings } = await import('./ai-settings.js');
+    (async () => {
+      try {
         const settings = await getAISettings();
         if (!settings.gemini?.termsEnabled) {
           console.log('[offscreen/index] Gemini explain selection disabled by settings');
@@ -390,14 +376,14 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           return;
         }
 
-        const summary = await extractor.explainSelectedText(text, docHash);
+        const summary = await explainSelectedText(text, docHash);
         console.log(`Generated summary for selected text`);
         sendResponse({ success: true, summary });
-      })
-      .catch((error: Error) => {
+      } catch (error: any) {
         console.error("Error summarizing selected text:", error);
-        sendResponse({ success: false, error: error.message });
-      });
+        sendResponse({ success: false, error: error?.message || String(error) });
+      }
+    })();
 
     // Return true to indicate we'll send response asynchronously
     return true;

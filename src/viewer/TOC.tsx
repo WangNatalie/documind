@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { List, Bookmark as BookmarkIcon } from "lucide-react";
+import { getAISettings, onAISettingsChanged } from '../utils/ai-settings';
 import type { TOCItem, NoteRecord, CommentRecord } from "../db";
 import type { TOCNode } from "../utils/toc";
 
@@ -106,12 +107,15 @@ export const TOC: React.FC<TOCProps> = ({
 
   useEffect(() => {
     let mounted = true;
-    import('../utils/ai-settings').then(mod => {
-      // dynamic import to avoid circular loads in some bundlers
+    // Use top-level runtime getter to read AI settings
+    getAISettings().then((s: any) => {
       if (!mounted) return;
-      mod.getAISettings().then((s: any) => setChatEnabled(!!s?.gemini?.chatEnabled));
-      mod.onAISettingsChanged((s: any) => setChatEnabled(!!s?.gemini?.chatEnabled));
+      setChatEnabled(!!s?.gemini?.chatEnabled);
     }).catch(() => {});
+    onAISettingsChanged((s: any) => {
+      if (!mounted) return;
+      setChatEnabled(!!s?.gemini?.chatEnabled);
+    });
     return () => { mounted = false; };
   }, []);
   const [mode, setMode] = useState<"toc" | "bookmarks">("toc");

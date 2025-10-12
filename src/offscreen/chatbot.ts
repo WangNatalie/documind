@@ -1,6 +1,7 @@
 // Chatbot backend - handles chat queries with document context using RAG
 import { GoogleGenAI } from '@google/genai';
 import { getGeminiApiKeyRuntime } from './gemini-config';
+import { getAISettings } from './ai-settings';
 import { getChunksByDoc, getChunkEmbeddingsByDoc } from '../db/index';
 import { generateEmbedding } from './embedder';
 
@@ -119,7 +120,6 @@ export async function generateChatResponse(
   console.log(`[Chatbot] Generating response for query: "${query.substring(0, 50)}..."`);
 
   try {
-    const { getAISettings } = await import('./ai-settings.js');
     const settings = await getAISettings();
     if (!settings.gemini?.chatEnabled) {
       console.log('[Chatbot] Gemini/chat disabled by settings');

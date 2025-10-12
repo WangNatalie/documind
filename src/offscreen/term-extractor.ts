@@ -1,6 +1,7 @@
 // Term Extractor - extracts important technical terms from visible text using Gemini
 import { GoogleGenAI } from '@google/genai';
 import { getGeminiApiKeyRuntime } from './gemini-config';
+import { getAISettings } from './ai-settings';
 import { getTableOfContents, TableOfContentsRecord, getChunksByDoc, TOCItem, getChunkEmbeddingsByDoc } from '../db/index';
 import { generateEmbedding } from './embedder';
 
@@ -129,7 +130,6 @@ export async function extractTerms(passage: string): Promise<TermExtractionResul
   console.log('[TermExtractor] Extracting terms from passage:', passage.substring(0, 100) + '...');
 
   try {
-    const { getAISettings } = await import('./ai-settings.js');
     const settings = await getAISettings();
     if (!settings.gemini?.termsEnabled) {
       console.log('[TermExtractor] Gemini term extraction disabled by settings');
@@ -285,7 +285,6 @@ export async function findSectionsForTerms(
   console.log(`[SectionFinder] Finding sections for ${terms.length} terms`);
 
   try {
-    const { getAISettings } = await import('./ai-settings.js');
     const settings = await getAISettings();
     if (!settings.gemini?.termsEnabled) {
       console.log('[SectionFinder] Gemini term-section matching disabled by settings; returning null toc items');
@@ -577,7 +576,6 @@ export async function summarizeTerms(
   console.log(`[Summarizer] Generating summaries for ${termsWithSections.length} terms`);
 
   try {
-    const { getAISettings } = await import('./ai-settings.js');
     const settings = await getAISettings();
     if (!settings.gemini?.termsEnabled) {
       console.log('[Summarizer] Gemini summarization disabled by settings');

@@ -1,5 +1,6 @@
 // Background service worker for MV3
 import { createChunkingTask, createGeminiChunkingTask, processPendingTasks } from './chunker';
+import { getAISettingsFromStore, setAISettingsInStore } from './ai-store';
 import { createTOCTask, processPendingTOCTasks } from './toc';
 
 console.log('DocuMind background service worker loaded');
@@ -168,6 +169,34 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  // Worker-managed AI settings API
+  if (message.type === 'GET_AI_SETTINGS') {
+    (async () => {
+      try {
+        const s = await getAISettingsFromStore();
+        sendResponse({ success: true, settings: s });
+      } catch (e: any) {
+        console.error('[background/index] GET_AI_SETTINGS failed:', e);
+        sendResponse({ success: false, error: e?.message || String(e) });
+      }
+    })();
+    return true;
+  }
+
+  if (message.type === 'SET_AI_SETTINGS') {
+    (async () => {
+      try {
+        const newSettings = message.payload;
+        await setAISettingsInStore(newSettings);
+        sendResponse({ success: true });
+      } catch (e: any) {
+        console.error('[background/index] SET_AI_SETTINGS failed:', e);
+        sendResponse({ success: false, error: e?.message || String(e) });
+      }
+    })();
+    return true;
+  }
+
   if (message.type === 'REQUEST_PAGE_TERMS') {
     // Viewer is requesting terms for a specific page (cache miss)
     const { page, docHash, pageText } = message.payload;
@@ -181,7 +210,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (processedSet) {
         processedSet.delete(page);
       }
-      
+
       // Get the viewer state
       const state = viewerStates.get(tabId);
       if (state && state.docHash === docHash) {

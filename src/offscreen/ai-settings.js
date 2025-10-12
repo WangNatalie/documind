@@ -1,57 +1,48 @@
-// ESM wrapper for ai-settings TypeScript helper to be usable in options page
+// Offscreen JS shim: re-export canonical implementation from utils but maintain
+// an in-memory cache that the background/service-worker can push via
+// SYNC_AI_SETTINGS. Some offscreen contexts don't have chrome.storage.local
+// immediately available, so this cached path is used as the primary source
+// when available.
+
+import {
+	getAISettings as _getAISettings,
+	setAISettings as _setAISettings,
+	onAISettingsChanged as _onAISettingsChanged,
+} from '../utils/ai-settings';
+
+let cachedSettings = null;
+
+export function syncAISettings(settings) {
+	try {
+		console.log('[offscreen/ai-settings.js] syncAISettings called, hasSettings=', !!settings);
+	} catch (e) {}
+	cachedSettings = settings || null;
+}
+
 export async function getAISettings() {
-  try {
-    const result = await chrome.storage.local.get(['aiSettings']);
-    if (result && result.aiSettings) {
-      const g = result.aiSettings.gemini || {};
-      console.log('[AI Settings] getAISettings ->', result.aiSettings);
-      return {
-        gemini: {
-          chatEnabled: !!g.chatEnabled,
-          chunkingEnabled: !!g.chunkingEnabled,
-          embeddingsEnabled: !!g.embeddingsEnabled,
-          termsEnabled: !!g.termsEnabled,
-          tocEnabled: !!g.tocEnabled,
-        },
-        chunkrEnabled: !!result.aiSettings.chunkrEnabled,
-        elevenLabsEnabled: !!result.aiSettings.elevenLabsEnabled,
-      };
-    }
-  } catch (e) {
-    console.error('[AI Settings] Error reading settings:', e);
-  }
-  return {
-    gemini: {
-      chatEnabled: true,
-      chunkingEnabled: true,
-      embeddingsEnabled: true,
-      termsEnabled: true,
-      tocEnabled: true,
-    },
-    chunkrEnabled: true,
-    elevenLabsEnabled: true,
-  };
+	if (cachedSettings) return cachedSettings;
+	return _getAISettings();
 }
 
 export async function setAISettings(settings) {
-  try {
-    const current = await getAISettings();
-    const merged = Object.assign({}, current, settings);
-    if (settings.gemini) {
-      merged.gemini = Object.assign({}, current.gemini, settings.gemini);
-    }
-    console.log('[AI Settings] setAISettings -> saving merged:', merged);
-    await chrome.storage.local.set({ aiSettings: merged });
-  } catch (e) {
-    console.error('[AI Settings] Error saving settings:', e);
-  }
+	try {
+		const current = cachedSettings || (await _getAISettings());
+		const merged = {
+			...current,
+			...settings,
+			gemini: { ...(current && current.gemini ? current.gemini : {}), ...(settings && settings.gemini ? settings.gemini : {}) },
+			apiKeys: { ...(current && current.apiKeys ? current.apiKeys : {}), ...(settings && settings.apiKeys ? settings.apiKeys : {}) },
+		};
+		cachedSettings = merged;
+	} catch (e) {
+		console.warn('[offscreen/ai-settings.js] Could not merge into cache before set:', e);
+	}
+
+	return _setAISettings(settings);
 }
 
-// Helper for UI: subscribe to storage changes for aiSettings
-export function onAISettingsChanged(callback) {
-  chrome.storage.onChanged.addListener((changes, area) => {
-    if (area === 'local' && changes.aiSettings) {
-      callback(changes.aiSettings.newValue);
-    }
-  });
+export function onAISettingsChanged(cb) {
+	return _onAISettingsChanged(cb);
 }
+
+export default { getAISettings, setAISettings, onAISettingsChanged, syncAISettings };

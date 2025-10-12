@@ -2,6 +2,7 @@
 // We DO NOT call the SDK's `play()` helper because it relies on Node-only APIs.
 
 import { ElevenLabsClient } from '@elevenlabs/elevenlabs-js';
+import { getAISettings } from './ai-settings';
 
 const MODEL_ID = "eleven_flash_v2_5";
 const VOICE_ID = "21m00Tcm4TlvDq8ikWAM";
@@ -9,7 +10,6 @@ const VOICE_ID = "21m00Tcm4TlvDq8ikWAM";
 let client: ElevenLabsClient | null = null;
 async function getClient(): Promise<ElevenLabsClient> {
   if (client) return client;
-  const { getAISettings } = await import('./ai-settings');
   const settings = await getAISettings();
   const ELEVEN_LABS_API_KEY = settings.apiKeys?.elevenLabsApiKey || '';
   if (!ELEVEN_LABS_API_KEY) throw new Error('Missing ElevenLabs API key');
@@ -56,7 +56,6 @@ async function toArrayBuffer(audio: unknown): Promise<ArrayBuffer> {
 
 export const getAudio = async (text: string): Promise<ArrayBuffer> => {
   try {
-    const { getAISettings } = await import('./ai-settings');
     const settings = await getAISettings();
     if (!settings.elevenLabsEnabled) {
       console.log('[narrator-client] ElevenLabs TTS disabled by settings');

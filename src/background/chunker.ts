@@ -68,7 +68,7 @@ async function ensureOffscreenDocument(): Promise<void> {
     reasons: ['DOM_SCRAPING' as chrome.offscreen.Reason], // We need DOM for IndexedDB
     justification: 'Process PDF chunking with IndexedDB access',
   });
-  
+
   console.log('Created offscreen document for chunking');
 }
 
@@ -76,12 +76,12 @@ async function ensureOffscreenDocument(): Promise<void> {
 async function verifyChunksExist(docHash: string): Promise<boolean> {
   try {
     await ensureOffscreenDocument();
-    
+
     const response = await chrome.runtime.sendMessage({
       type: 'VERIFY_CHUNKS_EXIST',
       payload: { docHash },
     });
-    
+
     return response.exists || false;
   } catch (error) {
     console.error('Error verifying chunks:', error);
@@ -99,7 +99,7 @@ export async function createChunkingTask(options: ChunkrTaskOptions): Promise<st
 
   // Check if task already exists for this document
   const existingTask = await getTaskByDocHash(docHash);
-  
+
   if (existingTask) {
     // If task is pending or processing, don't create a duplicate
     if (existingTask.status === 'pending' || existingTask.status === 'processing') {
@@ -171,23 +171,29 @@ async function processChunkingTask(taskId: string): Promise<void> {
     // Ensure offscreen document exists
     await ensureOffscreenDocument();
 
-    // Send message to offscreen document with full task data
-    const payload = { 
-      taskId: task.taskId,
-      docHash: task.docHash,
-      fileUrl: task.fileUrl,
-      uploadId: task.uploadId,
-    };
-    console.log('[background/chunker] Sending to offscreen with payload:', payload);
-    const response = await chrome.runtime.sendMessage({
-      type: 'PROCESS_CHUNKING_TASK',
-      payload: payload,
-    });
+      // Sync AI settings to offscreen first so it has runtime keys available
+      try {
+        const aiSettings = await (await import('./ai-store')).getAISettingsFromStore();
+        console.log('[background/chunker] Syncing aiSettings (from worker store) to offscreen (exists=', !!aiSettings, ')');
+        await chrome.runtime.sendMessage({ type: 'SYNC_AI_SETTINGS', payload: aiSettings });
+      } catch (e) {
+        console.warn('[background/chunker] Failed to sync aiSettings from worker store to offscreen before task:', e);
+      }
+
+      // Send message to offscreen document with full task data
+      const payload = {
+        taskId: task.taskId,
+        docHash: task.docHash,
+        fileUrl: task.fileUrl,
+        uploadId: task.uploadId,
+      };
+      console.log('[background/chunker] Sending to offscreen with payload:', payload);
+      const response = await chrome.runtime.sendMessage({ type: 'PROCESS_CHUNKING_TASK', payload: payload });
 
     if (!response.success) {
       throw new Error(response.error || 'Unknown error processing task');
     }
-    
+
     // Update task status to completed in storage
     await updateTaskStatus(taskId, 'completed');
   } catch (error) {
@@ -220,7 +226,7 @@ export async function processPendingTasks(): Promise<void> {
   const pendingTasks = Object.values(tasks).filter(
     task => task.status === 'pending' || task.status === 'processing'
   );
-  
+
   console.log(`Found ${pendingTasks.length} pending chunking tasks`);
 
   for (const task of pendingTasks) {
@@ -241,7 +247,7 @@ export async function createGeminiChunkingTask(options: ChunkrTaskOptions): Prom
 
   // Check if task already exists for this document
   const existingTask = await getTaskByDocHash(docHash);
-  
+
   if (existingTask) {
     // If task is pending or processing, don't create a duplicate
     if (existingTask.status === 'pending' || existingTask.status === 'processing') {
@@ -310,23 +316,29 @@ async function processGeminiChunkingTask(taskId: string): Promise<void> {
     // Ensure offscreen document exists
     await ensureOffscreenDocument();
 
+    // Sync AI settings to offscreen first so it has runtime keys available
+    try {
+      const aiSettings = await (await import('./ai-store')).getAISettingsFromStore();
+      console.log('[background/chunker] Syncing aiSettings (from worker store) to offscreen (exists=', !!aiSettings, ') for Gemini task');
+      await chrome.runtime.sendMessage({ type: 'SYNC_AI_SETTINGS', payload: aiSettings });
+    } catch (e) {
+      console.warn('[background/chunker] Failed to sync aiSettings from worker store to offscreen before Gemini task:', e);
+    }
+
     // Send message to offscreen document for Gemini processing
-    const payload = { 
+    const payload = {
       taskId: task.taskId,
       docHash: task.docHash,
       fileUrl: task.fileUrl,
       uploadId: task.uploadId,
     };
     console.log('[background/chunker] Sending Gemini chunking to offscreen with payload:', payload);
-    const response = await chrome.runtime.sendMessage({
-      type: 'PROCESS_CHUNKING_TASK_GEMINI',
-      payload: payload,
-    });
+    const response = await chrome.runtime.sendMessage({ type: 'PROCESS_CHUNKING_TASK_GEMINI', payload: payload });
 
     if (!response.success) {
       throw new Error(response.error || 'Unknown error processing Gemini task');
     }
-    
+
     // Update task status to completed in storage
     await updateTaskStatus(taskId, 'completed');
   } catch (error) {

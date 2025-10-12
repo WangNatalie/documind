@@ -5,6 +5,7 @@ import { pdfjsLib } from '../viewer/pdf';
 import { nanoid } from 'nanoid';
 import { GoogleGenAI, createPartFromUri } from '@google/genai';
 import { getGeminiApiKeyRuntime } from './gemini-config';
+import { getAISettings } from './ai-settings';
 
 // Gemini configuration for chunking
 const GEMINI_CHUNKING_MODEL = 'gemini-2.5-pro'; // Multimodal model that can parse PDFs directly
@@ -613,7 +614,6 @@ export async function processWithGeminiChunking(
   console.log('[Gemini Chunker] Multimodal parsing enabled:', USE_MULTIMODAL_PDF_PARSING);
 
   try {
-    const { getAISettings } = await import('./ai-settings.js');
     const settings = await getAISettings();
     if (!settings.gemini?.chunkingEnabled) {
       console.log('[Gemini Chunker] Gemini chunking disabled by settings');

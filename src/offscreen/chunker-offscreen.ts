@@ -8,12 +8,16 @@ import {
   resetDB,
 } from '../db/index';
 import { readOPFSFile } from '../db/opfs';
+import { getAISettings } from './ai-settings';
+import { getGeminiApiKeyRuntime } from './gemini-config';
+import { generateMissingEmbeddings } from './embedder';
+import { generateTableOfContents } from './toc-generator';
+import { processWithGeminiChunking } from './gemini-chunker';
 
 let chunkr: any = null;
 async function getChunkrClient(): Promise<any> {
   if (chunkr) return chunkr;
   try {
-    const { getAISettings } = await import('./ai-settings.js');
     const settings = await getAISettings();
     const key = settings.apiKeys?.chunkrApiKey || '';
     if (!key) throw new Error('Chunkr API key not configured');
@@ -58,7 +62,6 @@ export async function processChunkingTaskInOffscreen(taskData: ChunkingTaskData)
   try {
 
   try {
-    const { getAISettings } = await import('./ai-settings.js');
     const settings = await getAISettings();
     if (!settings.chunkrEnabled) {
       const msg = 'Chunkr processing disabled by settings';
@@ -166,8 +169,7 @@ export async function processChunkingTaskInOffscreen(taskData: ChunkingTaskData)
       // Generate embeddings for chunks (Step 2 of the workflow)
       console.log(`Starting embedding generation for document ${docHash}...`);
       try {
-        const { generateMissingEmbeddings } = await import('./embedder.js');
-        const embeddedCount = await generateMissingEmbeddings(docHash);
+  const embeddedCount = await generateMissingEmbeddings(docHash);
         console.log(`Successfully embedded ${embeddedCount} chunks`);
       } catch (embeddingError) {
         // Don't fail the whole task if embeddings fail
@@ -178,8 +180,7 @@ export async function processChunkingTaskInOffscreen(taskData: ChunkingTaskData)
       // Generate table of contents (Step 3 of the workflow)
       console.log(`Starting table of contents generation for document ${docHash}...`);
       try {
-        const { generateTableOfContents } = await import('./toc-generator.js');
-        await generateTableOfContents(docHash, fileUrl, uploadId);
+  await generateTableOfContents(docHash, fileUrl, uploadId);
         console.log(`Successfully generated table of contents`);
       } catch (tocError) {
         // Don't fail the whole task if TOC generation fails
@@ -352,8 +353,7 @@ export async function processChunkingTaskInOffscreenWithGemini(taskData: Chunkin
   const { taskId, docHash, fileUrl, uploadId } = taskData;
   console.log('[Gemini Chunking] Task data:', taskData);
 
-  try {
-    const { getAISettings } = await import('./ai-settings.js');
+    try {
     const settings = await getAISettings();
     if (!settings.gemini?.chunkingEnabled) {
       const msg = 'Gemini processing disabled by settings.';
@@ -366,7 +366,6 @@ export async function processChunkingTaskInOffscreenWithGemini(taskData: Chunkin
     }
 
     // Fail fast if API key is not configured
-    const { getGeminiApiKeyRuntime } = await import('./gemini-config.js');
     const geminiKey = await getGeminiApiKeyRuntime();
     if (!geminiKey) {
       const msg = 'Gemini API key not configured.';
@@ -398,18 +397,15 @@ export async function processChunkingTaskInOffscreenWithGemini(taskData: Chunkin
     console.log(`[Gemini Chunking] Processing task ${taskId} for ${fileUrl ? `URL: ${fileUrl}` : `upload: ${uploadId}`}`);
 
     // Import and use Gemini chunker
-    const { processWithGeminiChunking } = await import('./gemini-chunker.js');
-
-    console.log('[Gemini Chunking] Calling Gemini chunker...');
-    const chunks = await processWithGeminiChunking(docHash, fileUrl, uploadId);
+  console.log('[Gemini Chunking] Calling Gemini chunker...');
+  const chunks = await processWithGeminiChunking(docHash, fileUrl, uploadId);
     console.log(`[Gemini Chunking] Gemini chunker completed with ${chunks.length} chunks`);
 
     if (chunks && chunks.length > 0) {
       // Generate embeddings for chunks (Step 2 of the workflow)
       console.log(`[Gemini Chunking] Starting embedding generation for document ${docHash}...`);
       try {
-        const { generateMissingEmbeddings } = await import('./embedder.js');
-        const embeddedCount = await generateMissingEmbeddings(docHash);
+  const embeddedCount = await generateMissingEmbeddings(docHash);
         console.log(`[Gemini Chunking] Successfully embedded ${embeddedCount} chunks`);
       } catch (embeddingError) {
         // Don't fail the whole task if embeddings fail
@@ -419,8 +415,7 @@ export async function processChunkingTaskInOffscreenWithGemini(taskData: Chunkin
       // Generate table of contents (Step 3 of the workflow)
       console.log(`[Gemini Chunking] Starting table of contents generation for document ${docHash}...`);
       try {
-        const { generateTableOfContents } = await import('./toc-generator.js');
-        await generateTableOfContents(docHash, fileUrl, uploadId);
+  await generateTableOfContents(docHash, fileUrl, uploadId);
         console.log(`[Gemini Chunking] Successfully generated table of contents`);
       } catch (tocError) {
         // Don't fail the whole task if TOC generation fails

@@ -11,6 +11,7 @@ import {
 // import { pdfjsLib } from '../viewer/pdf';
 import { GoogleGenAI } from '@google/genai';
 import { getGeminiApiKeyRuntime } from './gemini-config';
+import { getAISettings } from './ai-settings';
 
 // Configuration
 const GEMINI_MODEL = 'gemini-2.5-flash'; // Fast model for TOC generation
@@ -270,14 +271,13 @@ async function generateAITableOfContents(
     return [];
   }
 
-  try {
-    const { getAISettings } = await import('./ai-settings.js');
-    const settings = await getAISettings();
-    if (!settings.gemini?.tocEnabled) {
-      console.log('[TOC] Gemini TOC generation disabled by settings');
-      return [];
-    }
-  } catch (e) {}
+    try {
+      const settings = await getAISettings();
+      if (!settings.gemini?.tocEnabled) {
+        console.log('[TOC] Gemini TOC generation disabled by settings');
+        return [];
+      }
+    } catch (e) {}
 
   // Get first N chunks
   const firstChunks = chunks.slice(0, MAX_FIRST_CHUNKS);
