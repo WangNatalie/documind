@@ -1,4 +1,5 @@
 import React, { useState, useRef } from 'react';
+import { Settings } from 'lucide-react';
 import { nanoid } from 'nanoid';
 import { writeOPFSFile, requestPersistentStorage } from '../db/opfs';
 import { putDoc, getDoc } from '../db';
@@ -137,13 +138,32 @@ export const PopupApp: React.FC = () => {
 
   return (
     <div className="w-96 p-6 bg-white dark:bg-neutral-900">
-      <div className="mb-4">
-        <h1 className="text-xl font-bold text-neutral-800 dark:text-neutral-100">
-          DocuMind PDF Viewer
-        </h1>
-        <p className="text-sm text-neutral-600 dark:text-neutral-400 mt-1">
-          Drop a PDF file to open in the viewer
-        </p>
+      <div className="mb-4 flex items-start justify-between">
+        <div>
+          <h1 className="text-xl font-bold text-neutral-800 dark:text-neutral-100">
+            DocuMind PDF Viewer
+          </h1>
+          <p className="text-sm text-neutral-600 dark:text-neutral-400 mt-1">
+            Drop a PDF file to open in the viewer
+          </p>
+        </div>
+        <div className="ml-4">
+          <button
+            onClick={() => {
+              try {
+                if (chrome?.runtime?.openOptionsPage) chrome.runtime.openOptionsPage();
+                else if (chrome?.runtime?.getURL) window.open(chrome.runtime.getURL('options.html'));
+                else window.open('options.html', '_blank');
+              } catch (err) {
+                console.error('Failed to open options page', err);
+              }
+            }}
+            title="Open settings"
+            className="p-2 rounded hover:bg-neutral-100 dark:hover:bg-neutral-800 text-neutral-700 dark:text-neutral-300"
+          >
+            <Settings size={18} />
+          </button>
+        </div>
       </div>
 
       <div

@@ -14,6 +14,7 @@ import {
   ZoomOut,
   MoreVertical,
   Save,
+  Settings,
 } from "lucide-react";
 import documindLogoUrlLight from "../assets/documind-logo-full-light.svg";
 import documindLogoUrlDark from "../assets/documind-logo-full-dark.svg";
@@ -343,6 +344,22 @@ const ToolbarInner: React.FC<
                     <Info size={14} />
                     <span>Document properties</span>
                   </button>
+                      <button
+                        className="w-full text-left px-4 py-3 hover:bg-neutral-100 dark:hover:bg-neutral-700 text-neutral-800 dark:text-neutral-100 whitespace-nowrap overflow-hidden flex items-center gap-2"
+                        onClick={() => {
+                          setMenuOpen(false);
+                          try {
+                            if (chrome?.runtime?.openOptionsPage) chrome.runtime.openOptionsPage();
+                            else if (chrome?.runtime?.getURL) window.open(chrome.runtime.getURL('options.html'));
+                            else window.open('options.html', '_blank');
+                          } catch (err) {
+                            console.error('Failed to open options page', err);
+                          }
+                        }}
+                      >
+                        <Settings size={14} />
+                        <span>Settings</span>
+                      </button>
                 </div>
               </>
             )}

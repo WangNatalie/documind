@@ -39,7 +39,7 @@ import { mergeAnnotationsIntoPdf } from "../export/annotationsToPdf";
 import DocumentProperties from './DocumentProperties.tsx';
 import SaveAsModal from './SaveAsModal';
 import { getAudio } from "../utils/narrator-client";
-import { Volume2, BrainCircuit, Book, BookOpen } from "lucide-react";
+import { Volume2, BrainCircuit, Book, BookOpen, Settings } from "lucide-react";
 import type { BookmarkItem } from "./TOC";
 
 const ZOOM_LEVELS = [
@@ -3210,6 +3210,21 @@ Key Points:
               <h3 className="text-lg font-bold text-neutral-900 dark:text-neutral-100">
                 {selectedTerm.term}
               </h3>
+              <button
+                onClick={() => {
+                  try {
+                    if (chrome?.runtime?.openOptionsPage) chrome.runtime.openOptionsPage();
+                    else if (chrome?.runtime?.getURL) window.open(chrome.runtime.getURL('options.html'));
+                    else window.open('options.html', '_blank');
+                  } catch (err) {
+                    console.error('Failed to open options page', err);
+                  }
+                }}
+                title="Open settings"
+                className="p-1 ml-1 text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300 rounded"
+              >
+                <Settings size={16} />
+              </button>
             {elevenEnabled && (
               <button
                 onClick={async () => {
