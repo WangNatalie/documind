@@ -4,19 +4,23 @@ import { readOPFSFile } from '../db/opfs';
 import { pdfjsLib } from '../viewer/pdf';
 import { nanoid } from 'nanoid';
 import { GoogleGenAI, createPartFromUri } from '@google/genai';
-import { getGeminiApiKey } from './gemini-config';
+import { getGeminiApiKeyRuntime } from './gemini-config';
 
 // Gemini configuration for chunking
 const GEMINI_CHUNKING_MODEL = 'gemini-2.5-pro'; // Multimodal model that can parse PDFs directly
 const USE_MULTIMODAL_PDF_PARSING = true; // Set to true to parse PDFs directly (includes images/tables)
 
-// Initialize Google GenAI lazily when key exists
-const geminiKey = getGeminiApiKey();
+// Lazily create Google GenAI client at runtime (reads key from storage)
 let ai: any = null;
-if (geminiKey) {
-  ai = new GoogleGenAI({ apiKey: geminiKey });
-} else {
-  console.warn('[Gemini Chunker] No Gemini API key configured; Gemini chunking will be disabled');
+async function getAIClient(): Promise<any> {
+  if (ai) return ai;
+  const key = await getGeminiApiKeyRuntime();
+  if (!key) {
+    console.warn('[Gemini Chunker] No Gemini API key configured; Gemini chunking will be disabled');
+    return null;
+  }
+  ai = new GoogleGenAI({ apiKey: key });
+  return ai;
 }
 
 // Cache for uploaded files (in-memory, keyed by docHash)
@@ -121,13 +125,19 @@ async function uploadPDFToGemini(
         try {
           const fileName = cached.uri.split('/').pop();
           if (fileName) {
-            const fileCheck = await ai.files.get({ name: fileName });
-            if (fileCheck.state === 'ACTIVE') {
-              console.log('[Gemini Chunker] Cached file verified as still active');
-              return { uri: cached.uri, mimeType: cached.mimeType };
-            } else {
-              console.log('[Gemini Chunker] Cached file no longer active, will reupload');
+            const client = await getAIClient();
+            if (!client) {
+              console.warn('[Gemini Chunker] No Gemini client available to verify cached file; will reupload');
               uploadedFilesCache.delete(docHash);
+            } else {
+              const fileCheck = await client.files.get({ name: fileName });
+              if (fileCheck.state === 'ACTIVE') {
+                console.log('[Gemini Chunker] Cached file verified as still active');
+                return { uri: cached.uri, mimeType: cached.mimeType };
+              } else {
+                console.log('[Gemini Chunker] Cached file no longer active, will reupload');
+                uploadedFilesCache.delete(docHash);
+              }
             }
           }
         } catch (verifyError) {
@@ -165,7 +175,12 @@ async function uploadPDFToGemini(
 
     // Upload to Gemini File API using official SDK
     console.log('[Gemini Chunker] Uploading file...');
-    const file = await ai.files.upload({
+    const client = await getAIClient();
+    if (!client) {
+      throw new Error('Gemini API key not configured; cannot upload file');
+    }
+
+    const file = await client.files.upload({
       file: pdfBlob,
       config: {
         displayName: displayName,
@@ -178,7 +193,7 @@ async function uploadPDFToGemini(
 
     // Wait for the file to be processed
     console.log('[Gemini Chunker] Waiting for file to be processed...');
-    let getFile = await ai.files.get({ name: file.name });
+  let getFile = await client.files.get({ name: file.name });
     let retries = 0;
     const maxRetries = 60; // 5 minutes maximum wait time
 
@@ -190,7 +205,7 @@ async function uploadPDFToGemini(
       console.log(`[Gemini Chunker] File status: ${getFile.state}, waiting...`);
       await new Promise((resolve) => setTimeout(resolve, 5000)); // Wait 5 seconds
 
-      getFile = await ai.files.get({ name: file.name });
+  getFile = await client.files.get({ name: file.name });
       retries++;
     }
 
@@ -211,7 +226,7 @@ async function uploadPDFToGemini(
       fileName: file.name,
     });
 
-    console.log('[Gemini Chunker] PDF uploaded and processed successfully:', file.uri);
+  console.log('[Gemini Chunker] PDF uploaded and processed successfully:', file.uri);
     console.log('[Gemini Chunker] File cached for future use');
 
     return result;
@@ -277,7 +292,12 @@ Return ONLY the JSON array, nothing else.`;
     const fileContent = createPartFromUri(fileUri, mimeType);
 
     // Generate content using official SDK
-    const response = await ai.models.generateContent({
+    const client = await getAIClient();
+    if (!client) {
+      throw new Error('Gemini API key not configured; cannot parse multimodal PDF');
+    }
+
+    const response = await client.models.generateContent({
       model: GEMINI_CHUNKING_MODEL,
       contents: [prompt, fileContent],
       config: {
@@ -388,7 +408,12 @@ Return ONLY the JSON array, nothing else.`;
 
   try {
     // Generate content using official SDK
-    const response = await ai.models.generateContent({
+    const client = await getAIClient();
+    if (!client) {
+      throw new Error('Gemini API key not configured; cannot run semantic chunking');
+    }
+
+    const response = await client.models.generateContent({
       model: GEMINI_CHUNKING_MODEL,
       contents: [prompt],
       config: {
@@ -597,7 +622,8 @@ export async function processWithGeminiChunking(
   } catch (e) {}
 
   try {
-    if (!ai) {
+    const client = await getAIClient();
+    if (!client) {
       const msg = 'Gemini API key not configured; cannot run Gemini chunking.';
       console.error('[Gemini Chunker] ' + msg);
       throw new Error(msg);

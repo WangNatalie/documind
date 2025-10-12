@@ -11,6 +11,11 @@ export interface AISettings {
   gemini: GeminiSettings;
   chunkrEnabled: boolean;
   elevenLabsEnabled: boolean;
+  apiKeys?: {
+    geminiApiKey?: string;
+    chunkrApiKey?: string;
+    elevenLabsApiKey?: string;
+  };
 }
 
 export async function getAISettings(): Promise<AISettings> {
@@ -28,6 +33,11 @@ export async function getAISettings(): Promise<AISettings> {
         },
         chunkrEnabled: !!result.aiSettings.chunkrEnabled,
         elevenLabsEnabled: !!result.aiSettings.elevenLabsEnabled,
+        apiKeys: {
+          geminiApiKey: result.aiSettings.apiKeys?.geminiApiKey || '',
+          chunkrApiKey: result.aiSettings.apiKeys?.chunkrApiKey || '',
+          elevenLabsApiKey: result.aiSettings.apiKeys?.elevenLabsApiKey || '',
+        },
       };
     }
   } catch (e) {
@@ -53,6 +63,7 @@ export async function setAISettings(settings: Partial<AISettings>): Promise<void
       ...current,
       ...settings,
       gemini: { ...current.gemini, ...(settings.gemini || {}) },
+      apiKeys: { ...((current as any).apiKeys || {}), ...((settings as any).apiKeys || {}) },
     } as AISettings;
     await chrome.storage.local.set({ aiSettings: merged });
   } catch (e) {

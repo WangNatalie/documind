@@ -9,8 +9,20 @@ import {
 } from '../db/index';
 import { readOPFSFile } from '../db/opfs';
 
-import { CHUNKR_API_KEY } from './api_key';
-const chunkr = new ChunkrAI({ apiKey: CHUNKR_API_KEY });
+let chunkr: any = null;
+async function getChunkrClient(): Promise<any> {
+  if (chunkr) return chunkr;
+  try {
+    const { getAISettings } = await import('./ai-settings.js');
+    const settings = await getAISettings();
+    const key = settings.apiKeys?.chunkrApiKey || '';
+    if (!key) throw new Error('Chunkr API key not configured');
+    chunkr = new ChunkrAI({ apiKey: key });
+    return chunkr;
+  } catch (e) {
+    throw e;
+  }
+}
 
 interface ChunkingTaskData {
   taskId: string;
@@ -44,6 +56,8 @@ export async function processChunkingTaskInOffscreen(taskData: ChunkingTaskData)
   console.log('Chunking task data:', taskData);
 
   try {
+
+  try {
     const { getAISettings } = await import('./ai-settings.js');
     const settings = await getAISettings();
     if (!settings.chunkrEnabled) {
@@ -57,16 +71,17 @@ export async function processChunkingTaskInOffscreen(taskData: ChunkingTaskData)
     }
   } catch (e) {}
   try {
-    // Fail fast if API key is not configured to avoid opaque "Failed to fetch" errors
-    if (!CHUNKR_API_KEY) {
-      const msg = 'Chunkr AI API key not configured. Set CHUNKR_API_KEY in the offscreen chunker.';
-      console.error(msg);
-      await safeDBOperation(
-        () => updateChunkTask(taskId, { status: 'failed', error: msg }),
-        'updateChunkTask-missing-api-key'
-      );
-      throw new Error(msg);
-    }
+    // Initialize Chunkr client (reads API key from storage)
+    await getChunkrClient();
+  } catch (e) {
+    const msg = 'Chunkr AI API key not configured.';
+    console.error(msg, e);
+    await safeDBOperation(
+      () => updateChunkTask(taskId, { status: 'failed', error: msg }),
+      'updateChunkTask-missing-api-key'
+    );
+    throw new Error(msg);
+  }
 
     if (!fileUrl && !uploadId) {
       throw new Error('Either fileUrl or uploadId is required');
@@ -85,7 +100,7 @@ export async function processChunkingTaskInOffscreen(taskData: ChunkingTaskData)
       'putChunkTask'
     );
 
-    console.log(`Processing chunking task ${taskId} for ${fileUrl ? `URL: ${fileUrl}` : `upload: ${uploadId}`}`);
+  console.log(`Processing chunking task ${taskId} for ${fileUrl ? `URL: ${fileUrl}` : `upload: ${uploadId}`}`);
 
     // Call Chunkr AI to parse the document
     console.log(`Calling Chunkr AI to create parsing task...`);
@@ -93,7 +108,7 @@ export async function processChunkingTaskInOffscreen(taskData: ChunkingTaskData)
     try {
       if (fileUrl) {
         // URL-based PDF: pass URL directly
-        task = await chunkr.tasks.parse.create({ file: fileUrl });
+        task = await (await getChunkrClient()).tasks.parse.create({ file: fileUrl });
       } else if (uploadId) {
         // Upload-based PDF: read from OPFS, upload to Chunkr, then create parse task
         console.log('Reading file from OPFS...');
@@ -103,7 +118,7 @@ export async function processChunkingTaskInOffscreen(taskData: ChunkingTaskData)
 
         // Upload file to Chunkr
         console.log('Uploading file to Chunkr...');
-        const uploadedFile = await chunkr.files.create({
+        const uploadedFile = await (await getChunkrClient()).files.create({
           file: file,
           file_metadata: JSON.stringify({
             name: `${uploadId}.pdf`,
@@ -113,7 +128,7 @@ export async function processChunkingTaskInOffscreen(taskData: ChunkingTaskData)
         console.log('File uploaded to Chunkr, URL: ' + uploadedFile.url);
 
         // Create parse task with uploaded file URL
-        task = await chunkr.tasks.parse.create({
+        task = await (await getChunkrClient()).tasks.parse.create({
           file: uploadedFile.url,
         });
       }
@@ -133,7 +148,7 @@ export async function processChunkingTaskInOffscreen(taskData: ChunkingTaskData)
 
     // Wait for the task to complete (poll for status)
     console.log(`Starting to poll Chunkr AI task...`);
-    const result = await pollChunkrTask(task.task_id);
+  const result = await pollChunkrTask(task.task_id);
     console.log(`Polling completed!`);
     console.log(`Result has chunks?`, !!result.output?.chunks);
     console.log(`Chunks length:`, result.output?.chunks?.length || 0);
@@ -351,8 +366,8 @@ export async function processChunkingTaskInOffscreenWithGemini(taskData: Chunkin
     }
 
     // Fail fast if API key is not configured
-    const { getGeminiApiKey } = await import('./gemini-config.js');
-    const geminiKey = getGeminiApiKey();
+    const { getGeminiApiKeyRuntime } = await import('./gemini-config.js');
+    const geminiKey = await getGeminiApiKeyRuntime();
     if (!geminiKey) {
       const msg = 'Gemini API key not configured.';
       console.error(msg);

@@ -10,7 +10,7 @@ import {
 // import { readOPFSFile } from '../db/opfs';
 // import { pdfjsLib } from '../viewer/pdf';
 import { GoogleGenAI } from '@google/genai';
-import { getGeminiApiKey } from './gemini-config';
+import { getGeminiApiKeyRuntime } from './gemini-config';
 
 // Configuration
 const GEMINI_MODEL = 'gemini-2.5-flash'; // Fast model for TOC generation
@@ -18,11 +18,15 @@ const MAX_FIRST_CHUNKS = 5; // Number of first chunks to include in AI prompt
 
 // Initialize Google GenAI client lazily; fail fast if no API key configured
 let ai: any = null;
-const geminiKey = getGeminiApiKey();
-if (geminiKey) {
-  ai = new GoogleGenAI({ apiKey: geminiKey });
-} else {
-  console.warn('[TOC] No Gemini API key configured; AI TOC generation will be disabled');
+async function ensureAIClient(): Promise<any> {
+  if (ai) return ai;
+  const key = await getGeminiApiKeyRuntime();
+  if (!key) {
+    console.warn('[TOC] No Gemini API key configured; AI TOC generation will be disabled');
+    return null;
+  }
+  ai = new GoogleGenAI({ apiKey: key });
+  return ai;
 }
 
 /**
@@ -258,7 +262,8 @@ async function generateAITableOfContents(
 ): Promise<TOCItem[]> {
   console.log('[TOC] Generating table of contents using AI...');
 
-  if (!ai) {
+  const client = await ensureAIClient();
+  if (!client) {
     const msg = 'Gemini API key not configured; AI TOC generation is disabled.';
     console.warn('[TOC] ' + msg);
     // Return a minimal empty TOC so caller can continue without throwing
@@ -314,7 +319,7 @@ Only return the JSON array, nothing else.`;
 
   try {
     // Use Google GenAI SDK
-    const response = await ai.models.generateContent({
+    const response = await client.models.generateContent({
       model: GEMINI_MODEL,
       contents: prompt,
       config: {

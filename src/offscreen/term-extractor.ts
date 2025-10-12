@@ -1,14 +1,21 @@
 // Term Extractor - extracts important technical terms from visible text using Gemini
 import { GoogleGenAI } from '@google/genai';
-import { getGeminiApiKey } from './gemini-config';
+import { getGeminiApiKeyRuntime } from './gemini-config';
 import { getTableOfContents, TableOfContentsRecord, getChunksByDoc, TOCItem, getChunkEmbeddingsByDoc } from '../db/index';
 import { generateEmbedding } from './embedder';
 
 // Configuration
 const GEMINI_MODEL = 'gemini-2.0-flash-lite';
 
-// Initialize Google GenAI client
-const ai = new GoogleGenAI({ apiKey: getGeminiApiKey() });
+// Lazily create Google GenAI client at runtime
+let ai: any = null;
+async function getAIClient(): Promise<any> {
+  if (ai) return ai;
+  const key = await getGeminiApiKeyRuntime();
+  if (!key) throw new Error('Gemini API key not configured');
+  ai = new GoogleGenAI({ apiKey: key });
+  return ai;
+}
 
 export interface TermExtractionResult {
   terms: string[];
@@ -147,7 +154,8 @@ ${passage}
 Prioritize terms that may need clarification as someone reads through this passage for understanding. Return only the list of terms separated by commas.`;
 
     console.log('[TermExtractor] Sending request to Gemini...');
-    const response = await ai.models.generateContent({
+    const client = await getAIClient();
+    const response = await client.models.generateContent({
       model: GEMINI_MODEL,
       contents: prompt,
       config: {
@@ -166,8 +174,8 @@ Prioritize terms that may need clarification as someone reads through this passa
     // Parse the comma-separated terms
     const terms = text
       .split(',')
-      .map(term => term.trim())
-      .filter(term => term.length > 0);
+      .map((term: string) => term.trim())
+      .filter((term: string) => term.length > 0);
 
     console.log('[TermExtractor] Extracted terms:', terms);
 
@@ -215,7 +223,8 @@ Return the matching TOC item as JSON in the exact format it was given in.
 Or return "None" if no relevant section exists.`;
 
     console.log('[SectionFinder] Sending request to Gemini...');
-    const response = await ai.models.generateContent({
+    const client = await getAIClient();
+    const response = await client.models.generateContent({
       model: GEMINI_MODEL,
       contents: prompt,
       config: {
@@ -317,7 +326,8 @@ Return your response as a JSON array where each element has:
 Return ONLY the JSON array, no additional text.`;
 
     console.log('[SectionFinder] Sending batch request to Gemini...');
-    const response = await ai.models.generateContent({
+    const client = await getAIClient();
+    const response = await client.models.generateContent({
       model: GEMINI_MODEL,
       contents: prompt,
       config: {
@@ -503,8 +513,9 @@ export async function summarizeTerm(
   "explanation3": ""
 }`;
 
-    console.log(`[Summarizer] Sending request to Gemini for "${term}"...`);
-    const response = await ai.models.generateContent({
+    console.log('[Summarizer] Sending request to Gemini for "${term}"...');
+    const client = await getAIClient();
+    const response = await client.models.generateContent({
       model: GEMINI_MODEL,
       contents: prompt,
       config: {
@@ -622,7 +633,8 @@ Return your response as a JSON array where each element has:
 
 Return ONLY the JSON array, no additional text or markdown.`;
 
-    const response = await ai.models.generateContent({
+    const client = await getAIClient();
+    const response = await client.models.generateContent({
       model: GEMINI_MODEL,
       contents: prompt,
       config: {

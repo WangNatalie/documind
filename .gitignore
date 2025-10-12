@@ -3,6 +3,5 @@ dist
 *.log
 .DS_Store
 .vscode
-.env
 src/offscreen/api_key.ts
 _api_keys.ts

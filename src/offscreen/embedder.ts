@@ -8,8 +8,7 @@ import {
 } from '../db/index';
 
 // Configuration
-import { getGeminiApiKey } from './gemini-config';
-const GEMINI_API_KEY = getGeminiApiKey() || '';
+import { getGeminiApiKeyRuntime } from './gemini-config';
 const EMBEDDING_MODEL = 'text-embedding-004'; // Gemini's latest embedding model
 const EMBEDDING_DIMENSIONS = 768; // text-embedding-004 produces 768-dimensional vectors
 const BATCH_SIZE = 100; // Process in batches for efficiency
@@ -54,8 +53,12 @@ export async function generateMissingEmbeddings(docHash: string): Promise<number
   // Process in batches
   let embeddedCount = 0;
   for (let i = 0; i < chunksToEmbed.length; i += BATCH_SIZE) {
-    // Fail fast if key missing
-    if (!GEMINI_API_KEY) {
+    // Fail fast if key missing (check runtime storage first, fallback to gemini-config)
+    const { getAISettings } = await import('./ai-settings');
+    const settings = await getAISettings();
+  const runtimeKey = settings.apiKeys?.geminiApiKey;
+  const geminiKey = runtimeKey || await getGeminiApiKeyRuntime();
+    if (!geminiKey) {
       console.warn('[Embedder] Gemini API key not configured; skipping embedding generation');
       return 0;
     }
@@ -88,8 +91,13 @@ async function embedBatch(chunks: ChunkRecord[], docHash: string): Promise<numbe
       content: { parts: [{ text }] }
     }));
 
+    // Determine key to use for this request
+    const { getAISettings } = await import('./ai-settings');
+    const settings = await getAISettings();
+  const runtimeKey = settings.apiKeys?.geminiApiKey;
+  const geminiKeyForRequest = runtimeKey || await getGeminiApiKeyRuntime();
     const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${EMBEDDING_MODEL}:batchEmbedContents?key=${GEMINI_API_KEY}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/${EMBEDDING_MODEL}:batchEmbedContents?key=${geminiKeyForRequest}`,
       {
         method: 'POST',
         headers: {
@@ -144,8 +152,12 @@ async function embedBatch(chunks: ChunkRecord[], docHash: string): Promise<numbe
  * Generate embedding for a single text (utility function)
  */
 export async function generateEmbedding(text: string): Promise<number[]> {
+  const { getAISettings } = await import('./ai-settings');
+  const settings = await getAISettings();
+  const runtimeKey = settings.apiKeys?.geminiApiKey;
+  const geminiKey = runtimeKey || await getGeminiApiKeyRuntime();
   const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${EMBEDDING_MODEL}:embedContent?key=${GEMINI_API_KEY}`,
+    `https://generativelanguage.googleapis.com/v1beta/models/${EMBEDDING_MODEL}:embedContent?key=${geminiKey}`,
     {
       method: 'POST',
       headers: {

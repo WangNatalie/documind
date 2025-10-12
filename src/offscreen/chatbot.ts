@@ -1,6 +1,6 @@
 // Chatbot backend - handles chat queries with document context using RAG
 import { GoogleGenAI } from '@google/genai';
-import { getGeminiApiKey } from './gemini-config';
+import { getGeminiApiKeyRuntime } from './gemini-config';
 import { getChunksByDoc, getChunkEmbeddingsByDoc } from '../db/index';
 import { generateEmbedding } from './embedder';
 
@@ -8,8 +8,15 @@ import { generateEmbedding } from './embedder';
 const GEMINI_MODEL = 'gemini-2.5-pro';
 const TOP_K_CHUNKS = 3;
 
-// Initialize Google GenAI client
-const ai = new GoogleGenAI({ apiKey: getGeminiApiKey() });
+// Lazily create Google GenAI client when needed using runtime-stored key
+let ai: any = null;
+async function getAIClient(): Promise<any> {
+  if (ai) return ai;
+  const key = await getGeminiApiKeyRuntime();
+  if (!key) throw new Error('Gemini API key not configured');
+  ai = new GoogleGenAI({ apiKey: key });
+  return ai;
+}
 
 /**
  * Calculate cosine similarity between two vectors
@@ -145,7 +152,8 @@ export async function generateChatResponse(
     prompt += `User question: ${query}\n\nPlease provide a clear and concise answer based on the context above. If you reference specific information, mention which page it comes from.`;
 
     // Generate response using Gemini
-    const response = await ai.models.generateContent({
+    const client = await getAIClient();
+    const response = await client.models.generateContent({
       model: GEMINI_MODEL,
       contents: prompt,
       config: {

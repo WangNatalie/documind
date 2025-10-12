@@ -68,7 +68,7 @@ This repository includes migrations and helper functions to manage those stores.
 - Gemini (Google GenAI) keys are used for embeddings, summaries and chatbot. See `src/offscreen/gemini-config.ts` and `src/offscreen` for where keys are read.
 - ElevenLabs key is used for text-to-speech (narration). The narrator utility (`src/utils/narrator-client.ts`) imports the ElevenLabs key from `src/offscreen/api_key.ts` (or similar internal file).
 
-Important: API key files are not checked into the repo. Inspect `src/offscreen` for placeholder files and add keys there or use environment variables during your build as appropriate.
+Important: API key files are not checked into the repo. Configure API keys via the extension options (stored in chrome.storage.local as `aiSettings.apiKeys`). Do not embed keys at build time.
 
 ## Permissions (manifest highlights)
 
