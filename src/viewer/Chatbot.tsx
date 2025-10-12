@@ -3,6 +3,7 @@ import { marked } from 'marked';
 import { sendChatQuery } from '../utils/chatbot-client';
 import { ArrowLeft } from 'lucide-react';
 import type { BookmarkItem } from './TOC';
+import { getAISettings, onAISettingsChanged } from '../utils/ai-settings';
 
 const BOT_BUTTON_SIZE = 56;
 const CHATBOX_MIN_WIDTH = 320;
@@ -20,6 +21,25 @@ interface ChatbotProps {
 }
 
 export const Chatbot: React.FC<ChatbotProps> = ({ docHash, currentPage, onPageNavigate, contextBookmarks = [], onRemoveContextBookmark, openSignal }) => {
+  const [chatEnabled, setChatEnabled] = useState(true);
+
+  useEffect(() => {
+    let mounted = true;
+    getAISettings().then((s) => {
+      if (mounted) setChatEnabled(!!s?.gemini?.chatEnabled);
+    });
+    // subscribe for changes
+    onAISettingsChanged((s) => {
+      setChatEnabled(!!s?.gemini?.chatEnabled);
+    });
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  // Do not early-return when chat is disabled because that would skip hooks
+  // instead, we'll conditionally render the UI inside the returned JSX so
+  // hooks are always executed in the same order across renders.
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState<{ text: string; sender: 'user' | 'bot'; sources?: Array<{ page: number }> }[]>([]);
   const [input, setInput] = useState('');
@@ -99,8 +119,8 @@ export const Chatbot: React.FC<ChatbotProps> = ({ docHash, currentPage, onPageNa
 
     const handleMouseMove = (e: MouseEvent) => {
       if (!startPos.current) return;
-      const dx = startPos.current.x - e.clientX; 
-      const dy = startPos.current.y - e.clientY; 
+      const dx = startPos.current.x - e.clientX;
+      const dy = startPos.current.y - e.clientY;
       setDimensions({
         width: Math.min(
           Math.max(CHATBOX_MIN_WIDTH, startPos.current.width + dx),
@@ -132,14 +152,14 @@ export const Chatbot: React.FC<ChatbotProps> = ({ docHash, currentPage, onPageNa
   const handleSend = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (input.trim() === '' || loading) return;
-    
+
     const userMessage = input.trim();
     setInput('');
-    
+
     // Add user message
     setMessages((msgs) => [...msgs, { text: userMessage, sender: 'user' }]);
     setLoading(true);
-    
+
     try {
       // Build context string using bookmark note/comment text + extracted excerpt
       let contextString = '';
@@ -162,22 +182,22 @@ export const Chatbot: React.FC<ChatbotProps> = ({ docHash, currentPage, onPageNa
       // Do NOT clear context after use
       if (result.success && result.result) {
         // Add bot response
-        setMessages((msgs) => [...msgs, { 
-          text: result.result!.response, 
+        setMessages((msgs) => [...msgs, {
+          text: result.result!.response,
           sender: 'bot',
           sources: result.result!.sources
         }]);
       } else {
         // Add error message
-        setMessages((msgs) => [...msgs, { 
-          text: `Sorry, I encountered an error: ${result.error || 'Unknown error'}`, 
+        setMessages((msgs) => [...msgs, {
+          text: `Sorry, I encountered an error: ${result.error || 'Unknown error'}`,
           sender: 'bot'
         }]);
       }
     } catch (error) {
       console.error('[Teacher Chatbot] Error sending query:', error);
-      setMessages((msgs) => [...msgs, { 
-        text: 'Sorry, I encountered an error processing your question. Please try again.', 
+      setMessages((msgs) => [...msgs, {
+        text: 'Sorry, I encountered an error processing your question. Please try again.',
         sender: 'bot'
       }]);
     } finally {
@@ -225,252 +245,255 @@ export const Chatbot: React.FC<ChatbotProps> = ({ docHash, currentPage, onPageNa
       setOpen(true);
     }
   }, [openSignal]);
-
   return (
     <>
-      {/* Floating Chatbot Button */}
-      {!open && (
-        <button
-          aria-label="Open Teacher"
-          className="fixed z-50 bottom-6 right-6 bg-primary-600 hover:bg-primary-700 shadow-lg rounded-full flex items-center justify-center"
-          style={{
-            width: BOT_BUTTON_SIZE,
-            height: BOT_BUTTON_SIZE,
-            boxShadow: '0 4px 16px rgba(0,0,0,0.18)',
-          }}
-          onClick={() => setOpen(true)}
-        >
-          {/* Speech bubble icon */}
-          <svg width="28" height="28" viewBox="0 0 24 24" fill="none">
-            <path
-              d="M4 12c0-3.314 3.134-6 7-6s7 2.686 7 6-3.134 6-7 6c-.69 0-1.36-.08-1.98-.23l-2.52.86a.5.5 0 0 1-.64-.64l.86-2.52C4.08 13.36 4 12.69 4 12z"
-              fill="#fff"
-              stroke="#633CB1"
-              strokeWidth="1.5"
-            />
-          </svg>
-        </button>
-      )}
-
-      {/* Animated Chatbox */}
-      {showBox && (
+      {chatEnabled ? (
         <>
-          {/* Return button - positioned outside chatbot at top left */}
-          {chatbotReturnPage !== null && open && (
+          {/* Floating Chatbot Button */}
+          {!open && (
             <button
-              onClick={() => {
-                if (onPageNavigate && chatbotReturnPage !== null) {
-                  onPageNavigate(chatbotReturnPage);
-                  setChatbotReturnPage(null);
-                }
-              }}
-              className="fixed z-50 bg-primary-600 hover:bg-primary-800 text-white px-3 py-2 rounded-lg shadow-lg flex items-center gap-2 text-sm font-medium transition"
+              aria-label="Open Teacher"
+              className="fixed z-50 bottom-6 right-6 bg-primary-600 hover:bg-primary-700 shadow-lg rounded-full flex items-center justify-center"
               style={{
-                bottom: `${dimensions.height-16}px`, // Beside chatbot
-                right: `${dimensions.width + 16}px`, // Align with left edge of chatbot
+                width: BOT_BUTTON_SIZE,
+                height: BOT_BUTTON_SIZE,
+                boxShadow: '0 4px 16px rgba(0,0,0,0.18)',
               }}
-              title="Return to previous page"
+              onClick={() => setOpen(true)}
             >
-              <ArrowLeft size={16} />
-              Return to last page
-            </button>
-          )}
-          
-          <div
-            className={`fixed z-50 bottom-6 right-6 bg-white dark:bg-neutral-900 rounded-xl shadow-2xl flex flex-col border border-neutral-200 dark:border-neutral-700
-              ${open ? 'chatbot-animate-in' : 'chatbot-animate-out'}`}
-            style={{
-              width: dimensions.width,
-              height: dimensions.height,
-              minWidth: CHATBOX_MIN_WIDTH,
-              minHeight: CHATBOX_MIN_HEIGHT,
-              maxWidth: CHATBOX_MAX_WIDTH,
-              maxHeight: CHATBOX_MAX_HEIGHT,
-              transition: 'box-shadow 0.2s',
-              boxShadow: '0 8px 32px rgba(0,0,0,0.22)',
-              resize: 'none',
-              overflow: 'hidden',
-            }}
-          >
-          {/* Header */}
-          <div className="flex items-center justify-between px-4 py-3 border-b border-neutral-200 dark:border-neutral-700 bg-primary-600 rounded-t-xl">
-            <div className="flex items-center gap-2">
-              <span className="font-lacquer text-xl text-primary-200">teacher</span>
-            </div>
-            <button
-              aria-label="Close Teacher"
-              className="text-white hover:bg-primary-700 rounded-full p-1 transition"
-              onClick={() => setOpen(false)}
-            >
-              <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+              {/* Speech bubble icon */}
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none">
                 <path
-                  d="M6 6l8 8M6 14L14 6"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
+                  d="M4 12c0-3.314 3.134-6 7-6s7 2.686 7 6-3.134 6-7 6c-.69 0-1.36-.08-1.98-.23l-2.52.86a.5.5 0 0 1-.64-.64l.86-2.52C4.08 13.36 4 12.69 4 12z"
+                  fill="#fff"
+                  stroke="#633CB1"
+                  strokeWidth="1.5"
                 />
               </svg>
             </button>
-          </div>
+          )}
 
-          {/* Chat messages */}
-          <div
-            className="flex-1 overflow-y-auto px-4 py-3 space-y-2 bg-neutral-50 dark:bg-neutral-800"
-            style={{ fontSize: 15 }}
-          >
-            {messages.length === 0 && (
-              <div className="text-neutral-400 text-center mt-8">Ask clarifying questions, learn more about a passage, etc.</div>
-            )}
-            {messages.map((msg, idx) => (
-              <div
-                key={idx}
-                className={`flex flex-col ${msg.sender === 'user' ? 'items-end' : 'items-start'}`}
-              >
-                <div
-                  className={`rounded-lg px-3 py-2 max-w-[80%] ${
-                    msg.sender === 'user'
-                      ? 'bg-primary-600 text-white'
-                      : 'bg-neutral-200 dark:bg-neutral-700 text-neutral-900 dark:text-neutral-100'
-                  }`}
+          {/* Animated Chatbox */}
+          {showBox && (
+            <>
+              {/* Return button - positioned outside chatbot at top left */}
+              {chatbotReturnPage !== null && open && (
+                <button
+                  onClick={() => {
+                    if (onPageNavigate && chatbotReturnPage !== null) {
+                      onPageNavigate(chatbotReturnPage);
+                      setChatbotReturnPage(null);
+                    }
+                  }}
+                  className="fixed z-50 bg-primary-600 hover:bg-primary-800 text-white px-3 py-2 rounded-lg shadow-lg flex items-center gap-2 text-sm font-medium transition"
+                  style={{
+                    bottom: `${dimensions.height - 16}px`, // Beside chatbot
+                    right: `${dimensions.width + 16}px`, // Align with left edge of chatbot
+                  }}
+                  title="Return to previous page"
                 >
-                  {msg.sender === 'bot' ? (
-                    <div 
-                      className="prose prose-sm dark:prose-invert max-w-none prose-p:my-1 prose-ul:my-1 prose-li:my-0"
-                      dangerouslySetInnerHTML={{ __html: marked(msg.text) as string }}
-                    />
-                  ) : (
-                    msg.text
-                  )}
+                  <ArrowLeft size={16} />
+                  Return to last page
+                </button>
+              )}
+
+              <div
+                className={`fixed z-50 bottom-6 right-6 bg-white dark:bg-neutral-900 rounded-xl shadow-2xl flex flex-col border border-neutral-200 dark:border-neutral-700
+              ${open ? 'chatbot-animate-in' : 'chatbot-animate-out'}`}
+                style={{
+                  width: dimensions.width,
+                  height: dimensions.height,
+                  minWidth: CHATBOX_MIN_WIDTH,
+                  minHeight: CHATBOX_MIN_HEIGHT,
+                  maxWidth: CHATBOX_MAX_WIDTH,
+                  maxHeight: CHATBOX_MAX_HEIGHT,
+                  transition: 'box-shadow 0.2s',
+                  boxShadow: '0 8px 32px rgba(0,0,0,0.22)',
+                  resize: 'none',
+                  overflow: 'hidden',
+                }}
+              >
+                {/* Header */}
+                <div className="flex items-center justify-between px-4 py-3 border-b border-neutral-200 dark:border-neutral-700 bg-primary-600 rounded-t-xl">
+                  <div className="flex items-center gap-2">
+                    <span className="font-lacquer text-xl text-primary-200">teacher</span>
+                  </div>
+                  <button
+                    aria-label="Close Teacher"
+                    className="text-white hover:bg-primary-700 rounded-full p-1 transition"
+                    onClick={() => setOpen(false)}
+                  >
+                    <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+                      <path
+                        d="M6 6l8 8M6 14L14 6"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                      />
+                    </svg>
+                  </button>
                 </div>
-                {msg.sender === 'bot' && msg.sources && msg.sources.length > 0 && (
-                  <div className="text-xs text-neutral-500 dark:text-neutral-400 mt-1 px-1">
-                    Sources: {msg.sources.map((s, i) => (
-                      <span key={i}>
-                        {i > 0 && ', '}
+
+                {/* Chat messages */}
+                <div
+                  className="flex-1 overflow-y-auto px-4 py-3 space-y-2 bg-neutral-50 dark:bg-neutral-800"
+                  style={{ fontSize: 15 }}
+                >
+                  {messages.length === 0 && (
+                    <div className="text-neutral-400 text-center mt-8">Ask clarifying questions, learn more about a passage, etc.</div>
+                  )}
+                  {messages.map((msg, idx) => (
+                    <div
+                      key={idx}
+                      className={`flex flex-col ${msg.sender === 'user' ? 'items-end' : 'items-start'}`}
+                    >
+                      <div
+                        className={`rounded-lg px-3 py-2 max-w-[80%] ${
+                          msg.sender === 'user'
+                            ? 'bg-primary-600 text-white'
+                            : 'bg-neutral-200 dark:bg-neutral-700 text-neutral-900 dark:text-neutral-100'
+                        }`}
+                      >
+                        {msg.sender === 'bot' ? (
+                          <div
+                            className="prose prose-sm dark:prose-invert max-w-none prose-p:my-1 prose-ul:my-1 prose-li:my-0"
+                            dangerouslySetInnerHTML={{ __html: marked(msg.text) as string }}
+                          />
+                        ) : (
+                          msg.text
+                        )}
+                      </div>
+                      {msg.sender === 'bot' && msg.sources && msg.sources.length > 0 && (
+                        <div className="text-xs text-neutral-500 dark:text-neutral-400 mt-1 px-1">
+                          Sources: {msg.sources.map((s, i) => (
+                            <span key={i}>
+                              {i > 0 && ', '}
+                              <button
+                                onClick={() => {
+                                  if (onPageNavigate && currentPage && currentPage !== s.page) {
+                                    setChatbotReturnPage(currentPage);
+                                    onPageNavigate(s.page);
+                                  }
+                                }}
+                                className="text-primary-600 dark:text-primary-400 hover:underline cursor-pointer"
+                                title={`Go to page ${s.page}`}
+                              >
+                                Page {s.page}
+                              </button>
+                            </span>
+                          ))}
+                          {/* Return link on a new line, styled as requested */}
+                          {chatbotReturnPage !== null && currentPage !== chatbotReturnPage && (
+                            <div className="mt-1">
+                              <button
+                                onClick={() => {
+                                  if (onPageNavigate && chatbotReturnPage !== null) {
+                                    onPageNavigate(chatbotReturnPage);
+                                    setChatbotReturnPage(null);
+                                  }
+                                }}
+                                className="text-xs text-neutral-700 dark:text-neutral-300 hover:underline cursor-pointer font-normal"
+                                style={{ fontSize: '11px' }}
+                              >
+                                ← Return to previous page
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                  {loading && (
+                    <div className="flex justify-start">
+                      <div className="bg-neutral-200 dark:bg-neutral-700 rounded-lg px-3 py-2">
+                        <div className="flex gap-1">
+                          <div className="w-2 h-2 rounded-full bg-neutral-400 animate-bounce" style={{ animationDelay: '0ms' }}></div>
+                          <div className="w-2 h-2 rounded-full bg-neutral-400 animate-bounce" style={{ animationDelay: '150ms' }}></div>
+                          <div className="w-2 h-2 rounded-full bg-neutral-400 animate-bounce" style={{ animationDelay: '300ms' }}></div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                  <div ref={chatEndRef} />
+                </div>
+
+                {/* Context chips above input */}
+                {pendingContext.length > 0 && (
+                  <div className="flex flex-wrap gap-2 px-4 pt-2 pb-1">
+                    {pendingContext.map((b) => (
+                      <span key={b.id} className="inline-flex items-center rounded-full bg-primary-100 dark:bg-primary-900 text-primary-800 dark:text-primary-200 px-3 py-1 text-xs font-medium mr-2 mb-1">
+                        {b.__type === 'note' ? 'Note' : 'Comment'} • Page {b.page}
                         <button
-                          onClick={() => {
-                            if (onPageNavigate && currentPage && currentPage !== s.page) {
-                              setChatbotReturnPage(currentPage);
-                              onPageNavigate(s.page);
-                            }
+                          className="ml-2 text-primary-500 hover:text-primary-700 dark:hover:text-primary-300 focus:outline-none"
+                          style={{ fontSize: 12, lineHeight: 1 }}
+                          title="Remove context"
+                          onClick={e => {
+                            e.stopPropagation();
+                            if (onRemoveContextBookmark) onRemoveContextBookmark(b.id);
+                            setPendingContext((prev) => prev.filter((x) => x.id !== b.id));
                           }}
-                          className="text-primary-600 dark:text-primary-400 hover:underline cursor-pointer"
-                          title={`Go to page ${s.page}`}
                         >
-                          Page {s.page}
+                          ×
                         </button>
                       </span>
                     ))}
-                    {/* Return link on a new line, styled as requested */}
-                    {chatbotReturnPage !== null && currentPage !== chatbotReturnPage && (
-                      <div className="mt-1">
-                        <button
-                          onClick={() => {
-                            if (onPageNavigate && chatbotReturnPage !== null) {
-                              onPageNavigate(chatbotReturnPage);
-                              setChatbotReturnPage(null);
-                            }
-                          }}
-                          className="text-xs text-neutral-700 dark:text-neutral-300 hover:underline cursor-pointer font-normal"
-                          style={{ fontSize: '11px' }}
-                        >
-                          ← Return to previous page
-                        </button>
-                      </div>
-                    )}
                   </div>
                 )}
-              </div>
-            ))}
-            {loading && (
-              <div className="flex justify-start">
-                <div className="bg-neutral-200 dark:bg-neutral-700 rounded-lg px-3 py-2">
-                  <div className="flex gap-1">
-                    <div className="w-2 h-2 rounded-full bg-neutral-400 animate-bounce" style={{ animationDelay: '0ms' }}></div>
-                    <div className="w-2 h-2 rounded-full bg-neutral-400 animate-bounce" style={{ animationDelay: '150ms' }}></div>
-                    <div className="w-2 h-2 rounded-full bg-neutral-400 animate-bounce" style={{ animationDelay: '300ms' }}></div>
-                  </div>
+                {/* Input area */}
+                <form
+                  className="px-4 py-3 border-t border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 flex gap-2"
+                  onSubmit={handleSend}
+                >
+                  <textarea
+                    className="flex-1 resize-none rounded-lg border border-neutral-300 dark:border-neutral-700 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary-500 bg-neutral-50 dark:bg-neutral-800 text-neutral-900 dark:text-neutral-100"
+                    rows={1}
+                    placeholder="Type your message…"
+                    value={input}
+                    onChange={(e) => setInput(e.target.value)}
+                    onKeyDown={handleInputKeyDown}
+                    style={{ minHeight: 36, maxHeight: 80, fontSize: 15 }}
+                  />
+                  <button
+                    type="submit"
+                    className="font-lacquer bg-primary-600 hover:bg-primary-700 text-primary-200 rounded-lg px-4 py-2 font-semibold transition disabled:opacity-60"
+                    disabled={input.trim() === '' || loading}
+                    tabIndex={0}
+                  >
+                    {loading ? 'sending...' : 'send'}
+                  </button>
+                </form>
+
+                {/* Resize handle */}
+                <div
+                  ref={resizeRef}
+                  onMouseDown={handleResizeMouseDown}
+                  className="absolute"
+                  style={{
+                    top: 3,
+                    left: 3,
+                    width: 20,
+                    height: 20,
+                    zIndex: 20,
+                    borderRadius: 4,
+                    background: 'transparent',
+                    display: 'flex',
+                    alignItems: 'flex-start',
+                    justifyContent: 'flex-start',
+                    cursor: 'nwse-resize',
+                    userSelect: 'none',
+                  }}
+                >
+                  {/* Diagonal lines for resize handle */}
+                  <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+                    <line x1="3" y1="8" x2="8" y2="3" stroke="#ffffffff" strokeWidth="1" />
+                    <line x1="3" y1="11" x2="11" y2="3" stroke="#ffffffff" strokeWidth="1" />
+                  </svg>
                 </div>
               </div>
-            )}
-            <div ref={chatEndRef} />
-          </div>
-
-          {/* Context chips above input */}
-          {pendingContext.length > 0 && (
-            <div className="flex flex-wrap gap-2 px-4 pt-2 pb-1">
-              {pendingContext.map((b) => (
-                <span key={b.id} className="inline-flex items-center rounded-full bg-primary-100 dark:bg-primary-900 text-primary-800 dark:text-primary-200 px-3 py-1 text-xs font-medium mr-2 mb-1">
-                  {b.__type === 'note' ? 'Note' : 'Comment'} • Page {b.page}
-                  <button
-                    className="ml-2 text-primary-500 hover:text-primary-700 dark:hover:text-primary-300 focus:outline-none"
-                    style={{ fontSize: 12, lineHeight: 1 }}
-                    title="Remove context"
-                    onClick={e => {
-                      e.stopPropagation();
-                      if (onRemoveContextBookmark) onRemoveContextBookmark(b.id);
-                      setPendingContext((prev) => prev.filter((x) => x.id !== b.id));
-                    }}
-                  >
-                    ×
-                  </button>
-                </span>
-              ))}
-            </div>
+            </>
           )}
-          {/* Input area */}
-          <form
-            className="px-4 py-3 border-t border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 flex gap-2"
-            onSubmit={handleSend}
-          >
-            <textarea
-              className="flex-1 resize-none rounded-lg border border-neutral-300 dark:border-neutral-700 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary-500 bg-neutral-50 dark:bg-neutral-800 text-neutral-900 dark:text-neutral-100"
-              rows={1}
-              placeholder="Type your message…"
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={handleInputKeyDown}
-              style={{ minHeight: 36, maxHeight: 80, fontSize: 15 }}
-            />
-            <button
-              type="submit"
-              className="font-lacquer bg-primary-600 hover:bg-primary-700 text-primary-200 rounded-lg px-4 py-2 font-semibold transition disabled:opacity-60"
-              disabled={input.trim() === '' || loading}
-              tabIndex={0}
-            >
-              {loading ? 'sending...' : 'send'}
-            </button>
-          </form>
-
-          {/* Resize handle */}
-          <div
-            ref={resizeRef}
-            onMouseDown={handleResizeMouseDown}
-            className="absolute"
-            style={{
-              top: 3,
-              left: 3,
-              width: 20,
-              height: 20,
-              zIndex: 20,
-              borderRadius: 4,
-              background: 'transparent',
-              display: 'flex',
-              alignItems: 'flex-start',
-              justifyContent: 'flex-start',
-              cursor: 'nwse-resize',
-              userSelect: 'none',
-            }}
-          >
-            {/* Diagonal lines for resize handle */}
-            <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-              <line x1="3" y1="8" x2="8" y2="3" stroke="#ffffffff" strokeWidth="1" />
-              <line x1="3" y1="11" x2="11" y2="3" stroke="#ffffffff" strokeWidth="1" />
-            </svg>
-          </div>
-        </div>
         </>
-      )}
+      ) : null}
     </>
   );
 };

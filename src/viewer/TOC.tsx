@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { List, Bookmark as BookmarkIcon } from "lucide-react";
 import type { TOCItem, NoteRecord, CommentRecord } from "../db";
 import type { TOCNode } from "../utils/toc";
@@ -102,6 +102,18 @@ export const TOC: React.FC<TOCProps> = ({
   onSelectBookmark,
   onAddContext,
 }) => {
+  const [chatEnabled, setChatEnabled] = useState(true);
+
+  useEffect(() => {
+    let mounted = true;
+    import('../utils/ai-settings').then(mod => {
+      // dynamic import to avoid circular loads in some bundlers
+      if (!mounted) return;
+      mod.getAISettings().then((s: any) => setChatEnabled(!!s?.gemini?.chatEnabled));
+      mod.onAISettingsChanged((s: any) => setChatEnabled(!!s?.gemini?.chatEnabled));
+    }).catch(() => {});
+    return () => { mounted = false; };
+  }, []);
   const [mode, setMode] = useState<"toc" | "bookmarks">("toc");
 
   const bookmarks: BookmarkItem[] = [
@@ -249,16 +261,18 @@ export const TOC: React.FC<TOCProps> = ({
                   <div className="text-xs text-neutral-500">
                     {isNote ? "Note" : "Comment"} • Page {b.page}
                   </div>
-                  <button
-                    className="ml-2 px-2 py-0.5 text-xs rounded bg-primary-100 dark:bg-primary-900 text-primary-700 dark:text-primary-200 hover:bg-primary-200 dark:hover:bg-primary-800 transition"
-                    title="Add context to chat"
-                    onClick={e => {
-                      e.stopPropagation();
-                      onAddContext?.(b);
-                    }}
-                  >
-                    Add context to chat
-                  </button>
+                  {chatEnabled && (
+                    <button
+                      className="ml-2 px-2 py-0.5 text-xs rounded bg-primary-100 dark:bg-primary-900 text-primary-700 dark:text-primary-200 hover:bg-primary-200 dark:hover:bg-primary-800 transition"
+                      title="Add context to chat"
+                      onClick={e => {
+                        e.stopPropagation();
+                        onAddContext?.(b);
+                      }}
+                    >
+                      Add context to chat
+                    </button>
+                  )}
                 </div>
                 <div className="mt-2 text-sm text-neutral-800 dark:text-neutral-100 whitespace-pre-wrap">
                   {String(b.text || "").trim()}

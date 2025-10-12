@@ -18,24 +18,24 @@ function cosineSimilarity(a: number[], b: number[]): number {
   if (a.length !== b.length) {
     throw new Error('Vectors must have the same length');
   }
-  
+
   let dotProduct = 0;
   let magnitudeA = 0;
   let magnitudeB = 0;
-  
+
   for (let i = 0; i < a.length; i++) {
     dotProduct += a[i] * b[i];
     magnitudeA += a[i] * a[i];
     magnitudeB += b[i] * b[i];
   }
-  
+
   magnitudeA = Math.sqrt(magnitudeA);
   magnitudeB = Math.sqrt(magnitudeB);
-  
+
   if (magnitudeA === 0 || magnitudeB === 0) {
     return 0;
   }
-  
+
   return dotProduct / (magnitudeA * magnitudeB);
 }
 
@@ -49,39 +49,39 @@ async function findSimilarChunks(
 ): Promise<Array<{ chunkId: string; similarity: number; content: string; page: number }>> {
   try {
     console.log(`[Chatbot] Searching for similar chunks for query: "${query.substring(0, 50)}..."`);
-    
+
     // Generate embedding for the query
     const queryEmbedding = await generateEmbedding(query);
-    
+
     // Get all chunk embeddings for this document
     const chunkEmbeddings = await getChunkEmbeddingsByDoc(docHash);
-    
+
     if (chunkEmbeddings.length === 0) {
       console.log(`[Chatbot] No embeddings found for document ${docHash}`);
       return [];
     }
-    
+
     // Calculate similarity scores
     const similarities = chunkEmbeddings.map(chunkEmb => ({
       chunkId: chunkEmb.chunkId,
       similarity: cosineSimilarity(queryEmbedding, chunkEmb.embedding)
     }));
-    
+
     // Sort by similarity (highest first)
     similarities.sort((a, b) => b.similarity - a.similarity);
-    
+
     // Get top K chunks
     const topChunks = similarities.slice(0, topK);
-    
+
     // Get the actual chunk data
     const chunks = await getChunksByDoc(docHash);
     const chunkMap = new Map(chunks.map(c => [c.id, c]));
-    
+
     const results = topChunks
       .map(({ chunkId, similarity }) => {
         const chunk = chunkMap.get(chunkId);
         if (!chunk || chunk.page === undefined) return null;
-        
+
         return {
           chunkId,
           similarity,
@@ -90,10 +90,10 @@ async function findSimilarChunks(
         };
       })
       .filter((r): r is NonNullable<typeof r> => r !== null);
-    
-    console.log(`[Chatbot] Found ${results.length} similar chunks with similarities:`, 
+
+    console.log(`[Chatbot] Found ${results.length} similar chunks with similarities:`,
       results.map(r => `${r.similarity.toFixed(3)} (page ${r.page})`));
-    
+
     return results;
   } catch (error) {
     console.error(`[Chatbot] Error finding similar chunks:`, error);
@@ -125,7 +125,7 @@ export async function generateChatResponse(
   try {
     // Find relevant chunks
     const similarChunks = await findSimilarChunks(query, docHash);
-    
+
     // Build context from chunks
     let chunkContext = '';
     if (similarChunks.length > 0) {

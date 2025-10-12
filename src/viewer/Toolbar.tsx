@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import documindLogoUrlLight from "../assets/documind-logo-full-light.svg";
 import documindLogoUrlDark from "../assets/documind-logo-full-dark.svg";
+import { getAISettings, onAISettingsChanged } from "../utils/ai-settings";
 
 interface ToolbarProps {
   onToggleTOC?: () => void;
@@ -105,6 +106,21 @@ const ToolbarInner: React.FC<
     window.matchMedia &&
     window.matchMedia("(prefers-color-scheme: dark)").matches;
   const logoUrl = isDark ? documindLogoUrlDark : documindLogoUrlLight;
+
+  const [termsEnabled, setTermsEnabled] = React.useState<boolean>(true);
+
+  useEffect(() => {
+    let mounted = true;
+    getAISettings().then((s) => {
+      if (mounted) setTermsEnabled(Boolean(s?.gemini?.termsEnabled));
+    });
+    onAISettingsChanged((s) => {
+      if (mounted) setTermsEnabled(Boolean(s?.gemini?.termsEnabled));
+    });
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   return (
     <div
@@ -221,21 +237,26 @@ const ToolbarInner: React.FC<
             )}
           </button>
 
-          <div className="border-l border-neutral-300 dark:border-neutral-600 h-6 mx-1" />
+          {/* Highlights Toggle (hidden when term extraction is disabled) */}
+          {termsEnabled && (
+            <>
+              <div className="border-l border-neutral-300 dark:border-neutral-600 h-6 mx-1" />
+              <button
+                onClick={onToggleHighlights}
+                className={`px-3 py-1.5 rounded transition-colors focus:outline-none ${
+                  highlightsVisible
+                    ? "bg-primary-600 text-white"
+                    : "bg-transparent text-neutral-800 dark:bg-transparent dark:text-neutral-100 hover:bg-neutral-200 dark:hover:bg-neutral-700 active:bg-primary-600 active:text-white"
+                }`}
+                title={
+                  highlightsVisible ? "Hide highlights" : "Show highlights"
+                }
+              >
+                <Brain size={16} />
+              </button>
+            </>
+          )}
 
-          {/* Highlights Toggle */}
-          <button
-            onClick={onToggleHighlights}
-            className={`px-3 py-1.5 rounded transition-colors focus:outline-none ${
-              highlightsVisible
-                ? "bg-primary-600 text-white"
-                : "bg-transparent text-neutral-800 dark:bg-transparent dark:text-neutral-100 hover:bg-neutral-200 dark:hover:bg-neutral-700 active:bg-primary-600 active:text-white"
-            }`}
-            title={highlightsVisible ? "Hide highlights" : "Show highlights"}
-          >
-            <Brain size={16} />
-          </button>
-          
           {/* Drawing Tool */}
           <div className="border-l border-neutral-300 dark:border-neutral-600 h-6 mx-1" />
 

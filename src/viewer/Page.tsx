@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState, useCallback } from "react";
+import { getAISettings, onAISettingsChanged } from "../utils/ai-settings";
 import type { PDFPageProxy } from "pdfjs-dist";
 import { DrawingCanvas } from "./DrawingCanvas";
 import type { DrawingStroke } from "../db";
@@ -45,8 +46,21 @@ interface PageProps {
   onNoteEdit?: (id: string, newText: string) => void;
   onCommentDelete?: (id: string) => void;
   onCommentEdit?: (id: string, newText: string) => void;
-  onAddNoteContext?: (note: { id: string; rects: { top: number; left: number; width: number; height: number }[]; color: string; text?: string }, page: number) => void;
-  onAddCommentContext?: (comment: { id: string; rects: { top: number; left: number; width: number; height: number }[]; text: string; page: number }) => void;
+  onAddNoteContext?: (
+    note: {
+      id: string;
+      rects: { top: number; left: number; width: number; height: number }[];
+      color: string;
+      text?: string;
+    },
+    page: number
+  ) => void;
+  onAddCommentContext?: (comment: {
+    id: string;
+    rects: { top: number; left: number; width: number; height: number }[];
+    text: string;
+    page: number;
+  }) => void;
   // Drawing props
   isDrawingMode?: boolean;
   drawingColor?: string;
@@ -55,7 +69,12 @@ interface PageProps {
   onDrawingStrokesChange?: (strokes: DrawingStroke[]) => void;
   isEraserMode?: boolean;
   termSummaries?: TermSummary[];
-  onTermClick?: (term: TermSummary, x: number, y: number, rects: Array<{ top: number; left: number; width: number; height: number }>) => void;
+  onTermClick?: (
+    term: TermSummary,
+    x: number,
+    y: number,
+    rects: Array<{ top: number; left: number; width: number; height: number }>
+  ) => void;
   highlightsVisible?: boolean;
 }
 
@@ -78,7 +97,7 @@ export const Page: React.FC<PageProps> = ({
   onAddNoteContext,
   onAddCommentContext,
   isDrawingMode = false,
-  drawingColor = '#000000',
+  drawingColor = "#000000",
   drawingStrokeWidth = 2,
   drawingStrokes = [],
   onDrawingStrokesChange,
@@ -100,14 +119,19 @@ export const Page: React.FC<PageProps> = ({
   const targetScaleRef = useRef<number>(0);
   const renderTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const lastCSSScaleRef = useRef<number>(0);
-  const [termHighlights, setTermHighlights] = useState<Array<{
-    term: TermSummary;
-    rect: { top: number; left: number; width: number; height: number };
-  }>>([]);
-  const [visibleHighlights, setVisibleHighlights] = useState<Array<{
-    term: TermSummary;
-    rect: { top: number; left: number; width: number; height: number };
-  }>>([]);
+  const [termHighlights, setTermHighlights] = useState<
+    Array<{
+      term: TermSummary;
+      rect: { top: number; left: number; width: number; height: number };
+    }>
+  >([]);
+  const [visibleHighlights, setVisibleHighlights] = useState<
+    Array<{
+      term: TermSummary;
+      rect: { top: number; left: number; width: number; height: number };
+    }>
+  >([]);
+  const [chatEnabled, setChatEnabled] = useState<boolean>(true);
 
   // Rendering page component
 
@@ -253,7 +277,9 @@ export const Page: React.FC<PageProps> = ({
 
       // Guard: Only CSS-scale if canvas has been rendered (has non-zero dimensions)
       if (canvas.width === 0 || canvas.height === 0) {
-        console.log(`[Page ${pageNum}] Canvas not yet rendered (0 dimensions), skipping CSS-scale`);
+        console.log(
+          `[Page ${pageNum}] Canvas not yet rendered (0 dimensions), skipping CSS-scale`
+        );
         // Force a full render instead
         const doFullRender = async () => {
           try {
@@ -312,7 +338,12 @@ export const Page: React.FC<PageProps> = ({
         }
 
         try {
-          await onRender(pageNum, canvas, textLayerRef.current, isVisible ? 1 : 10);
+          await onRender(
+            pageNum,
+            canvas,
+            textLayerRef.current,
+            isVisible ? 1 : 10
+          );
 
           // Only update renderedScale if we're still at the same target scale
           if (Math.abs(targetScaleRef.current - scaleToRender) < 0.01) {
@@ -328,12 +359,20 @@ export const Page: React.FC<PageProps> = ({
         }
       }, ZOOM_DEBOUNCE_MS); // debounce - wait for rapid zoom gestures to finish
     } catch (err: any) {
-      console.error(`[Page ${pageNum}] Failed to CSS-scale canvas, falling back to full render:`, err);
+      console.error(
+        `[Page ${pageNum}] Failed to CSS-scale canvas, falling back to full render:`,
+        err
+      );
       // Fallback: perform a full render
       const fallback = async () => {
         try {
           setIsLoading(true);
-          await onRender(pageNum, canvas, textLayerRef.current, isVisible ? 1 : 10);
+          await onRender(
+            pageNum,
+            canvas,
+            textLayerRef.current,
+            isVisible ? 1 : 10
+          );
           setRenderedScale(scale);
           canvas.style.transform = "";
           canvas.style.transformOrigin = "top left";
@@ -361,11 +400,16 @@ export const Page: React.FC<PageProps> = ({
   // Process highlights whenever we have summaries, even if not currently in render buffer
   // This ensures cached summaries for adjacent pages create highlights in advance
   useEffect(() => {
-    if (!textLayerRef.current || isLoading || termSummaries.length === 0 || !page) {
+    if (
+      !textLayerRef.current ||
+      isLoading ||
+      termSummaries.length === 0 ||
+      !page
+    ) {
       setTermHighlights([]);
       return;
     }
-    
+
     // If page isn't rendered yet, we can't process highlights
     if (!shouldRender) {
       return;
@@ -374,12 +418,14 @@ export const Page: React.FC<PageProps> = ({
     // Wait for text layer to be fully rendered at the current scale before calculating highlights
     // This ensures highlight positions are accurate after zoom/scale changes
     if (Math.abs(renderedScale - scale) > 0.01) {
-      console.log(`[Page ${pageNum}] Waiting for text layer to render at scale ${scale} (currently ${renderedScale})`);
+      console.log(
+        `[Page ${pageNum}] Waiting for text layer to render at scale ${scale} (currently ${renderedScale})`
+      );
       // Text layer hasn't been fully re-rendered at the new scale yet, clear highlights for now
       setTermHighlights([]);
       return;
     }
-    
+
     // If page isn't rendered yet, we can't process highlights
     if (!shouldRender) {
       return;
@@ -393,7 +439,7 @@ export const Page: React.FC<PageProps> = ({
 
     // Wait for text layer to be populated and positioned
     const checkTextLayer = () => {
-      const textContent = textLayer.textContent || '';
+      const textContent = textLayer.textContent || "";
       if (textContent.trim().length === 0) {
         // Text layer not ready yet, try again
         setTimeout(checkTextLayer, 100);
@@ -402,7 +448,9 @@ export const Page: React.FC<PageProps> = ({
 
       // Double-check that we're still at the right scale
       if (Math.abs(renderedScale - scale) > 0.01) {
-        console.log(`[Page ${pageNum}] Scale changed during highlight calculation, aborting`);
+        console.log(
+          `[Page ${pageNum}] Scale changed during highlight calculation, aborting`
+        );
         return;
       }
 
@@ -411,7 +459,9 @@ export const Page: React.FC<PageProps> = ({
 
       // Get the CSS transform scale applied to the text layer
       const textLayerStyle = window.getComputedStyle(textLayer);
-      const transformMatch = textLayerStyle.transform.match(/matrix\(([^,]+),[^,]+,[^,]+,([^,]+),/);
+      const transformMatch = textLayerStyle.transform.match(
+        /matrix\(([^,]+),[^,]+,[^,]+,([^,]+),/
+      );
       const scaleX = parseFloat(transformMatch?.[1] || "1");
       const scaleY = parseFloat(transformMatch?.[2] || "1");
 
@@ -437,7 +487,7 @@ export const Page: React.FC<PageProps> = ({
 
         while (walker.nextNode()) {
           const node = walker.currentNode;
-          const nodeText = node.textContent || '';
+          const nodeText = node.textContent || "";
           const nodeLength = nodeText.length;
 
           if (currentIndex + nodeLength > index) {
@@ -456,7 +506,13 @@ export const Page: React.FC<PageProps> = ({
           // Create a range for the term
           const range = document.createRange();
           range.setStart(foundNode, nodeOffset);
-          range.setEnd(foundNode, Math.min(nodeOffset + term.length, (foundNode.textContent || '').length));
+          range.setEnd(
+            foundNode,
+            Math.min(
+              nodeOffset + term.length,
+              (foundNode.textContent || "").length
+            )
+          );
 
           const rects = range.getClientRects();
           if (rects.length > 0) {
@@ -480,20 +536,48 @@ export const Page: React.FC<PageProps> = ({
               correctedCoords: {
                 top: (rect.top - textLayerRect.top) / scaleY,
                 left: (rect.left - textLayerRect.left) / scaleX,
-              }
+              },
             });
           }
         } catch (err) {
-          console.error(`[Page ${pageNum}] Error creating range for term "${term}":`, err);
+          console.error(
+            `[Page ${pageNum}] Error creating range for term "${term}":`,
+            err
+          );
         }
       }
 
-      console.log(`[Page ${pageNum}] Found ${highlights.length} term highlights`);
+      console.log(
+        `[Page ${pageNum}] Found ${highlights.length} term highlights`
+      );
       setTermHighlights(highlights);
     };
 
     checkTextLayer();
-  }, [shouldRender, isLoading, termSummaries, pageNum, page, scale, renderedScale, layoutVersion]);
+  }, [
+    shouldRender,
+    isLoading,
+    termSummaries,
+    pageNum,
+    page,
+    scale,
+    renderedScale,
+    layoutVersion,
+  ]);
+
+  // Subscribe to AI settings so we can hide "add to chat context" buttons when chat is disabled
+  useEffect(() => {
+    let mounted = true;
+    getAISettings().then((s) => {
+      if (mounted) setChatEnabled(Boolean(s?.gemini?.chatEnabled));
+    });
+    onAISettingsChanged((s) => {
+      if (mounted) setChatEnabled(Boolean(s?.gemini?.chatEnabled));
+    });
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   // Check individual highlight visibility every 0.5 second
   useEffect(() => {
@@ -510,14 +594,14 @@ export const Page: React.FC<PageProps> = ({
       }
 
       const textLayerRect = textLayer.getBoundingClientRect();
-      
+
       // Get viewport bounds
       const viewportTop = 0;
       const viewportBottom = window.innerHeight;
       const viewportLeft = 0;
       const viewportRight = window.innerWidth;
 
-      const visible = termHighlights.filter(highlight => {
+      const visible = termHighlights.filter((highlight) => {
         // Calculate absolute position of highlight
         const highlightTop = textLayerRect.top + highlight.rect.top;
         const highlightBottom = highlightTop + highlight.rect.height;
@@ -525,7 +609,7 @@ export const Page: React.FC<PageProps> = ({
         const highlightRight = highlightLeft + highlight.rect.width;
 
         // Check if highlight is in viewport
-        const inViewport = 
+        const inViewport =
           highlightBottom > viewportTop &&
           highlightTop < viewportBottom &&
           highlightRight > viewportLeft &&
@@ -535,9 +619,11 @@ export const Page: React.FC<PageProps> = ({
       });
 
       // Only update if changed to avoid unnecessary re-renders
-      setVisibleHighlights(prev => {
+      setVisibleHighlights((prev) => {
         if (prev.length !== visible.length) return visible;
-        const changed = prev.some((p, i) => p.term.term !== visible[i]?.term.term);
+        const changed = prev.some(
+          (p, i) => p.term.term !== visible[i]?.term.term
+        );
         return changed ? visible : prev;
       });
     };
@@ -558,13 +644,16 @@ export const Page: React.FC<PageProps> = ({
     const handleClickOutside = (e: MouseEvent) => {
       const target = e.target as HTMLElement;
       // Check if click is outside note popup
-      if (!target.closest('.note-popup') && !target.closest('[data-note-highlight]')) {
+      if (
+        !target.closest(".note-popup") &&
+        !target.closest("[data-note-highlight]")
+      ) {
         setVisibleNoteId(null);
       }
     };
 
-    document.addEventListener('click', handleClickOutside);
-    return () => document.removeEventListener('click', handleClickOutside);
+    document.addEventListener("click", handleClickOutside);
+    return () => document.removeEventListener("click", handleClickOutside);
   }, [visibleNoteId]);
 
   // Check individual highlight visibility every 0.5 second
@@ -582,14 +671,14 @@ export const Page: React.FC<PageProps> = ({
       }
 
       const textLayerRect = textLayer.getBoundingClientRect();
-      
+
       // Get viewport bounds
       const viewportTop = 0;
       const viewportBottom = window.innerHeight;
       const viewportLeft = 0;
       const viewportRight = window.innerWidth;
 
-      const visible = termHighlights.filter(highlight => {
+      const visible = termHighlights.filter((highlight) => {
         // Calculate absolute position of highlight
         const highlightTop = textLayerRect.top + highlight.rect.top;
         const highlightBottom = highlightTop + highlight.rect.height;
@@ -597,7 +686,7 @@ export const Page: React.FC<PageProps> = ({
         const highlightRight = highlightLeft + highlight.rect.width;
 
         // Check if highlight is in viewport
-        const inViewport = 
+        const inViewport =
           highlightBottom > viewportTop &&
           highlightTop < viewportBottom &&
           highlightRight > viewportLeft &&
@@ -607,9 +696,11 @@ export const Page: React.FC<PageProps> = ({
       });
 
       // Only update if changed to avoid unnecessary re-renders
-      setVisibleHighlights(prev => {
+      setVisibleHighlights((prev) => {
         if (prev.length !== visible.length) return visible;
-        const changed = prev.some((p, i) => p.term.term !== visible[i]?.term.term);
+        const changed = prev.some(
+          (p, i) => p.term.term !== visible[i]?.term.term
+        );
         return changed ? visible : prev;
       });
     };
@@ -630,13 +721,16 @@ export const Page: React.FC<PageProps> = ({
     const handleClickOutside = (e: MouseEvent) => {
       const target = e.target as HTMLElement;
       // Check if click is outside note popup
-      if (!target.closest('.note-popup') && !target.closest('[data-note-highlight]')) {
+      if (
+        !target.closest(".note-popup") &&
+        !target.closest("[data-note-highlight]")
+      ) {
         setVisibleNoteId(null);
       }
     };
 
-    document.addEventListener('click', handleClickOutside);
-    return () => document.removeEventListener('click', handleClickOutside);
+    document.addEventListener("click", handleClickOutside);
+    return () => document.removeEventListener("click", handleClickOutside);
   }, [visibleNoteId]);
 
   // Get approximate dimensions for skeleton
@@ -803,23 +897,32 @@ export const Page: React.FC<PageProps> = ({
                   style={{
                     top: mergedLines[0].top - 35,
                     left: mergedLines[0].left,
-                    minWidth: '250px',
-                    maxWidth: '400px',
-                    width: hasText ? `${Math.min(400, Math.max(250, n.text!.length * 8))}px` : '250px',
+                    minWidth: "250px",
+                    maxWidth: "400px",
+                    width: hasText
+                      ? `${Math.min(400, Math.max(250, n.text!.length * 8))}px`
+                      : "250px",
                   }}
                 >
                   {/* Edit and Delete buttons in top right corner */}
-                  <div className="absolute top-2 right-2 flex gap-1">
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onAddNoteContext?.({ id: n.id, rects: n.rects, color: n.color, text: n.text }, pageNum);
-                      }}
-                      className="p-1 text-purple-600 hover:bg-purple-50 dark:hover:bg-purple-900/20 rounded"
-                      title="Add note to chat context"
-                    >
-                      <BrainCircuit size={16} />
-                    </button>
+                  <div className="absolute right-2 top-2 flex items-center gap-2">
+                    {chatEnabled && onAddNoteContext && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          try {
+                            onAddNoteContext(n, pageNum);
+                          } catch (err) {
+                            console.error("onAddNoteContext error", err);
+                          }
+                          setVisibleNoteId(null);
+                        }}
+                        className="p-1 text-neutral-700 hover:bg-neutral-100 dark:text-neutral-200 dark:hover:bg-neutral-700 rounded"
+                        title="Add note to chat context"
+                      >
+                        <BrainCircuit size={16} />
+                      </button>
+                    )}
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
@@ -915,7 +1018,7 @@ export const Page: React.FC<PageProps> = ({
                   left: width + 16,
                   minWidth: "200px",
                   maxWidth: "300px",
-                  width: isEditing 
+                  width: isEditing
                     ? `${Math.min(300, Math.max(200, editingCommentText.length * 6.5))}px`
                     : `${Math.min(300, Math.max(200, c.text.length * 6.5))}px`,
                 }}
@@ -935,7 +1038,10 @@ export const Page: React.FC<PageProps> = ({
                         }
                       }}
                       className="w-full px-2 py-1 text-xs bg-white dark:bg-neutral-700 border border-neutral-300 dark:border-neutral-600 rounded text-neutral-900 dark:text-neutral-100 resize-y min-h-[3rem]"
-                      rows={Math.max(2, Math.ceil(editingCommentText.length / 35))}
+                      rows={Math.max(
+                        2,
+                        Math.ceil(editingCommentText.length / 35)
+                      )}
                       placeholder="Enter comment text..."
                     />
                     <div className="flex gap-1">
@@ -961,19 +1067,25 @@ export const Page: React.FC<PageProps> = ({
                     </div>
                   </div>
                 ) : (
-                  <>
-                    {/* Edit and Delete buttons in top right corner */}
-                    <div className="absolute top-1 right-1 flex gap-1">
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onAddCommentContext?.({ id: c.id, rects: c.rects, text: c.text, page: c.page });
-                        }}
-                        className="p-1 text-purple-600 hover:bg-purple-50 dark:hover:bg-purple-900/20 rounded"
-                        title="Add comment to chat context"
-                      >
-                        <BrainCircuit size={16} />
-                      </button>
+                  <div>
+                    <div className="absolute right-2 top-2 flex items-center gap-2">
+                      {chatEnabled && onAddCommentContext && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            try {
+                              onAddCommentContext(c);
+                            } catch (err) {
+                              console.error("onAddCommentContext error", err);
+                            }
+                            setEditingCommentId(null);
+                          }}
+                          className="p-1 text-neutral-700 hover:bg-neutral-100 dark:text-neutral-200 dark:hover:bg-neutral-700 rounded"
+                          title="Add comment to chat context"
+                        >
+                          <BrainCircuit size={16} />
+                        </button>
+                      )}
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
@@ -1000,7 +1112,7 @@ export const Page: React.FC<PageProps> = ({
                     </div>
                     {/* Comment text with extra right padding to avoid intersecting top-right buttons */}
                     <div className="pr-20 break-words text-xs">{c.text}</div>
-                  </>
+                  </div>
                 )}
               </div>
             </div>
@@ -1008,72 +1120,91 @@ export const Page: React.FC<PageProps> = ({
         })}
 
         {/* Term highlights - clickable highlights for first occurrence of each term (only visible ones) */}
-        {highlightsVisible && visibleHighlights.map((highlight, index) => (
-          <div
-            key={`term-${index}`}
-            data-term-highlight
-            className="absolute z-[30] cursor-pointer transition-colors"
-            style={{
-              top: highlight.rect.top,
-              left: highlight.rect.left,
-              width: highlight.rect.width,
-              height: highlight.rect.height,
-              pointerEvents: "auto",
-              borderBottom: "2px dashed rgb(147, 51, 234)",
-              boxSizing: "border-box",
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.borderBottom = "3px dashed rgb(217, 180, 255)";
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.borderBottom = "3px dashed rgb(147, 51, 234)";
-            }}
-            onClick={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
+        {highlightsVisible &&
+          visibleHighlights.map((highlight, index) => (
+            <div
+              key={`term-${index}`}
+              data-term-highlight
+              className="absolute z-[30] cursor-pointer transition-colors"
+              style={{
+                top: highlight.rect.top,
+                left: highlight.rect.left,
+                width: highlight.rect.width,
+                height: highlight.rect.height,
+                pointerEvents: "auto",
+                borderBottom: "2px dashed rgb(147, 51, 234)",
+                boxSizing: "border-box",
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.borderBottom =
+                  "3px dashed rgb(217, 180, 255)";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.borderBottom =
+                  "3px dashed rgb(147, 51, 234)";
+              }}
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
 
-              if (onTermClick) {
-                // Position popup near the highlight
-                const rect = e.currentTarget.getBoundingClientRect();
-                console.log('[TermHighlight] Clicked term:', highlight.term.term, 'at position:', rect);
+                if (onTermClick) {
+                  // Position popup near the highlight
+                  const rect = e.currentTarget.getBoundingClientRect();
+                  console.log(
+                    "[TermHighlight] Clicked term:",
+                    highlight.term.term,
+                    "at position:",
+                    rect
+                  );
 
-                // Calculate position to keep popup on screen
-                const popupWidth = 400; // approximate max-w-md
-                const popupHeight = 300; // approximate height
+                  // Calculate position to keep popup on screen
+                  const popupWidth = 400; // approximate max-w-md
+                  const popupHeight = 300; // approximate height
 
-                let x = rect.left;
-                let y = rect.bottom + 5;
+                  let x = rect.left;
+                  let y = rect.bottom + 5;
 
-                // Adjust if popup would go off right edge
-                if (x + popupWidth > window.innerWidth) {
-                  x = window.innerWidth - popupWidth - 20;
+                  // Adjust if popup would go off right edge
+                  if (x + popupWidth > window.innerWidth) {
+                    x = window.innerWidth - popupWidth - 20;
+                  }
+
+                  // Adjust if popup would go off bottom edge
+                  if (y + popupHeight > window.innerHeight) {
+                    y = rect.top - popupHeight - 5;
+                  }
+
+                  // Ensure minimum margins
+                  x = Math.max(10, x);
+                  y = Math.max(10, y);
+
+                  // Normalize the highlight rect to page dimensions
+                  const pageBox = document
+                    .querySelector(`[data-page-num="${pageNum}"]`)
+                    ?.getBoundingClientRect();
+                  const normalizedRects = pageBox
+                    ? [
+                        {
+                          top: (rect.top - pageBox.top) / pageBox.height,
+                          left: (rect.left - pageBox.left) / pageBox.width,
+                          width: rect.width / pageBox.width,
+                          height: rect.height / pageBox.height,
+                        },
+                      ]
+                    : [];
+
+                  console.log(
+                    "[TermHighlight] Popup position:",
+                    { x, y },
+                    "normalized rects:",
+                    normalizedRects
+                  );
+                  onTermClick(highlight.term, x, y, normalizedRects);
                 }
-
-                // Adjust if popup would go off bottom edge
-                if (y + popupHeight > window.innerHeight) {
-                  y = rect.top - popupHeight - 5;
-                }
-
-                // Ensure minimum margins
-                x = Math.max(10, x);
-                y = Math.max(10, y);
-
-                // Normalize the highlight rect to page dimensions
-                const pageBox = document.querySelector(`[data-page-num="${pageNum}"]`)?.getBoundingClientRect();
-                const normalizedRects = pageBox ? [{
-                  top: (rect.top - pageBox.top) / pageBox.height,
-                  left: (rect.left - pageBox.left) / pageBox.width,
-                  width: rect.width / pageBox.width,
-                  height: rect.height / pageBox.height,
-                }] : [];
-
-                console.log('[TermHighlight] Popup position:', { x, y }, 'normalized rects:', normalizedRects);
-                onTermClick(highlight.term, x, y, normalizedRects);
-              }
-            }}
-            title={`Click to see definition of "${highlight.term.term}"`}
-          />
-        ))}
+              }}
+              title={`Click to see definition of "${highlight.term.term}"`}
+            />
+          ))}
       </div>
     </div>
   );

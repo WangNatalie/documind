@@ -1,4 +1,5 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
+import { getAISettings, onAISettingsChanged } from '../utils/ai-settings';
 
 interface ContextMenuProps {
   visible?: boolean;
@@ -18,6 +19,25 @@ const NOTES = [
 
 export const ContextMenu: React.FC<ContextMenuProps> = ({ visible = false, x = 0, y = 0, onSelect }) => {
   if (!visible) return null;
+
+  const [termsEnabled, setTermsEnabled] = useState(true);
+  const [elevenEnabled, setElevenEnabled] = useState(true);
+
+  useEffect(() => {
+    let mounted = true;
+    getAISettings().then((s) => {
+      if (!mounted) return;
+      setTermsEnabled(!!s?.gemini?.termsEnabled);
+      setElevenEnabled(!!s?.elevenLabsEnabled);
+    });
+    onAISettingsChanged((s) => {
+      setTermsEnabled(!!s?.gemini?.termsEnabled);
+      setElevenEnabled(!!s?.elevenLabsEnabled);
+    });
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   const handleSelect = (action: string) => {
     if (onSelect) onSelect(action);
@@ -44,18 +64,22 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({ visible = false, x = 0
       </div>
 
       <div className="border-t border-neutral-100 dark:border-neutral-700 mt-2 pt-2 px-3">
-        <button
-          className="w-full text-sm text-neutral-700 dark:text-neutral-200 text-left px-2 py-1 rounded hover:bg-neutral-100 dark:hover:bg-neutral-700"
-          onClick={() => handleSelect('explain')}
-        >
-          Explain with AI
-        </button>
-        <button
-          className="w-full text-sm text-neutral-700 dark:text-neutral-200 text-left px-2 py-1 rounded hover:bg-neutral-100 dark:hover:bg-neutral-700"
-          onClick={() => handleSelect('narrate')}
-        >
-          Narrate
-        </button>
+        {termsEnabled && (
+          <button
+            className="w-full text-sm text-neutral-700 dark:text-neutral-200 text-left px-2 py-1 rounded hover:bg-neutral-100 dark:hover:bg-neutral-700"
+            onClick={() => handleSelect('explain')}
+          >
+            Explain with AI
+          </button>
+        )}
+        {elevenEnabled && (
+          <button
+            className="w-full text-sm text-neutral-700 dark:text-neutral-200 text-left px-2 py-1 rounded hover:bg-neutral-100 dark:hover:bg-neutral-700"
+            onClick={() => handleSelect('narrate')}
+          >
+            Narrate
+          </button>
+        )}
         <button
           className="w-full text-sm text-neutral-700 dark:text-neutral-200 text-left px-2 py-1 rounded hover:bg-neutral-100 dark:hover:bg-neutral-700"
           onClick={() => handleSelect('comment')}

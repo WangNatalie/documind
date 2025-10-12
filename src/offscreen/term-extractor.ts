@@ -39,24 +39,24 @@ function cosineSimilarity(a: number[], b: number[]): number {
   if (a.length !== b.length) {
     throw new Error('Vectors must have the same length');
   }
-  
+
   let dotProduct = 0;
   let magnitudeA = 0;
   let magnitudeB = 0;
-  
+
   for (let i = 0; i < a.length; i++) {
     dotProduct += a[i] * b[i];
     magnitudeA += a[i] * a[i];
     magnitudeB += b[i] * b[i];
   }
-  
+
   magnitudeA = Math.sqrt(magnitudeA);
   magnitudeB = Math.sqrt(magnitudeB);
-  
+
   if (magnitudeA === 0 || magnitudeB === 0) {
     return 0;
   }
-  
+
   return dotProduct / (magnitudeA * magnitudeB);
 }
 
@@ -69,41 +69,41 @@ async function findMostSimilarChunk(
 ): Promise<{ chunkId: string; similarity: number; chunk: any } | null> {
   try {
     console.log(`[VectorSearch] Searching for similar chunks for term: "${term}"`);
-    
+
     // Generate embedding for the term
     const termEmbedding = await generateEmbedding(term);
-    
+
     // Get all chunk embeddings for this document
     const chunkEmbeddings = await getChunkEmbeddingsByDoc(docHash);
-    
+
     if (chunkEmbeddings.length === 0) {
       console.log(`[VectorSearch] No embeddings found for document ${docHash}`);
       return null;
     }
-    
+
     // Calculate similarity scores
     const similarities = chunkEmbeddings.map(chunkEmb => ({
       chunkId: chunkEmb.chunkId,
       similarity: cosineSimilarity(termEmbedding, chunkEmb.embedding)
     }));
-    
+
     // Sort by similarity (highest first)
     similarities.sort((a, b) => b.similarity - a.similarity);
-    
+
     // Get the most similar chunk
     const bestMatch = similarities[0];
-    
+
     if (bestMatch.similarity < 0.5) {
       console.log(`[VectorSearch] Best similarity (${bestMatch.similarity.toFixed(3)}) below threshold for term "${term}"`);
       return null;
     }
-    
+
     console.log(`[VectorSearch] Found similar chunk for "${term}": ${bestMatch.chunkId} (similarity: ${bestMatch.similarity.toFixed(3)})`);
-    
+
     // Get the actual chunk data
     const chunks = await getChunksByDoc(docHash);
     const chunk = chunks.find(c => c.id === bestMatch.chunkId);
-    
+
     return {
       chunkId: bestMatch.chunkId,
       similarity: bestMatch.similarity,
@@ -155,12 +155,12 @@ Prioritize terms that may need clarification as someone reads through this passa
         maxOutputTokens: 10000,
       }
     });
-    
+
     const text = response.text;
     if (!text) {
       throw new Error('No text in Gemini response');
     }
-    
+
     console.log('[TermExtractor] Received response:', text);
 
     // Parse the comma-separated terms
@@ -233,7 +233,7 @@ Or return "None" if no relevant section exists.`;
 
     // Parse the response
     const trimmedText = text.trim();
-    
+
     if (trimmedText.toLowerCase() === 'none' || trimmedText.toLowerCase().includes('no relevant section')) {
       return {
         term,
@@ -245,11 +245,11 @@ Or return "None" if no relevant section exists.`;
     // Find the JSON object by locating the opening and closing braces
     const startIdx = trimmedText.indexOf('{');
     const endIdx = trimmedText.lastIndexOf('}');
-    
+
     if (startIdx === -1 || endIdx === -1 || startIdx >= endIdx) {
       throw new Error('No valid JSON object found in response');
     }
-    
+
     const jsonText = trimmedText.substring(startIdx, endIdx + 1);
     const tocItem: TOCItem = JSON.parse(jsonText);
 
@@ -286,7 +286,7 @@ export async function findSectionsForTerms(
 
   // Get table of contents for this document
   const toc = await getTableOfContents(docHash);
-  
+
   if (!toc) {
     console.log('[SectionFinder] No table of contents found for document');
     return terms.map(term => ({ term, tocItem: null }));
@@ -335,7 +335,7 @@ Return ONLY the JSON array, no additional text.`;
 
     // Parse JSON array from response (may be wrapped in markdown code blocks)
     const trimmedText = text.trim();
-    
+
     // Remove markdown code blocks if present
     let jsonText = trimmedText;
     if (trimmedText.startsWith('```')) {
@@ -345,20 +345,20 @@ Return ONLY the JSON array, no additional text.`;
         jsonText = trimmedText.substring(firstNewline + 1, lastBackticks).trim();
       }
     }
-    
+
     // Find the JSON array by locating the opening and closing brackets
     const startIdx = jsonText.indexOf('[');
     const endIdx = jsonText.lastIndexOf(']');
-    
+
     if (startIdx === -1 || endIdx === -1 || startIdx >= endIdx) {
       throw new Error('No valid JSON array found in response');
     }
-    
+
     const arrayText = jsonText.substring(startIdx, endIdx + 1);
     const results: TermWithSection[] = JSON.parse(arrayText);
 
     console.log(`[SectionFinder] Successfully parsed ${results.length} results`);
-    
+
     // Ensure all terms are present in results (fill in missing ones)
     const resultMap = new Map(results.map(r => [r.term, r.tocItem]));
     const completeResults: TermWithSection[] = terms.map(term => {
@@ -373,15 +373,15 @@ Return ONLY the JSON array, no additional text.`;
 
     // Find unmatched terms (those with null tocItem)
     const unmatchedTerms = completeResults.filter(r => r.tocItem === null);
-    
+
     if (unmatchedTerms.length > 0) {
       console.log(`[SectionFinder] ${unmatchedTerms.length} terms without TOC matches, trying vector similarity search...`);
-      
+
       // Try vector similarity search for unmatched terms
       for (const result of unmatchedTerms) {
         try {
           const similarChunk = await findMostSimilarChunk(result.term, docHash);
-          
+
           if (similarChunk && similarChunk.chunk) {
             // Create a synthetic TOC item from the chunk
             result.tocItem = {
@@ -391,12 +391,12 @@ Return ONLY the JSON array, no additional text.`;
             };
             // Store the matched chunk ID
             result.matchedChunkId = similarChunk.chunkId;
-          } 
+          }
         } catch (error) {
           console.error(`[SectionFinder] Error in vector search for "${result.term}":`, error);
         }
       }
-      
+
       const matchedByVector = completeResults.filter(r => r.matchedChunkId && !resultMap.has(r.term)).length;
       console.log(`[SectionFinder] Vector search found matches for ${matchedByVector}/${unmatchedTerms.length} unmatched terms`);
     }
@@ -405,7 +405,7 @@ Return ONLY the JSON array, no additional text.`;
   } catch (error) {
     console.error('[SectionFinder] Error in batch section finding:', error);
     console.log('[SectionFinder] Falling back to individual term processing...');
-    
+
     // Fallback to individual processing if batch fails
     const results: TermWithSection[] = [];
     for (const term of terms) {
@@ -427,7 +427,7 @@ async function getContextForTerm(
   try {
     // Get all chunks for the document
     const chunks = await getChunksByDoc(docHash);
-    
+
     if (chunks.length === 0) {
       console.log(`[ContextGetter] No chunks found for document ${docHash}`);
       return '';
@@ -458,7 +458,7 @@ async function getContextForTerm(
     }
 
     // Fallback: search for term in all chunks
-    const chunksWithTerm = chunks.filter(chunk => 
+    const chunksWithTerm = chunks.filter(chunk =>
       chunk.content.toLowerCase().includes(term.toLowerCase())
     );
 
@@ -490,12 +490,12 @@ export async function summarizeTerm(
   try {
     // Get context from document chunks
     const context = await getContextForTerm(term, termWithSection, docHash);
-    
+
     if (!context) {
       console.log(`[Summarizer] No context found for term "${term}"`);
     }
 
-    const prompt = `Write a concise definition of the given term (${term}) in one sentence as well as an explanation/summary of the term in 3 key points. Prioritize the given context over your own knowledge to provide the definition and explanation. Here is context for the term from another part of the document: ${context}. Return your response in json-parsable format: 
+    const prompt = `Write a concise definition of the given term (${term}) in one sentence as well as an explanation/summary of the term in 3 key points. Prioritize the given context over your own knowledge to provide the definition and explanation. Here is context for the term from another part of the document: ${context}. Return your response in json-parsable format:
 {
   "definition": "",
   "explanation1": "",
@@ -525,11 +525,11 @@ export async function summarizeTerm(
     const trimmedResponse = text.trim();
     const startIdx = trimmedResponse.indexOf('{');
     const endIdx = trimmedResponse.lastIndexOf('}');
-    
+
     if (startIdx === -1 || endIdx === -1 || startIdx >= endIdx) {
       throw new Error('No valid JSON object found in response');
     }
-    
+
     const jsonText = trimmedResponse.substring(startIdx, endIdx + 1);
     const parsed = JSON.parse(jsonText);
 
@@ -640,7 +640,7 @@ Return ONLY the JSON array, no additional text or markdown.`;
 
     // Parse JSON array from response (may be wrapped in markdown code blocks)
     const trimmedText = text.trim();
-    
+
     // Remove markdown code blocks if present
     let jsonText = trimmedText;
     if (trimmedText.startsWith('```')) {
@@ -650,15 +650,15 @@ Return ONLY the JSON array, no additional text or markdown.`;
         jsonText = trimmedText.substring(firstNewline + 1, lastBackticks).trim();
       }
     }
-    
+
     // Find the JSON array by locating the opening and closing brackets
     const startIdx = jsonText.indexOf('[');
     const endIdx = jsonText.lastIndexOf(']');
-    
+
     if (startIdx === -1 || endIdx === -1 || startIdx >= endIdx) {
       throw new Error('No valid JSON array found in response');
     }
-    
+
     const arrayText = jsonText.substring(startIdx, endIdx + 1);
     const parsedResults = JSON.parse(arrayText);
 
@@ -700,14 +700,14 @@ Return ONLY the JSON array, no additional text or markdown.`;
   } catch (error) {
     console.error('[Summarizer] Error in batch summarization:', error);
     console.log('[Summarizer] Falling back to individual term processing...');
-    
+
     // Fallback to individual processing if batch fails
     const summaries: TermSummary[] = [];
     for (const termWithSection of termsWithSections) {
       const summary = await summarizeTerm(termWithSection.term, termWithSection, docHash);
       summaries.push(summary);
     }
-    
+
     console.log(`[Summarizer] Generated ${summaries.length} summaries (fallback)`);
     return summaries;
   }
@@ -726,7 +726,7 @@ export async function explainSelectedText(
   try {
     // Try to find relevant context using vector similarity
     const similarChunk = await findMostSimilarChunk(text, docHash);
-    
+
     let context = '';
     let tocItem: TOCItem | null = null;
     let matchedChunkId: string | undefined = undefined;
@@ -740,14 +740,14 @@ export async function explainSelectedText(
       });
       context = similarChunk.chunk.content.substring(0, 2000);
       matchedChunkId = similarChunk.chunkId;
-      
+
       // Always create a TOC item from the chunk so "Go to Context" works
       tocItem = {
         title: similarChunk.chunk.sectionHeader || '',
         page: similarChunk.chunk.page,
         chunkId: similarChunk.chunkId
       };
-      
+
       console.log(`[ExplainSelection] Created tocItem:`, tocItem);
     } else {
       console.log(`[ExplainSelection] No similar chunk found, using text itself as context`);
@@ -758,12 +758,12 @@ export async function explainSelectedText(
     // Generate summary using Gemini
     const prompt = `Write a concise definition/explanation of the following text in one sentence, as well as a summary in 3 key points. If context is available and sufficient, only use the provided context from the document over your own knowledge.
     If context is not sufficient to generate a definition and explanation, supplement with general knowledge.
-    
+
 Text to summarize: "${text}"
 
 Context from document: ${context}
 
-Return your response in json-parsable format: 
+Return your response in json-parsable format:
 {
   "definition": "",
   "explanation1": "",
@@ -792,11 +792,11 @@ Return your response in json-parsable format:
     const trimmedResponse = responseText.trim();
     const startIdx = trimmedResponse.indexOf('{');
     const endIdx = trimmedResponse.lastIndexOf('}');
-    
+
     if (startIdx === -1 || endIdx === -1 || startIdx >= endIdx) {
       throw new Error('No valid JSON object found in response');
     }
-    
+
     const jsonText = trimmedResponse.substring(startIdx, endIdx + 1);
     const parsed = JSON.parse(jsonText);
 
